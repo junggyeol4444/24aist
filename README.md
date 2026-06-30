@@ -66,7 +66,8 @@ bash scripts/setup_openllm_vtuber.sh
 #   페르소나를 바꾸면 재주입:
 #   aist build-persona --conf Open-LLM-VTuber/conf.yaml --live2d <모델명>
 
-# 5) 한 방송만 수동으로(3·4단계) → 완전 자동(5단계)
+# 5) 배선 점검 후 한 방송만 수동으로(3·4단계) → 완전 자동(5단계)
+aist doctor                 # 코어 WS / OBS 가 실제로 닿는지 점검
 aist broadcast-now          # 지금 한 방송(시작 수동, 종료는 자동)
 aist run                    # 스케줄러로 완전 자동 운영
 ```

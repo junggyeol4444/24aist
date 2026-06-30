@@ -140,6 +140,60 @@ def cmd_persona(args) -> int:
     return 0
 
 
+def cmd_doctor(args) -> int:
+    """실제 연결 점검 — 코어(Open-LLM-VTuber) WS / OBS 가 닿는지 확인.
+
+    3단계에서 방송을 켜기 전에 배선을 점검하는 용도. 코어/OBS 가 안 떠
+    있으면 그대로 알려준다(이것도 '되는 걸 확인'의 일부).
+    """
+    import asyncio as _asyncio
+    cfg, _ = _load(args)
+    print("연결 점검 (코어 WS / OBS)\n")
+    ok = True
+
+    # 1) 코어 WebSocket
+    cfg.vtuber.connect_timeout_sec = min(cfg.vtuber.connect_timeout_sec, 3)
+
+    async def _check_core():
+        from .vtuber_bridge import VTuberBridge
+        b = VTuberBridge(cfg.vtuber)
+        await b.connect()
+        await b._send({"type": "heartbeat"})
+        await b.close()
+
+    try:
+        _asyncio.run(_check_core())
+        print(f"  [OK] 코어 WS 연결됨 — {cfg.vtuber.ws_url}")
+    except RuntimeError as e:
+        ok = False
+        print(f"  [!] 코어 점검 불가: {e}")
+    except Exception as e:  # 연결 실패(코어 미실행 등)
+        ok = False
+        print(f"  [X] 코어 WS 연결 실패 ({cfg.vtuber.ws_url}): {e}")
+        print("       → Open-LLM-VTuber 가 실행 중인지 확인 (uv run run_server.py)")
+
+    # 2) OBS
+    # obsws-python 이 연결 실패 시 자체 ERROR+traceback 를 찍어 시끄러우니 죽인다
+    logging.getLogger("obsws_python").setLevel(logging.CRITICAL)
+    try:
+        from .obs_control import ObsController, ObsError
+        obs = ObsController(cfg.obs)
+        try:
+            obs.connect()
+            print(f"  [OK] OBS 연결됨 — {cfg.obs.host}:{cfg.obs.port}")
+            obs.close()
+        except ObsError as e:
+            ok = False
+            print(f"  [X] OBS 연결 실패: {e}")
+            print("       → OBS 실행 + obs-websocket 켜짐 + 포트/비밀번호 확인")
+    except Exception as e:  # noqa: BLE001
+        ok = False
+        print(f"  [!] OBS 점검 불가: {e}")
+
+    print("\n점검 끝.", "모두 OK." if ok else "위 항목을 확인하세요.")
+    return 0 if ok else 1
+
+
 def cmd_announce_preview(args) -> int:
     from .announce.composer import AnnounceContext, compose
     from .llm import LLMClient
@@ -233,6 +287,8 @@ def build_parser() -> argparse.ArgumentParser:
     sp.set_defaults(func=cmd_plan)
 
     sub.add_parser("persona", help="페르소나 프롬프트 출력").set_defaults(func=cmd_persona)
+
+    sub.add_parser("doctor", help="실제 연결 점검(코어 WS / OBS)").set_defaults(func=cmd_doctor)
 
     sp = sub.add_parser("announce-preview", help="공지 문구 미리보기")
     sp.add_argument("--kind", choices=["start", "end", "both"], default="both")
