@@ -9,7 +9,18 @@
 # 비밀(토큰/키)은 여기 적지 말고 .env 에 둔다.
 # =========================================================================
 
-platform: twitch          # twitch | youtube | chzzk
+# 단일 플랫폼이면 platform 하나만. 동출(동시 송출)이면 platforms 에 여러 개.
+platform: twitch          # twitch | youtube | chzzk | soop | kick | twitcasting
+# platforms: [twitch, chzzk, kick]   # 주석을 풀면 동출(여러 플랫폼 채팅 동시 수집)
+
+# 플랫폼별 식별자 (토큰/키는 .env 에). 쓰는 플랫폼 것만 채우면 됨.
+chat:
+  twitch:      { channel: "" }       # 채널명. 비우면 .env TWITCH_CHANNEL
+  youtube:     { video_id: "" }      # 라이브 영상 ID. 비우면 .env YOUTUBE_VIDEO_ID
+  chzzk:       { channel_id: "" }    # 치지직 채널 ID. 비우면 .env CHZZK_CHANNEL_ID
+  soop:        { bj_id: "" }         # SOOP(아프리카TV) BJ 아이디
+  kick:        { channel: "" }       # kick.com 채널 슬러그
+  twitcasting: { user_id: "" }       # 트위캐스팅 사용자 ID (토큰은 .env)
 
 # --- Open-LLM-VTuber 연결 (두뇌+입+얼굴+귀) ---
 vtuber:

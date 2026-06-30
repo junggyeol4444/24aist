@@ -69,7 +69,8 @@ class ChatPipeline:
                     if self.cfg.artificial_delay_sec > 0:
                         # 기본 0. 운영자가 일부러 넣은 경우에만 작동.
                         await asyncio.sleep(self.cfg.artificial_delay_sec)
-                    await self.bridge.say_to_ai(msg.text, source=msg.author)
+                    await self.bridge.say_to_ai(msg.text, source=msg.author,
+                                                platform=msg.platform)
         except asyncio.CancelledError:
             raise
         except Exception:

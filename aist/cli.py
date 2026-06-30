@@ -68,8 +68,10 @@ def cmd_check(args) -> int:
         print(f"[오류] {e}")
         return 1
     s = cfg.secrets
+    actives = cfg.active_platforms()
+    is_simulcast = len(actives) > 1
     print(f"aist {__version__} — 설정 점검\n")
-    print(f"  플랫폼          : {cfg.platform}")
+    print(f"  플랫폼          : {', '.join(actives)}" + ("  (동출)" if is_simulcast else ""))
     print(f"  코어(VTuber)    : {cfg.vtuber.ws_url}")
     print(f"  OBS             : {cfg.obs.host}:{cfg.obs.port}  start_stream={cfg.obs.start_stream}")
     print(f"  스케줄러        : enabled={cfg.scheduler.enabled}  tz={cfg.scheduler.timezone}")
@@ -88,8 +90,24 @@ def cmd_check(args) -> int:
     print(f"    LLM            : openai={mark(s.openai_api_key)} anthropic={mark(s.anthropic_api_key)} gemini={mark(s.gemini_api_key)}")
     print(f"    OBS_PASSWORD   : {mark(cfg.obs.password)}")
     print(f"    DISCORD_TOKEN  : {mark(s.discord_bot_token)}")
-    if cfg.platform == "twitch":
-        print(f"    TWITCH         : channel={mark(s.twitch_channel)} token={mark(s.twitch_oauth_token)}(없으면 익명읽기)")
+    # 활성 플랫폼별 식별자 상태
+    c = cfg.chat
+    ids = {
+        "twitch": ("channel", c.twitch.channel or s.twitch_channel),
+        "youtube": ("video_id", c.youtube.video_id or s.youtube_video_id),
+        "chzzk": ("channel_id", c.chzzk.channel_id or s.chzzk_channel_id),
+        "soop": ("bj_id", c.soop.bj_id or s.soop_bj_id),
+        "kick": ("channel", c.kick.channel or s.kick_channel),
+        "twitcasting": ("user_id", c.twitcasting.user_id or s.twitcasting_user_id),
+    }
+    for p in actives:
+        key, val = ids[p]
+        extra = ""
+        if p == "twitcasting":
+            extra = f" token={mark(s.twitcasting_access_token)}"
+        elif p == "twitch":
+            extra = f" token={mark(s.twitch_oauth_token)}(없으면 익명)"
+        print(f"    {p:<11}: {key}={mark(val)}{extra}")
     if cfg.announce.naver_cafe.enabled:
         print(f"    NAVER          : token={mark(s.naver_access_token)} refresh={mark(s.naver_refresh_token)}")
     print("\n점검 완료. (실제 연결 테스트는 broadcast-now / run 으로)")

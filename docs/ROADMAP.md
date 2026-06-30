@@ -9,7 +9,7 @@
 | **0** 준비/결정 | 플랫폼·콘셉트·페르소나·목소리·서버·키 | `persona.example.yaml`, `aist check` 로 키 점검 | 플랫폼 선택, 키 발급, 목소리 확보 |
 | **1** 오픈소스 켜보기 | Open-LLM-VTuber 설치, AI 대화 확인 | `scripts/setup_openllm_vtuber.sh` (다운+개조) | GPU 환경, 코어 단독 실행 확인 |
 | **2** 한국어 목소리 | GPT-SoVITS 클로닝 + 페르소나 주입 | `aist build-persona`(conf.yaml 에 주입) | GPT-SoVITS 학습, conf 의 ref_audio |
-| **3** 채팅소통+송출 ★ | 사람이 켜면 AI 가 채팅에 반응 | `chat/`, `chat_pipeline.py`, `vtuber_bridge.py`, `obs_control.py`, `aist broadcast-now` | OBS·가상오디오 세팅, 비공개 테스트 |
+| **3** 채팅소통+송출 ★ | 사람이 켜면 AI 가 채팅에 반응 | `chat/`(6개 플랫폼+동출), `chat_pipeline.py`, `vtuber_bridge.py`, `obs_control.py`, `aist broadcast-now` | OBS·가상오디오 세팅, 비공개 테스트 |
 | **4** 종료 자동화 | 끄는 건 AI 가 알아서 | `end_judge.py`(설정 기반 종료 룰 + 마무리) | 종료 값 조정(설정) |
 | **5** 시작 자동화 ★ | 정해진 시간에 스스로 켬 | `scheduler.py`, `orchestrator.run()`, `aist run` | 시작 시각/요일 설정 |
 | **6** 공지 자동화 | 디스코드 → 네이버 카페 | `announce/`(discord_bot, naver_cafe, composer) | 디스코드 봇·네이버 앱 등록 |

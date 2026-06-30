@@ -49,13 +49,21 @@ class VTuberBridge:
         async with self._lock:
             await self._ws.send(json.dumps(payload, ensure_ascii=False))
 
-    async def say_to_ai(self, text: str, source: Optional[str] = None):
+    async def say_to_ai(self, text: str, source: Optional[str] = None,
+                        platform: Optional[str] = None):
         """채팅/입력을 AI 에게 전달해 반응을 만들게 한다.
 
-        source(닉네임 등)가 있으면 누가 한 말인지 함께 넘겨, 코어가
-        시청자를 호명하거나 단골을 기억하기 쉽게 한다.
+        source(닉네임)와 platform 을 함께 넘기면 코어가 누가/어디서 한
+        말인지 알고 호명하거나 단골을 기억하기 쉽다. 동출(동시 송출) 때
+        "트위치의 누구", "치지직의 누구"처럼 구분할 수 있다.
         """
-        msg = f"[{source}] {text}" if source else text
+        if source and platform:
+            tag = f"[{source}/{platform}]"
+        elif source:
+            tag = f"[{source}]"
+        else:
+            tag = ""
+        msg = f"{tag} {text}".strip() if tag else text
         await self._send({"type": "text-input", "text": msg})
 
     async def proactive_speak(self):

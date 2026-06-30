@@ -87,7 +87,7 @@ aist run                    # 스케줄러로 완전 자동 운영
 | 스케줄러 | `aist/scheduler.py` | 5단계. 요일 패턴 + (선택)랜덤 변주 |
 | 종료 판단 | `aist/end_judge.py` | 4단계. 최대/최소 시간·정시·(선택)채팅저조·마무리 단계 |
 | 채팅 루프 | `aist/chat_pipeline.py` | 다 읽고 다 반응(자연 속도). (선택)폭주 처리 |
-| 채팅 수집 | `aist/chat/` | 트위치(완성)·유튜브(pytchat)·치지직(통합지점) |
+| 채팅 수집 | `aist/chat/` | 트위치·유튜브·치지직·SOOP·Kick·트위캐스팅 + **동출(동시)** |
 | 코어 브릿지 | `aist/vtuber_bridge.py` | Open-LLM-VTuber `/client-ws` 로 입력 전달 |
 | OBS 제어 | `aist/obs_control.py` | obs-websocket 스트림 시작/종료 |
 | 공지 | `aist/announce/` | 디스코드(REST)·네이버 카페(공식 API) + 문구 변주 |

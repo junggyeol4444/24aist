@@ -5,6 +5,10 @@
 """
 
 from .base import ChatMessage, ChatSource
-from .factory import make_chat_source
+from .factory import make_chat_source, make_single_source
+from .multi import MultiChatSource
 
-__all__ = ["ChatMessage", "ChatSource", "make_chat_source"]
+__all__ = [
+    "ChatMessage", "ChatSource", "make_chat_source",
+    "make_single_source", "MultiChatSource",
+]

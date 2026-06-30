@@ -77,14 +77,37 @@ aist check                  # 설정·키 상태
 aist broadcast-now          # 코어·OBS·채팅 실제 연결 (비공개 테스트 권장)
 ```
 
-## 4. 플랫폼 채팅 (귀)
+## 4. 플랫폼 채팅 (귀) — 6개 지원 + 동출
 
-- **트위치**: `.env` 의 `TWITCH_CHANNEL`(필수), `TWITCH_OAUTH_TOKEN`/`TWITCH_NICK`
-  (없으면 익명 읽기). 바로 동작.
-- **유튜브**: 라이브 영상 ID 가 매 방송 바뀌므로 `YOUTUBE_VIDEO_ID` 환경변수로
-  전달. `pip install pytchat` 필요.
-- **치지직(chzzk)**: 공식 채팅 API 가 없어 통합 지점만 둠
-  (`aist/chat/chzzk.py` 상단 주석의 절차대로 채움).
+설정: `config.yaml` 의 `platform`(단일) 또는 `platforms`(동출, 여러 개) +
+`chat.<플랫폼>` 식별자. 토큰/키는 `.env`. 의존성: `pip install -e ".[platforms]"`.
+
+| 플랫폼 | 식별자 | 토큰 | 비고 |
+|--------|--------|------|------|
+| **트위치** | `chat.twitch.channel` | 선택(없으면 익명 읽기) | IRC WebSocket, 바로 동작 |
+| **유튜브** | `chat.youtube.video_id` | — | pytchat. 영상 ID 는 매 방송 바뀜 |
+| **치지직** | `chat.chzzk.channel_id` | — | 비공식 WS. 공개방송 읽기 OK |
+| **SOOP** | `chat.soop.bj_id` | — | 비공식 WS. ※ 첫 실 테스트로 필드 보정 필요할 수 있음 |
+| **Kick** | `chat.kick.channel` | — | Pusher WS. Cloudflare 차단 시 chatroom_id 직접 지정 |
+| **트위캐스팅** | `chat.twitcasting.user_id` | 필수(OAuth2) | 공식 API 코멘트 폴링 |
+
+각 ChatMessage 에는 `platform` 필드가 있어, 코어/AI 가 어느 플랫폼에서 온
+채팅인지 구분할 수 있습니다. 모든 플랫폼에서 **채팅을 선별 없이 전부**
+코어로 흘려보냅니다(절대 원칙).
+
+### 동출(동시 송출) — 채팅 수집 vs 영상 출력
+
+- **채팅 수집(이 레이어가 처리)**: `platforms: [twitch, chzzk, kick, ...]` 로
+  두면 `MultiChatSource` 가 여러 플랫폼 채팅을 하나로 합쳐 코어로 보냅니다.
+  여러 방송의 시청자가 한 화면에서 같이 대화하는 효과.
+- **영상 출력(OBS 가 처리)**: 한 OBS 화면을 여러 플랫폼에 동시에 송출하는
+  것은 OBS 레벨입니다. 방법:
+  - OBS 멀티 출력 플러그인(예: Aitum Multistream)으로 RTMP 여러 개 동시 송출, 또는
+  - Restream.io 같은 리스트림 서비스로 한 번 보내고 여러 곳에 분배.
+  - 우리 스케줄러의 `OBS 스트림 시작` 한 번이 이 다중 출력을 함께 켭니다
+    (OBS 쪽에 다중 출력만 설정해 두면 됨).
+- 공지도 플랫폼별로 링크가 다를 수 있으니, 필요하면 `announce.link` 를
+  리스트림/대표 링크로 두거나 디스코드 공지에 여러 링크를 넣으세요.
 
 ## 5. 24시간 서버화 + 자동 재시작 (7단계)
 

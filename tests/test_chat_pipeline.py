@@ -10,7 +10,7 @@ class FakeBridge:
         self.said = []
         self.proactive = 0
 
-    async def say_to_ai(self, text, source=None):
+    async def say_to_ai(self, text, source=None, platform=None):
         self.said.append((source, text))
 
     async def proactive_speak(self):

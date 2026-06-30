@@ -125,6 +125,53 @@ class AnnounceConfig:
     naver_cafe: NaverCafeAnnounce = field(default_factory=NaverCafeAnnounce)
 
 
+# --------------------------------------------------------------------------- #
+# 채팅 수집 (귀) — 플랫폼별 식별자. 토큰/비밀은 .env(Secrets) 에.
+# 동출(동시 송출)이면 platforms 에 여러 개를 넣고, 각 플랫폼 식별자를 채운다.
+# --------------------------------------------------------------------------- #
+VALID_PLATFORMS = ("twitch", "youtube", "chzzk", "soop", "kick", "twitcasting")
+
+
+@dataclass
+class TwitchChatCfg:
+    channel: str = ""        # 비우면 .env TWITCH_CHANNEL
+
+
+@dataclass
+class YouTubeChatCfg:
+    video_id: str = ""       # 라이브 영상 ID. 비우면 .env YOUTUBE_VIDEO_ID
+
+
+@dataclass
+class ChzzkChatCfg:
+    channel_id: str = ""     # 치지직 채널 ID. 비우면 .env CHZZK_CHANNEL_ID
+
+
+@dataclass
+class SoopChatCfg:
+    bj_id: str = ""          # SOOP(아프리카TV) BJ 아이디(스트리머 ID)
+
+
+@dataclass
+class KickChatCfg:
+    channel: str = ""        # kick.com 채널 슬러그(주소의 이름)
+
+
+@dataclass
+class TwitcastingChatCfg:
+    user_id: str = ""        # 트위캐스팅 사용자 ID(screen id)
+
+
+@dataclass
+class ChatConfig:
+    twitch: TwitchChatCfg = field(default_factory=TwitchChatCfg)
+    youtube: YouTubeChatCfg = field(default_factory=YouTubeChatCfg)
+    chzzk: ChzzkChatCfg = field(default_factory=ChzzkChatCfg)
+    soop: SoopChatCfg = field(default_factory=SoopChatCfg)
+    kick: KickChatCfg = field(default_factory=KickChatCfg)
+    twitcasting: TwitcastingChatCfg = field(default_factory=TwitcastingChatCfg)
+
+
 @dataclass
 class LlmConfig:
     """공지 문구 생성용 LLM. 키는 .env 에서."""
@@ -163,6 +210,11 @@ class Secrets:
     naver_access_token: str = ""
     naver_refresh_token: str = ""
     chzzk_channel_id: str = ""
+    youtube_video_id: str = ""
+    soop_bj_id: str = ""
+    kick_channel: str = ""
+    twitcasting_user_id: str = ""
+    twitcasting_access_token: str = ""
 
     @classmethod
     def from_env(cls) -> "Secrets":
@@ -181,12 +233,20 @@ class Secrets:
             naver_access_token=g("NAVER_ACCESS_TOKEN", ""),
             naver_refresh_token=g("NAVER_REFRESH_TOKEN", ""),
             chzzk_channel_id=g("CHZZK_CHANNEL_ID", ""),
+            youtube_video_id=g("YOUTUBE_VIDEO_ID", ""),
+            soop_bj_id=g("SOOP_BJ_ID", ""),
+            kick_channel=g("KICK_CHANNEL", ""),
+            twitcasting_user_id=g("TWITCASTING_USER_ID", ""),
+            twitcasting_access_token=g("TWITCASTING_ACCESS_TOKEN", ""),
         )
 
 
 @dataclass
 class Config:
-    platform: str = "twitch"   # twitch | youtube | chzzk
+    # 단일 플랫폼. 동출(동시 송출)이면 platforms 에 여러 개를 넣는다.
+    platform: str = "twitch"   # twitch|youtube|chzzk|soop|kick|twitcasting
+    platforms: List[str] = field(default_factory=list)  # 비우면 platform 단일 사용
+    chat: ChatConfig = field(default_factory=ChatConfig)
     vtuber: VTuberConfig = field(default_factory=VTuberConfig)
     obs: ObsConfig = field(default_factory=ObsConfig)
     scheduler: SchedulerConfig = field(default_factory=SchedulerConfig)
@@ -197,6 +257,10 @@ class Config:
     memory: MemoryConfig = field(default_factory=MemoryConfig)
     logging: LoggingConfig = field(default_factory=LoggingConfig)
     secrets: Secrets = field(default_factory=Secrets)
+
+    def active_platforms(self) -> List[str]:
+        """이번 방송에서 채팅을 수집할 플랫폼 목록(동출이면 여러 개)."""
+        return list(self.platforms) if self.platforms else [self.platform]
 
     def resolve_secrets(self) -> None:
         """비밀값이 YAML 에 비어있으면 .env 값으로 채운다(OBS 비번 등)."""
@@ -248,6 +312,8 @@ def load_config(path: Union[str, Path]) -> Config:
 
     cfg = Config(
         platform=raw.get("platform", "twitch"),
+        platforms=list(raw.get("platforms", []) or []),
+        chat=_build(ChatConfig, raw.get("chat")),
         vtuber=_build(VTuberConfig, raw.get("vtuber")),
         obs=_build(ObsConfig, raw.get("obs")),
         scheduler=_build(SchedulerConfig, raw.get("scheduler")),
@@ -265,8 +331,12 @@ def load_config(path: Union[str, Path]) -> Config:
 
 
 def _validate(cfg: Config) -> None:
-    if cfg.platform not in ("twitch", "youtube", "chzzk"):
-        raise ConfigError(f"platform 은 twitch|youtube|chzzk 중 하나여야 합니다: {cfg.platform!r}")
+    valid = "|".join(VALID_PLATFORMS)
+    # 동출이면 platforms 를, 아니면 단일 platform 을 검증.
+    targets = cfg.platforms if cfg.platforms else [cfg.platform]
+    for p in targets:
+        if p not in VALID_PLATFORMS:
+            raise ConfigError(f"플랫폼은 {valid} 중 하나여야 합니다: {p!r}")
     ej = cfg.end_judge
     if ej.min_minutes > ej.max_minutes:
         raise ConfigError(
