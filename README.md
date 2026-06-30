@@ -11,6 +11,12 @@
 > 스케줄러 · 종료 판단 · OBS 제어 · 채팅 브릿지 · 공지봇(디스코드/네이버
 > 카페) · 장기기억 · 이 모두를 지휘하는 **오케스트레이터**.
 
+방송 코어(Open-LLM-VTuber)는 [`Open-LLM-VTuber/`](Open-LLM-VTuber/) 에
+**포함(vendoring)되어 있어 바로 개조**할 수 있습니다. 한국어 개조 설정
+([`conf.korean.yaml`](Open-LLM-VTuber/conf.korean.yaml))과 캐릭터
+([`characters/kr_별이.yaml`](Open-LLM-VTuber/characters/kr_별이.yaml))이 이미
+들어 있습니다. (자세한 건 [`Open-LLM-VTuber/NOTICE-vendored.md`](Open-LLM-VTuber/NOTICE-vendored.md))
+
 ```
 [스케줄러] → [시작 공지] → [OBS 시작] → [Open-LLM-VTuber 연결]
       → [채팅 다 반응(핵심 루프)] → [종료 판단] → [마무리] → [OBS 종료]
@@ -55,9 +61,10 @@ aist plan                   # 다음 방송 일정 + 종료 타임라인
 aist persona                # 코어에 들어갈 페르소나 프롬프트
 aist announce-preview       # 공지 문구 변주 미리보기
 
-# 4) 방송 코어(Open-LLM-VTuber) 받고 개조
+# 4) 방송 코어(이미 저장소에 포함). 프론트엔드(웹 UI)만 받고 설정 적용
 bash scripts/setup_openllm_vtuber.sh
-aist build-persona --conf third_party/Open-LLM-VTuber/conf.yaml --live2d <모델명>
+#   페르소나를 바꾸면 재주입:
+#   aist build-persona --conf Open-LLM-VTuber/conf.yaml --live2d <모델명>
 
 # 5) 한 방송만 수동으로(3·4단계) → 완전 자동(5단계)
 aist broadcast-now          # 지금 한 방송(시작 수동, 종료는 자동)

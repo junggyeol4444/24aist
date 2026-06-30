@@ -4,12 +4,21 @@
 설명합니다. GPU 가 있는 운영자 환경(집 GPU PC 또는 GPU 클라우드)에서
 진행하세요.
 
-## 1. 방송 코어 — Open-LLM-VTuber
+## 1. 방송 코어 — Open-LLM-VTuber (저장소에 포함됨)
+
+방송 코어는 `Open-LLM-VTuber/` 에 vendoring 되어 있습니다(개조 대상). 받을
+필요 없이 셋업만 하면 됩니다.
 
 ```bash
-bash scripts/setup_openllm_vtuber.sh          # clone + conf.yaml 준비 + uv sync
-aist build-persona --conf third_party/Open-LLM-VTuber/conf.yaml --live2d <모델명>
+bash scripts/setup_openllm_vtuber.sh    # 프론트엔드 받기 + uv sync + conf 적용
+# 페르소나를 바꾸면 재주입:
+aist build-persona --conf Open-LLM-VTuber/conf.yaml --live2d <모델명>
 ```
+
+- 무엇이 포함/제외됐는지: `Open-LLM-VTuber/NOTICE-vendored.md`
+- 한국어 개조 설정: `Open-LLM-VTuber/conf.korean.yaml`
+  (셋업 시 `conf.yaml` 로 복사됨)
+- 웹 UI(프론트엔드 바이너리)는 `scripts/fetch_frontend.sh` 로 받음(커밋 제외).
 
 `conf.yaml` 에서 운영자가 채울 핵심 키:
 
