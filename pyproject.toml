@@ -1,0 +1,45 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "aist"
+version = "0.1.0"
+description = "AI 방송인 자동화 레이어 — Open-LLM-VTuber 위에 올리는 스케줄러/종료판단/OBS제어/공지봇/오케스트레이터"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [{ name = "24aist" }]
+dependencies = [
+  "PyYAML>=6.0",
+]
+
+# 무거운/선택적 의존성은 기능별로 분리해서, 핵심 로직(스케줄러/종료판단/페르소나/
+# 공지 문구 생성)은 PyYAML 만으로도 import·테스트가 되도록 한다.
+[project.optional-dependencies]
+vtuber = ["websockets>=12.0"]
+obs = ["obsws-python>=1.6"]
+discord = ["discord.py>=2.3"]
+twitch = ["websockets>=12.0"]
+youtube = ["pytchat>=0.5"]
+naver = ["requests>=2.31"]
+selenium = ["selenium>=4.0"]
+llm = ["openai>=1.0", "anthropic>=0.34", "google-generativeai>=0.7"]
+memory = ["chromadb>=0.5"]
+dev = ["pytest>=7.0"]
+all = [
+  "websockets>=12.0", "obsws-python>=1.6", "discord.py>=2.3",
+  "pytchat>=0.5", "requests>=2.31", "selenium>=4.0",
+  "openai>=1.0", "anthropic>=0.34", "google-generativeai>=0.7",
+  "chromadb>=0.5",
+]
+
+[project.scripts]
+aist = "aist.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["aist*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

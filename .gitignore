@@ -1,0 +1,34 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+.venv/
+venv/
+env/
+
+# 비밀/환경
+.env
+*.local.yaml
+
+# 런타임 데이터 (로그/기억/세션)
+data/
+!data/.gitkeep
+
+# 다운로드/개조 대상 오픈소스 (setup 스크립트가 받음, 저장소엔 포함 안 함)
+third_party/
+Open-LLM-VTuber/
+GPT-SoVITS/
+
+# OS / 에디터
+.DS_Store
+.idea/
+.vscode/
+*.swp
+
+# 테스트
+.pytest_cache/
+.coverage
+htmlcov/
