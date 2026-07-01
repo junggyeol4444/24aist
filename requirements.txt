@@ -1,0 +1,34 @@
+# 핵심(필수): 설정/페르소나/스케줄러/종료판단/공지문구 로직
+PyYAML>=6.0
+
+# --- 아래는 기능을 켤 때만 필요. 한 줄씩 주석을 풀어서 설치하거나
+#     `pip install -e .[all]` 로 한 번에 설치 ---
+
+# Open-LLM-VTuber WebSocket 연결 / 트위치 채팅
+# websockets>=12.0
+
+# OBS 제어 (obs-websocket)
+# obsws-python>=1.6
+
+# 디스코드 공지봇
+# discord.py>=2.3
+
+# 유튜브 라이브 채팅
+# pytchat>=0.5
+
+# 네이버 카페 공식 API (HTTP)
+# requests>=2.31
+
+# 네이버 카페 셀레늄 보조(선택)
+# selenium>=4.0
+
+# 공지 문구 생성용 LLM (제공자 중 쓰는 것만)
+# openai>=1.0
+# anthropic>=0.34
+# google-generativeai>=0.7
+
+# 장기기억 벡터DB 백엔드(선택, 기본은 json)
+# chromadb>=0.5
+
+# 테스트
+# pytest>=7.0

@@ -1,0 +1,47 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+.venv/
+venv/
+env/
+
+# 비밀/환경
+.env
+*.local.yaml
+
+# 런타임 데이터 (로그/기억/세션)
+data/
+!data/.gitkeep
+
+# 방송 코어(Open-LLM-VTuber)는 저장소에 vendoring 되어 있다(개조 대상).
+#   → Open-LLM-VTuber/ 자체는 추적한다. 단, 런타임/거대 바이너리만 제외:
+Open-LLM-VTuber/conf.yaml          # 운영자 로컬 실행 설정(개조본은 conf.korean.yaml 로 추적)
+Open-LLM-VTuber/.venv/
+Open-LLM-VTuber/cache/
+Open-LLM-VTuber/logs/
+Open-LLM-VTuber/models/
+Open-LLM-VTuber/mem.json
+Open-LLM-VTuber/chat_history/
+Open-LLM-VTuber/.env
+# 프론트엔드 컴파일 바이너리(wasm/onnx ~44MB)는 fetch 스크립트로 받고 커밋하지 않음
+Open-LLM-VTuber/frontend/*
+!Open-LLM-VTuber/frontend/README.md
+
+# GPT-SoVITS 는 별도 설치(저장소엔 포함 안 함)
+third_party/
+GPT-SoVITS/
+
+# OS / 에디터
+.DS_Store
+.idea/
+.vscode/
+*.swp
+
+# 테스트
+.pytest_cache/
+.coverage
+htmlcov/
