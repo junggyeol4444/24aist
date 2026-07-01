@@ -119,10 +119,109 @@ class NaverCafeAnnouncer(Announcer):
             log.error("네이버 토큰 갱신 예외: %s", e)
             return False
 
-    # --- 경로 B: 셀레늄 (보조, 기본 미구현) --------------------------------
+    # --- 경로 B: 셀레늄 (보조) ---------------------------------------------
     def _selenium_post(self, subject: str, content: str) -> bool:
-        raise NotImplementedError(
-            "셀레늄 보조 게시는 기본 미구현입니다. 공식 API 로 안 되는 부분이 "
-            "생기면, 본인 카페 + 낮은 빈도 + 자연스러운 패턴 조건에서만 "
-            "aist/announce/naver_cafe.py 의 _selenium_post 를 채워 쓰세요."
-        )
+        """브라우저 자동화로 카페 글 작성(공식 API 로 안 되는 부분 보조).
+
+        로그인은 캡차를 피하려고 자동 로그인 대신 **쿠키(NID_AUT/NID_SES)**로
+        붙는다(.env). 본인 카페 + 낮은 빈도(방송당 1회)로만 쓸 것.
+
+        [주의] 네이버 카페 글쓰기 화면은 SPA + 에디터 iframe 이라 DOM 이 자주
+        바뀐다. 아래 셀렉터는 표준 구조 기준이며, 실제로 한 번 돌려보고
+        (STEP 로그를 보며) 셀렉터를 조정해야 할 수 있다. 실패해도 예외 대신
+        False 를 돌려 방송은 계속되게 한다.
+        """
+        aut = self.secrets.naver_nid_aut
+        ses = self.secrets.naver_nid_ses
+        if not (self.cfg.cafe_id and self.cfg.menu_id):
+            log.warning("셀레늄: cafe_id/menu_id 미설정 → 생략")
+            return False
+        if not (aut and ses):
+            log.warning("셀레늄: NID_AUT/NID_SES 쿠키 미설정(.env) → 생략")
+            return False
+        try:
+            from selenium import webdriver
+            from selenium.webdriver.chrome.options import Options
+            from selenium.webdriver.common.by import By
+            from selenium.webdriver.support.ui import WebDriverWait
+            from selenium.webdriver.support import expected_conditions as EC
+        except ImportError:
+            log.error("selenium 미설치: `pip install selenium`")
+            return False
+
+        opts = Options()
+        opts.add_argument("--headless=new")
+        opts.add_argument("--no-sandbox")
+        opts.add_argument("--disable-dev-shm-usage")
+        opts.add_argument("--window-size=1280,1000")
+        driver = None
+        try:
+            driver = webdriver.Chrome(options=opts)
+            wait = WebDriverWait(driver, 15)
+
+            log.info("셀레늄 STEP1: 쿠키 로그인")
+            driver.get("https://www.naver.com")
+            for name, val in (("NID_AUT", aut), ("NID_SES", ses)):
+                driver.add_cookie({"name": name, "value": val, "domain": ".naver.com"})
+
+            log.info("셀레늄 STEP2: 글쓰기 페이지 열기")
+            write_url = (
+                f"https://cafe.naver.com/ca-fe/cafes/{self.cfg.cafe_id}"
+                f"/menus/{self.cfg.menu_id}/articles/write"
+            )
+            driver.get(write_url)
+
+            log.info("셀레늄 STEP3: 제목 입력")
+            subj = wait.until(EC.presence_of_element_located(
+                (By.CSS_SELECTOR, "textarea.textarea_input, input.textarea_input, "
+                                  "textarea[placeholder*='제목'], input[placeholder*='제목']")))
+            subj.send_keys(subject)
+
+            log.info("셀레늄 STEP4: 본문 입력(에디터)")
+            # SmartEditor 본문은 보통 contenteditable 영역 or iframe.
+            body_written = self._selenium_type_body(driver, By, content)
+            if not body_written:
+                log.warning("셀레늄: 본문 입력 영역을 못 찾음(셀렉터 조정 필요)")
+
+            log.info("셀레늄 STEP5: 등록 버튼 클릭")
+            btn = wait.until(EC.element_to_be_clickable(
+                (By.XPATH, "//*[self::button or self::a]"
+                           "[contains(text(),'등록') or contains(text(),'확인')]")))
+            btn.click()
+            WebDriverWait(driver, 10).until(EC.url_changes(write_url))
+            log.info("네이버 카페 공지 게시 완료(셀레늄)")
+            return True
+        except Exception as e:  # noqa: BLE001
+            log.error("셀레늄 게시 실패(셀렉터/로그인 확인 필요): %s", e)
+            return False
+        finally:
+            if driver is not None:
+                try:
+                    driver.quit()
+                except Exception:
+                    pass
+
+    @staticmethod
+    def _selenium_type_body(driver, By, content: str) -> bool:
+        """본문 입력을 여러 방식으로 시도(에디터 구조가 다양)."""
+        # 1) 일반 contenteditable
+        for sel in ("div.se-content [contenteditable='true']",
+                    "div[contenteditable='true']", ".ProseMirror"):
+            els = driver.find_elements(By.CSS_SELECTOR, sel)
+            if els:
+                els[0].click()
+                els[0].send_keys(content)
+                return True
+        # 2) 에디터 iframe 안쪽
+        for frame in driver.find_elements(By.TAG_NAME, "iframe"):
+            try:
+                driver.switch_to.frame(frame)
+                els = driver.find_elements(By.CSS_SELECTOR, "body[contenteditable='true'], .ProseMirror")
+                if els:
+                    els[0].send_keys(content)
+                    driver.switch_to.default_content()
+                    return True
+                driver.switch_to.default_content()
+            except Exception:
+                driver.switch_to.default_content()
+        return False

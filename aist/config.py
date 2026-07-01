@@ -10,7 +10,7 @@
 import os
 from dataclasses import dataclass, field, fields, is_dataclass
 from pathlib import Path
-from typing import Any, Dict, List, Union
+from typing import Any, Dict, List, Union, get_args, get_origin
 
 import yaml
 
@@ -27,11 +27,38 @@ class VTuberConfig:
 
 
 @dataclass
+class SimulcastTarget:
+    name: str = ""     # 표시용 이름(예: "youtube")
+    url: str = ""      # rtmp 서버 주소 (참고/공지용)
+    key: str = ""      # 스트림 키 (참고용 — 실제 키는 플러그인에 설정 권장)
+
+
+@dataclass
+class SimulcastConfig:
+    """영상 동출(다중 RTMP). obs-multi-rtmp 같은 플러그인이 있다는 가정.
+
+    mode:
+      - plugin_autostart: 플러그인의 "OBS 스트림 시작 시 함께 시작" 옵션을 켜두면,
+        우리의 일반 스트림 시작이 추가 RTMP 출력까지 함께 켠다(추가 호출 없음).
+      - vendor: obs-websocket vendor 요청으로 플러그인의 전체 시작/종료를 직접
+        호출한다(플러그인 빌드가 vendor 요청을 지원할 때). 요청명은 플러그인
+        문서에 맞춰 start_request/stop_request 로 조정.
+    """
+    enabled: bool = False
+    mode: str = "plugin_autostart"       # plugin_autostart | vendor
+    vendor_name: str = "obs-multi-rtmp"
+    start_request: str = "StartAll"      # vendor 모드 요청명(플러그인에 맞게)
+    stop_request: str = "StopAll"
+    targets: List[SimulcastTarget] = field(default_factory=list)  # 참고/공지용
+
+
+@dataclass
 class ObsConfig:
     host: str = "127.0.0.1"
     port: int = 4455
     password: str = ""          # 비우면 .env 의 OBS_PASSWORD 사용
     start_stream: bool = True    # False 면 OBS 시작은 운영자 수동(테스트 단계)
+    simulcast: SimulcastConfig = field(default_factory=SimulcastConfig)
 
 
 @dataclass
@@ -209,6 +236,8 @@ class Secrets:
     naver_client_secret: str = ""
     naver_access_token: str = ""
     naver_refresh_token: str = ""
+    naver_nid_aut: str = ""       # 카페 셀레늄용 로그인 쿠키(선택)
+    naver_nid_ses: str = ""
     chzzk_channel_id: str = ""
     youtube_video_id: str = ""
     soop_bj_id: str = ""
@@ -232,6 +261,8 @@ class Secrets:
             naver_client_secret=g("NAVER_CLIENT_SECRET", ""),
             naver_access_token=g("NAVER_ACCESS_TOKEN", ""),
             naver_refresh_token=g("NAVER_REFRESH_TOKEN", ""),
+            naver_nid_aut=g("NAVER_NID_AUT", ""),
+            naver_nid_ses=g("NAVER_NID_SES", ""),
             chzzk_channel_id=g("CHZZK_CHANNEL_ID", ""),
             youtube_video_id=g("YOUTUBE_VIDEO_ID", ""),
             soop_bj_id=g("SOOP_BJ_ID", ""),
@@ -288,9 +319,20 @@ def _build(cls, data: Any):
         # 중첩 dataclass 처리
         if is_dataclass(ftype):
             kwargs[key] = _build(ftype, raw)
+        elif _is_dataclass_list(ftype) and isinstance(raw, list):
+            item_cls = get_args(ftype)[0]
+            kwargs[key] = [_build(item_cls, item) for item in raw]
         else:
             kwargs[key] = raw
     return cls(**kwargs)
+
+
+def _is_dataclass_list(ftype) -> bool:
+    """List[SomeDataclass] 형태인지."""
+    if get_origin(ftype) not in (list, List):
+        return False
+    args = get_args(ftype)
+    return bool(args) and is_dataclass(args[0])
 
 
 class ConfigError(Exception):
@@ -346,3 +388,9 @@ def _validate(cfg: Config) -> None:
         raise ConfigError(f"announce.style 은 varied|fixed 여야 합니다: {cfg.announce.style!r}")
     if cfg.llm.provider not in ("openai", "anthropic", "gemini", "dummy"):
         raise ConfigError(f"llm.provider 가 올바르지 않습니다: {cfg.llm.provider!r}")
+    if cfg.obs.simulcast.mode not in ("plugin_autostart", "vendor"):
+        raise ConfigError(
+            f"obs.simulcast.mode 는 plugin_autostart|vendor 여야 합니다: {cfg.obs.simulcast.mode!r}"
+        )
+    if cfg.memory.backend not in ("json", "chroma"):
+        raise ConfigError(f"memory.backend 는 json|chroma 여야 합니다: {cfg.memory.backend!r}")

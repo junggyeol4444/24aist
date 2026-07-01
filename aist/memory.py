@@ -31,10 +31,25 @@ class Memory:
         self.dir = Path(cfg.path)
         self.dir.mkdir(parents=True, exist_ok=True)
         self.sessions_file = self.dir / "sessions.json"
-        if cfg.backend == "chroma":
-            log.info("memory.backend=chroma 는 아직 의미검색 연결 전 → JSON 으로 기록합니다.")
         self._sessions: List[Dict] = self._load()
         self._cur: Optional[Dict] = None
+        # chroma 백엔드(선택): 의미검색용 색인. 실패하면 키워드 검색으로 대체.
+        self._chroma = self._init_chroma() if cfg.backend == "chroma" else None
+
+    def _init_chroma(self):
+        try:
+            import chromadb  # 지연 import
+        except ImportError:
+            log.warning("chromadb 미설치 → recall 은 키워드 검색으로 동작. `pip install chromadb`")
+            return None
+        try:
+            client = chromadb.PersistentClient(path=str(self.dir / "chroma"))
+            col = client.get_or_create_collection("aist_sessions")
+            log.info("chroma 기억 백엔드 초기화됨")
+            return col
+        except Exception as e:  # noqa: BLE001
+            log.warning("chroma 초기화 실패(%s) → 키워드 검색으로 대체", e)
+            return None
 
     def _load(self) -> List[Dict]:
         if self.sessions_file.exists():
@@ -85,9 +100,54 @@ class Memory:
         self._cur["end"] = _now_iso()
         if summary:
             self._cur["summary"] = summary
-        self._sessions.append(self._cur)
+        session = self._cur
+        self._sessions.append(session)
         self._cur = None
         self._save()
+        self._index(session, len(self._sessions))
+
+    def _session_text(self, s: Dict) -> str:
+        parts = [s.get("summary", "")]
+        parts += s.get("viewers", [])
+        parts += [sc.get("text", "") for sc in s.get("superchats", [])]
+        parts += [e.get("kind", "") for e in s.get("events", [])]
+        return " ".join(p for p in parts if p) or "빈 방송"
+
+    def _index(self, session: Dict, idx: int) -> None:
+        if self._chroma is None:
+            return
+        try:
+            self._chroma.add(
+                documents=[self._session_text(session)],
+                ids=[f"session-{idx}"],
+                metadatas=[{"start": session.get("start", "")}],
+            )
+        except Exception as e:  # noqa: BLE001
+            log.debug("chroma 색인 실패: %s", e)
+
+    def recall(self, query: str, n: int = 3) -> List[str]:
+        """과거 방송에서 query 와 관련된 내용을 회상한다("저번에 그거~").
+
+        chroma 백엔드면 의미검색, 아니면 키워드 검색으로 동작한다.
+        """
+        if self._chroma is not None:
+            try:
+                res = self._chroma.query(query_texts=[query], n_results=n)
+                docs = (res.get("documents") or [[]])[0]
+                if docs:
+                    return docs
+            except Exception as e:  # noqa: BLE001
+                log.debug("chroma 검색 실패(%s) → 키워드 검색", e)
+        # 키워드 대체
+        words = [w for w in query.lower().split() if w]
+        hits = []
+        for s in reversed(self._sessions):
+            text = self._session_text(s)
+            if any(w in text.lower() for w in words):
+                hits.append(text)
+            if len(hits) >= n:
+                break
+        return hits
 
     # --- 회상 --------------------------------------------------------------
     def recent_summary(self) -> str:

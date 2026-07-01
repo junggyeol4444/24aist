@@ -209,6 +209,26 @@ def cmd_doctor(args) -> int:
         ok = False
         print(f"  [!] OBS 점검 불가: {e}")
 
+    # 3) 채팅 플랫폼 (활성 플랫폼별 구성/도달 점검)
+    from .chat.factory import make_single_source
+    print("\n  채팅 플랫폼:")
+    for p in cfg.active_platforms():
+        try:
+            src = make_single_source(p, cfg)
+        except Exception as e:  # 식별자 미설정 등
+            ok = False
+            print(f"    [X] {p:<11}: 구성 실패 — {e}")
+            continue
+
+        async def _probe(s):
+            return await asyncio.wait_for(s.probe(), timeout=8)
+
+        try:
+            status = _asyncio.run(_probe(src))
+            print(f"    [OK] {p:<11}: {status}")
+        except Exception as e:  # noqa: BLE001
+            print(f"    [?] {p:<11}: 점검 불가(라이브 아님/네트워크?) — {e}")
+
     print("\n점검 끝.", "모두 OK." if ok else "위 항목을 확인하세요.")
     return 0 if ok else 1
 

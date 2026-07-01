@@ -121,6 +121,13 @@ class ChzzkChat(ChatSource):
                 log.warning("치지직 연결 끊김: %s (재연결)", e)
                 await asyncio.sleep(3)
 
+    async def probe(self) -> str:
+        try:
+            cid, _ = await asyncio.to_thread(self._fetch_tokens)
+            return f"온에어(chatChannelId 확보: {cid[:8]}…)"
+        except Exception as e:
+            return f"방송중 아님/실패: {e}"
+
     async def close(self) -> None:
         self._closed = True
         if self._ws is not None:

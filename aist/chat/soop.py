@@ -131,6 +131,13 @@ class SoopChat(ChatSource):
                 log.warning("SOOP 연결 끊김: %s (재연결)", e)
                 await asyncio.sleep(3)
 
+    async def probe(self) -> str:
+        try:
+            ch = await asyncio.to_thread(self._fetch_live_info)
+            return f"온에어(CHATNO {ch.get('CHATNO')})"
+        except Exception as e:
+            return f"방송중 아님/실패: {e}"
+
     async def close(self) -> None:
         self._closed = True
         if self._ws is not None:

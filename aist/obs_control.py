@@ -48,7 +48,10 @@ class ObsController:
         return self._client
 
     def start_stream(self):
-        """스트림 시작. start_stream=false 면 (테스트 단계) 건너뛴다."""
+        """스트림 시작. start_stream=false 면 (테스트 단계) 건너뛴다.
+
+        영상 동출(simulcast)이 켜져 있으면 추가 RTMP 출력도 함께 시작한다.
+        """
         if not self.cfg.start_stream:
             log.info("obs.start_stream=false → 스트림 시작은 운영자 수동(건너뜀)")
             return
@@ -62,14 +65,43 @@ class ObsController:
             pass
         cl.start_stream()
         log.info("OBS 스트림 시작")
+        self._simulcast(start=True)
 
     def stop_stream(self):
         if not self.cfg.start_stream:
             log.info("obs.start_stream=false → 스트림 종료도 운영자 수동(건너뜀)")
             return
         cl = self._require()
+        self._simulcast(start=False)
         cl.stop_stream()
         log.info("OBS 스트림 종료")
+
+    def _simulcast(self, start: bool):
+        """영상 동출(다중 RTMP) 추가 출력 제어.
+
+        - plugin_autostart: 플러그인이 스트림 시작에 맞춰 스스로 켜지므로 별도
+          호출 없음(대상만 로그로 알림).
+        - vendor: obs-websocket vendor 요청으로 플러그인 전체 시작/종료 호출.
+        플러그인이 없거나 요청이 실패해도 본 방송은 계속되도록 best-effort.
+        """
+        sc = self.cfg.simulcast
+        if not sc.enabled:
+            return
+        names = ", ".join(t.name or t.url for t in sc.targets) or "(플러그인에 설정된 대상)"
+        if sc.mode == "plugin_autostart":
+            log.info("동출(%s): 플러그인 auto-start 가 처리 → 대상: %s",
+                     "시작" if start else "종료", names)
+            return
+        # vendor 모드
+        req = sc.start_request if start else sc.stop_request
+        cl = self._require()
+        try:
+            cl.call_vendor_request(sc.vendor_name, req, None)
+            log.info("동출 vendor 요청 성공: %s.%s (대상: %s)", sc.vendor_name, req, names)
+        except Exception as e:  # noqa: BLE001 - 플러그인 없음/요청명 불일치 등
+            log.warning("동출 vendor 요청 실패(%s.%s): %s — 본 방송은 계속. "
+                        "플러그인 설치/요청명(start_request·stop_request) 확인",
+                        sc.vendor_name, req, e)
 
     def set_scene(self, scene_name: str):
         cl = self._require()

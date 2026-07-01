@@ -94,6 +94,15 @@ class KickChat(ChatSource):
                 log.warning("kick 연결 끊김: %s (재연결)", e)
                 await asyncio.sleep(3)
 
+    async def probe(self) -> str:
+        if self.chatroom_id:
+            return f"chatroom_id 직접 지정됨({self.chatroom_id})"
+        try:
+            cid = await asyncio.to_thread(self._fetch_chatroom_id)
+            return f"채널 OK(chatroom {cid})"
+        except Exception as e:
+            return f"채널 조회 실패(Cloudflare 가능): {e}"
+
     async def close(self) -> None:
         self._closed = True
         if self._ws is not None:

@@ -91,5 +91,12 @@ class TwitcastingChat(ChatSource):
             first = False
             await asyncio.sleep(self.poll_interval)
 
+    async def probe(self) -> str:
+        try:
+            mid = await asyncio.to_thread(self._current_movie_id)
+            return f"라이브 OK(movie {mid})" if mid else "라이브 아님(또는 토큰 확인)"
+        except Exception as e:
+            return f"조회 실패(토큰 확인): {e}"
+
     async def close(self) -> None:
         self._closed = True

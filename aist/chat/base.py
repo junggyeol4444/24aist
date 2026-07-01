@@ -32,3 +32,10 @@ class ChatSource(abc.ABC):
 
     async def close(self) -> None:
         return None
+
+    async def probe(self) -> str:
+        """가벼운 연결/도달 점검(aist doctor 용). 사람이 읽는 상태 문자열.
+
+        기본은 구성만 확인. 도달성 확인이 싼 플랫폼은 하위 클래스에서 override.
+        """
+        return "구성됨(실제 연결은 broadcast-now 에서 확인)"
