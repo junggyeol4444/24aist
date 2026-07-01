@@ -121,6 +121,11 @@ class Orchestrator:
             await self._teardown(obs, bridge, None, None, None, start_dt, aborted=True)
             return
 
+        # 코어가 보내오는 메시지(자막·오디오 등)를 계속 읽어 버린다.
+        # 안 읽으면 websockets 수신 버퍼가 무한정 쌓여 장시간 방송에서
+        # 메모리 누수/정지가 난다(24h 안정성의 핵심).
+        drain_task = asyncio.create_task(self._drain_core(bridge))
+
         pipeline = ChatPipeline(bridge, cfg.broadcast, on_message=self.memory.note_chat)
         try:
             source = make_chat_source(cfg)
@@ -151,18 +156,29 @@ class Orchestrator:
             await self._safe(bridge.say_to_ai(_CUE_CLOSING))
             await self._sleep_or_stop(_CLOSING_WAIT_SEC)
 
-        await self._teardown(obs, bridge, pipeline, pipeline_task, chat_stop, start_dt)
+        await self._teardown(obs, bridge, pipeline, pipeline_task, chat_stop,
+                             start_dt, drain_task=drain_task)
 
     async def _teardown(self, obs, bridge, pipeline, pipeline_task, chat_stop,
-                        start_dt, aborted: bool = False):
-        # 채팅 파이프라인 정지
+                        start_dt, drain_task=None, aborted: bool = False):
+        # 채팅 파이프라인 정지 (취소 후 반드시 회수해서 태스크 누수 방지)
         if chat_stop is not None:
             chat_stop.set()
         if pipeline_task is not None:
             try:
-                await asyncio.wait_for(pipeline_task, timeout=10)
-            except (asyncio.TimeoutError, Exception):
+                # shield 로 감싸 타임아웃이 pipeline_task 를 대신 취소하지 않게 하고,
+                # 우리가 명시적으로 취소한다.
+                await asyncio.wait_for(asyncio.shield(pipeline_task), timeout=10)
+            except asyncio.TimeoutError:
                 pipeline_task.cancel()
+            except Exception:  # pipeline_task 내부 예외는 무시(로그는 내부에서)
+                pass
+            await asyncio.gather(pipeline_task, return_exceptions=True)
+
+        # 코어 수신 드레인 정지
+        if drain_task is not None:
+            drain_task.cancel()
+            await asyncio.gather(drain_task, return_exceptions=True)
 
         # OBS 종료
         try:
@@ -238,3 +254,16 @@ class Orchestrator:
             await coro
         except Exception as e:
             log.debug("코어 신호 전송 실패(무시): %s", e)
+
+    async def _drain_core(self, bridge):
+        """코어가 보내는 메시지를 계속 읽어 버린다(수신 버퍼 누적 방지).
+
+        보조 신호(audio-play-start 등)를 종료 판단에 쓰고 싶으면 여기서
+        확장할 수 있다. 지금은 읽어서 버리는 것만으로 충분하다.
+        """
+        try:
+            await bridge.recv_loop()
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:  # 연결 종료 등은 정상 흐름
+            log.debug("코어 수신 루프 종료: %s", e)

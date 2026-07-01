@@ -169,8 +169,9 @@ def cmd_doctor(args) -> int:
     print("연결 점검 (코어 WS / OBS)\n")
     ok = True
 
-    # 1) 코어 WebSocket
+    # 1) 코어 WebSocket (점검은 빠르게 1회만 시도)
     cfg.vtuber.connect_timeout_sec = min(cfg.vtuber.connect_timeout_sec, 3)
+    cfg.vtuber.reconnect = False
 
     async def _check_core():
         from .vtuber_bridge import VTuberBridge

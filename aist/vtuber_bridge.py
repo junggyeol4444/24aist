@@ -36,12 +36,24 @@ class VTuberBridge:
             raise RuntimeError(
                 "websockets 가 설치되어 있지 않습니다. `pip install websockets`"
             ) from e
-        self._ws = await asyncio.wait_for(
-            websockets.connect(self.cfg.ws_url, max_size=None),
-            timeout=self.cfg.connect_timeout_sec,
-        )
-        log.info("Open-LLM-VTuber 연결됨 (%s)", self.cfg.ws_url)
-        return self
+        # reconnect=True 면 코어가 조금 늦게 떠도 되도록 초기 연결을 재시도한다.
+        attempts = 6 if self.cfg.reconnect else 1
+        last_err = None
+        for i in range(attempts):
+            try:
+                self._ws = await asyncio.wait_for(
+                    websockets.connect(self.cfg.ws_url, max_size=None),
+                    timeout=self.cfg.connect_timeout_sec,
+                )
+                log.info("Open-LLM-VTuber 연결됨 (%s)", self.cfg.ws_url)
+                return self
+            except Exception as e:  # noqa: BLE001 - 연결 실패 사유 다양
+                last_err = e
+                if i < attempts - 1:
+                    wait = min(2 ** i, 10)
+                    log.info("코어 연결 재시도 %d/%d (%.0fs 후): %s", i + 1, attempts, wait, e)
+                    await asyncio.sleep(wait)
+        raise last_err
 
     async def _send(self, payload: dict):
         if self._ws is None:

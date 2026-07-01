@@ -61,6 +61,7 @@ class TwitchChat(ChatSource):
         self.oauth_token = oauth_token
         self.nick = (nick or "").lower()
         self._ws = None
+        self._closed = False
 
     async def _connect(self):
         import websockets  # 지연 import
@@ -81,32 +82,42 @@ class TwitchChat(ChatSource):
                  "인증" if self.oauth_token else "익명")
 
     async def messages(self) -> AsyncIterator[ChatMessage]:
-        await self._connect()
-        assert self._ws is not None
-        async for raw in self._ws:
-            # 한 프레임에 여러 줄이 올 수 있음
-            for line in raw.split("\r\n"):
-                line = line.strip()
-                if not line:
-                    continue
-                tags, prefix, command, params, trailing = _parse_line(line)
-                if command == "PING":
-                    await self._ws.send(f"PONG :{trailing or 'tmi.twitch.tv'}")
-                    continue
-                if command != "PRIVMSG":
-                    continue
-                author = tags.get("display-name") or prefix.split("!", 1)[0]
-                bits = tags.get("bits", "")
-                yield ChatMessage(
-                    author=author,
-                    text=trailing,
-                    platform=self.platform,
-                    is_superchat=bool(bits),
-                    amount=(f"{bits} bits" if bits else ""),
-                    raw=line,
-                )
+        # 장시간 방송에서 IRC 연결이 끊길 수 있어 재연결 루프로 감싼다.
+        while not self._closed:
+            try:
+                await self._connect()
+                async for raw in self._ws:
+                    if isinstance(raw, bytes):
+                        raw = raw.decode("utf-8", "ignore")
+                    # 한 프레임에 여러 줄이 올 수 있음
+                    for line in raw.split("\r\n"):
+                        line = line.strip()
+                        if not line:
+                            continue
+                        tags, prefix, command, params, trailing = _parse_line(line)
+                        if command == "PING":
+                            await self._ws.send(f"PONG :{trailing or 'tmi.twitch.tv'}")
+                            continue
+                        if command != "PRIVMSG":
+                            continue
+                        author = tags.get("display-name") or prefix.split("!", 1)[0]
+                        bits = tags.get("bits", "")
+                        yield ChatMessage(
+                            author=author,
+                            text=trailing,
+                            platform=self.platform,
+                            is_superchat=bool(bits),
+                            amount=(f"{bits} bits" if bits else ""),
+                            raw=line,
+                        )
+            except Exception as e:
+                if self._closed:
+                    break
+                log.warning("트위치 연결 끊김: %s (재연결)", e)
+                await asyncio.sleep(3)
 
     async def close(self) -> None:
+        self._closed = True
         if self._ws is not None:
             try:
                 await self._ws.close()
