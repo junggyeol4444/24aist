@@ -16,7 +16,8 @@ platform: twitch          # twitch | youtube | chzzk | soop | kick | twitcasting
 # 플랫폼별 식별자 (토큰/키는 .env 에). 쓰는 플랫폼 것만 채우면 됨.
 chat:
   twitch:      { channel: "" }       # 채널명. 비우면 .env TWITCH_CHANNEL
-  youtube:     { video_id: "" }      # 라이브 영상 ID. 비우면 .env YOUTUBE_VIDEO_ID
+  # 유튜브: channel(핸들 @이름 또는 UC채널ID)을 주면 라이브 video_id 자동발견(권장).
+  youtube:     { video_id: "", channel: "" }
   chzzk:       { channel_id: "" }    # 치지직 채널 ID. 비우면 .env CHZZK_CHANNEL_ID
   soop:        { bj_id: "" }         # SOOP(아프리카TV) BJ 아이디
   kick:        { channel: "" }       # kick.com 채널 슬러그
@@ -116,11 +117,20 @@ announce:
 
 # --- 공지 문구 생성용 LLM (키는 .env) ---
 llm:
-  provider: "dummy"        # openai | anthropic | gemini | dummy(키 없이 테스트)
-  model: "gpt-4o-mini"
-  base_url: ""             # OpenAI 호환 엔드포인트면 지정 (예: 로컬 vLLM)
+  provider: "dummy"        # openai | anthropic | gemini | ollama(로컬,비용0) | dummy
+  model: "gpt-4o-mini"     # ollama 면 예: "llama3.1" 등 로컬 모델명
+  base_url: ""             # OpenAI 호환 엔드포인트. ollama 기본: http://127.0.0.1:11434/v1
   temperature: 0.9
   max_tokens: 300
+
+# --- 게임 플레이 (8단계, 선택) — 마인크래프트 ---
+# 사이드카 실행: cd game/minecraft && npm install && node bot.js
+game:
+  enabled: false
+  type: "minecraft"
+  ws_url: "ws://127.0.0.1:8765"      # 사이드카 주소
+  forward_game_chat: true            # 게임 내 채팅을 시청자 채팅처럼 전달
+  react_events: ["death", "respawn", "kicked", "health_low"]
 
 # --- 장기기억 ("저번에~", 단골 기억) ---
 memory:
@@ -130,3 +140,7 @@ memory:
 logging:
   level: "INFO"
   dir: "data/logs"
+  file_log: true           # 회전 파일 로그 (dir/aist.log)
+  transcript: true         # 방송별 채팅+AI발화 기록 (사고발언 점검용 JSONL)
+  auto_report: true        # 방송 종료 시 리포트 자동 생성 (다시보기 학습)
+  reports_dir: "data/reports"

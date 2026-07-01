@@ -29,6 +29,8 @@ class LLMClient:
             return bool(self.secrets.anthropic_api_key)
         if p == "gemini":
             return bool(self.secrets.gemini_api_key)
+        if p == "ollama":
+            return True  # 로컬 서버. 죽어있으면 complete 실패 → composer 가 폴백
         return False  # dummy
 
     def complete(self, system: str, user: str) -> str:
@@ -40,6 +42,8 @@ class LLMClient:
             return self._anthropic(system, user)
         if p == "gemini":
             return self._gemini(system, user)
+        if p == "ollama":
+            return self._ollama(system, user)
         raise RuntimeError("dummy provider 는 complete() 를 호출하지 않습니다.")
 
     def _openai(self, system: str, user: str) -> str:
@@ -72,6 +76,24 @@ class LLMClient:
             messages=[{"role": "user", "content": user}],
         )
         return "".join(getattr(b, "text", "") for b in resp.content).strip()
+
+    def _ollama(self, system: str, user: str) -> str:
+        """로컬 Ollama — OpenAI 호환 엔드포인트(/v1) 사용. 키 불필요, 비용 0."""
+        from openai import OpenAI  # 지연 import
+        client = OpenAI(
+            base_url=self.cfg.base_url or "http://127.0.0.1:11434/v1",
+            api_key="ollama",  # SDK 가 빈 키를 거부해서 더미 값
+        )
+        resp = client.chat.completions.create(
+            model=self.cfg.model,
+            temperature=self.cfg.temperature,
+            max_tokens=self.cfg.max_tokens,
+            messages=[
+                {"role": "system", "content": system},
+                {"role": "user", "content": user},
+            ],
+        )
+        return (resp.choices[0].message.content or "").strip()
 
     def _gemini(self, system: str, user: str) -> str:
         import google.generativeai as genai  # 지연 import

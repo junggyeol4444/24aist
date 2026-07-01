@@ -95,6 +95,8 @@ def _config(tmp_path):
     cfg.announce.discord.enabled = False
     cfg.announce.naver_cafe.enabled = False
     cfg.memory = MemoryConfig(path=str(tmp_path))
+    cfg.logging.dir = str(tmp_path / "logs")
+    cfg.logging.reports_dir = str(tmp_path / "reports")
     return cfg
 
 
@@ -144,3 +146,14 @@ def test_chat_actually_flows_through_orchestrator(tmp_path, monkeypatch):
     assert said == msgs                       # 다 반응(절대 원칙) + 순서 유지
     sessions = json.loads((Path(tmp_path) / "sessions.json").read_text(encoding="utf-8"))
     assert len(sessions[0]["viewers"]) == 3   # 다 읽음(기억에 반영)
+
+    # 트랜스크립트가 채팅을 기록했는지
+    tfiles = list((Path(tmp_path) / "logs" / "transcripts").glob("*.jsonl"))
+    assert len(tfiles) == 1
+    content = tfiles[0].read_text(encoding="utf-8")
+    assert "ㅋㅋㅋ" in content
+
+    # 방송 후 리포트가 자동 생성됐는지 (다시보기 학습)
+    reports = list((Path(tmp_path) / "reports").glob("*.md"))
+    assert len(reports) == 1
+    assert "시청자(채팅 기준): 3명" in reports[0].read_text(encoding="utf-8")

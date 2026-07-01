@@ -1,0 +1,13 @@
+{
+  "name": "aist-minecraft-sidecar",
+  "version": "0.1.0",
+  "description": "AI 방송인 마인크래프트 사이드카 (mineflayer 봇 + 이벤트 WebSocket 중계)",
+  "main": "bot.js",
+  "scripts": {
+    "start": "node bot.js"
+  },
+  "dependencies": {
+    "mineflayer": "^4.20.0",
+    "ws": "^8.18.0"
+  }
+}

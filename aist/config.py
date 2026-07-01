@@ -167,6 +167,9 @@ class TwitchChatCfg:
 @dataclass
 class YouTubeChatCfg:
     video_id: str = ""       # 라이브 영상 ID. 비우면 .env YOUTUBE_VIDEO_ID
+    # 완전 자동화용(권장): 채널 핸들(@이름) 또는 채널 ID(UC…)를 주면
+    # 방송 시작 시 현재 라이브의 video_id 를 자동으로 찾는다.
+    channel: str = ""
 
 
 @dataclass
@@ -201,10 +204,14 @@ class ChatConfig:
 
 @dataclass
 class LlmConfig:
-    """공지 문구 생성용 LLM. 키는 .env 에서."""
-    provider: str = "dummy"   # openai | anthropic | gemini | dummy
+    """공지 문구 생성용 LLM. 키는 .env 에서.
+
+    ollama: 로컬 LLM(비용 0). Ollama 의 OpenAI 호환 엔드포인트를 쓴다.
+    base_url 비우면 http://127.0.0.1:11434/v1 기본.
+    """
+    provider: str = "dummy"   # openai | anthropic | gemini | ollama | dummy
     model: str = "gpt-4o-mini"
-    base_url: str = ""        # OpenAI 호환 엔드포인트면 지정
+    base_url: str = ""        # OpenAI 호환 엔드포인트면 지정 (ollama 포함)
     temperature: float = 0.9
     max_tokens: int = 300
 
@@ -219,6 +226,28 @@ class MemoryConfig:
 class LoggingConfig:
     level: str = "INFO"
     dir: str = "data/logs"
+    file_log: bool = True          # 회전 파일 로그(dir/aist.log)
+    transcript: bool = True        # 방송별 채팅+AI발화 JSONL (사고발언 점검)
+    auto_report: bool = True       # 방송 종료 시 리포트 자동 생성
+    reports_dir: str = "data/reports"
+
+
+@dataclass
+class GameConfig:
+    """게임 플레이(8단계, 선택). 봇 API 연동이 쉬운 마인크래프트부터.
+
+    mineflayer 사이드카(game/minecraft/bot.js)가 게임에 접속해 이벤트를
+    WebSocket 으로 중계하고, 우리 GameFeed 가 그걸 AI 반응으로 잇는다.
+    """
+    enabled: bool = False
+    type: str = "minecraft"                 # 현재 minecraft 만
+    ws_url: str = "ws://127.0.0.1:8765"     # 사이드카 주소
+    # 게임 내 채팅을 시청자 채팅처럼 AI 에게 전달할지
+    forward_game_chat: bool = True
+    # 어떤 이벤트에 반응할지 (사이드카가 보내는 event 이름)
+    react_events: List[str] = field(default_factory=lambda: [
+        "death", "respawn", "kicked", "health_low",
+    ])
 
 
 @dataclass
@@ -287,6 +316,7 @@ class Config:
     llm: LlmConfig = field(default_factory=LlmConfig)
     memory: MemoryConfig = field(default_factory=MemoryConfig)
     logging: LoggingConfig = field(default_factory=LoggingConfig)
+    game: GameConfig = field(default_factory=GameConfig)
     secrets: Secrets = field(default_factory=Secrets)
 
     def active_platforms(self) -> List[str]:
@@ -365,6 +395,7 @@ def load_config(path: Union[str, Path]) -> Config:
         llm=_build(LlmConfig, raw.get("llm")),
         memory=_build(MemoryConfig, raw.get("memory")),
         logging=_build(LoggingConfig, raw.get("logging")),
+        game=_build(GameConfig, raw.get("game")),
         secrets=Secrets.from_env(),
     )
     cfg.resolve_secrets()
@@ -386,8 +417,10 @@ def _validate(cfg: Config) -> None:
         )
     if cfg.announce.style not in ("varied", "fixed"):
         raise ConfigError(f"announce.style 은 varied|fixed 여야 합니다: {cfg.announce.style!r}")
-    if cfg.llm.provider not in ("openai", "anthropic", "gemini", "dummy"):
+    if cfg.llm.provider not in ("openai", "anthropic", "gemini", "ollama", "dummy"):
         raise ConfigError(f"llm.provider 가 올바르지 않습니다: {cfg.llm.provider!r}")
+    if cfg.game.enabled and cfg.game.type != "minecraft":
+        raise ConfigError(f"game.type 은 현재 minecraft 만 지원합니다: {cfg.game.type!r}")
     if cfg.obs.simulcast.mode not in ("plugin_autostart", "vendor"):
         raise ConfigError(
             f"obs.simulcast.mode 는 plugin_autostart|vendor 여야 합니다: {cfg.obs.simulcast.mode!r}"

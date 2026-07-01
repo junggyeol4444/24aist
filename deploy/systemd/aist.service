@@ -1,0 +1,20 @@
+# AI 방송인 자동화 레이어 (aist) — systemd 서비스
+# install.sh 가 __USER__/__WORKDIR__ 을 실제 값으로 치환해 설치한다.
+[Unit]
+Description=AI Streamer automation layer (aist)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=__USER__
+WorkingDirectory=__WORKDIR__
+ExecStart=__WORKDIR__/.venv/bin/aist run
+Restart=always
+RestartSec=5
+# 로그는 journald + data/logs/aist.log(회전) 양쪽에 남는다
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

@@ -91,9 +91,13 @@ aist run                    # 스케줄러로 완전 자동 운영
 | 코어 브릿지 | `aist/vtuber_bridge.py` | Open-LLM-VTuber `/client-ws` 로 입력 전달 |
 | OBS 제어 | `aist/obs_control.py` | obs-websocket 스트림 시작/종료 |
 | 공지 | `aist/announce/` | 디스코드(REST)·네이버 카페(공식 API) + 문구 변주 |
-| 장기기억 | `aist/memory.py` | "저번에~", 단골 닉네임 |
+| 장기기억 | `aist/memory.py` | "저번에~", 단골 닉네임 (+chroma 의미검색) |
+| 트랜스크립트 | `aist/transcript.py` | 채팅+**AI 발화 전문** 기록(사고발언 점검) |
+| 방송후 리포트 | `aist/report.py` | 다시보기 학습 — 매 방송 자동 생성(`aist report`) |
+| 게임(8단계) | `aist/game/` + `game/minecraft/` | 마인크래프트(mineflayer 사이드카) |
 | 지휘 | `aist/orchestrator.py` | 하루 동선 전체를 묶는 메인 컨트롤러 |
-| CLI | `aist/cli.py` | check / plan / persona / build-persona / run ... |
+| CLI | `aist/cli.py` | check / plan / doctor / report / build-persona / run ... |
+| 배포(7단계) | `deploy/` | systemd 유닛 + install.sh (자동 재시작) |
 
 ---
 
@@ -114,6 +118,11 @@ aist run                    # 스케줄러로 완전 자동 운영
 - 브릿지가 **실제 websockets 서버**와 text-input/ai-speak-signal 송수신 +
   수신 드레인(장시간 메모리 누수 방지)
 - 코어 통신 규약을 vendored Open-LLM-VTuber 소스로 대조
+
+**검증됨(추가): 57개 테스트**
+- 방송 트랜스크립트(채팅+AI 발화)와 방송 후 리포트가 방송 사이클에서
+  실제로 생성되는 것까지 통합 테스트로 확인.
+- 게임 이벤트→AI 반응/게임 채팅 전달, 유튜브 라이브 ID 파싱.
 
 **아직 실제 서비스로 못 돌려본 것(이 환경엔 GPU/실계정 없음 → 운영자 테스트 필요):**
 - Open-LLM-VTuber 코어 실행 + TTS/Live2D 실제 송출

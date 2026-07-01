@@ -33,9 +33,12 @@
 
 ## 2. 하루 5~10분 점검 (안정화 후)
 
-- 배선 점검: `aist doctor` (코어 WS / OBS 가 닿는지). 방송 켜기 전 습관적으로.
-- 로그에서 **사고 발언/이상 반복**이 없는지 (`journalctl -u aist -f` 또는
-  `data/logs/`).
+- **방송 후 리포트 읽기**: `data/reports/` 최신 파일(또는 `aist report`).
+  누가 왔는지/단골/슈퍼챗/**AI 발화 전문**이 한 파일에 있다. 사고 발언
+  점검은 여기 "AI 발화 전문" 섹션만 훑으면 된다.
+- 배선 점검: `aist doctor` (코어 WS / OBS / 플랫폼 채팅 도달까지).
+- 로그에서 에러/이상 반복이 없는지 (`journalctl -u aist -f` 또는
+  `data/logs/aist.log`). 방송별 상세 기록은 `data/logs/transcripts/`.
 - API 비용·토큰 만료 확인(네이버 토큰은 자동 갱신 시도하지만 만료 시 재발급).
 - 종료가 의도대로 됐는지(`aist plan` 으로 다음 일정·종료 타임라인 확인).
 

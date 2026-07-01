@@ -16,6 +16,7 @@
 import asyncio
 import logging
 from datetime import datetime
+from pathlib import Path
 from typing import Optional
 
 from .announce.base import Announcer
@@ -30,7 +31,9 @@ from .llm import LLMClient
 from .memory import Memory
 from .obs_control import ObsController, ObsError
 from .persona import Persona
+from .report import generate_report
 from .scheduler import Scheduler
+from .transcript import Transcript
 from .vtuber_bridge import VTuberBridge
 
 log = logging.getLogger("aist.orchestrator")
@@ -101,6 +104,17 @@ class Orchestrator:
         pipeline: Optional[ChatPipeline] = None
         chat_stop = asyncio.Event()
         pipeline_task: Optional[asyncio.Task] = None
+        game_task: Optional[asyncio.Task] = None
+
+        # 트랜스크립트(사고발언 점검·다시보기 학습용). 실패해도 방송은 진행.
+        transcript = None
+        if cfg.logging.transcript:
+            try:
+                transcript = Transcript(str(Path(cfg.logging.dir) / "transcripts"))
+                transcript.open_session(start_dt)
+            except Exception as e:
+                log.warning("트랜스크립트 시작 실패(기록 없이 진행): %s", e)
+                transcript = None
 
         # 1) 시작 공지 (실패해도 방송은 진행)
         await self._announce("start", start_dt)
@@ -118,20 +132,39 @@ class Orchestrator:
             await bridge.connect()
         except Exception as e:
             log.error("Open-LLM-VTuber 코어 연결 실패: %s — 이번 사이클 중단", e)
-            await self._teardown(obs, bridge, None, None, None, start_dt, aborted=True)
+            await self._teardown(obs, bridge, None, None, None, start_dt,
+                                 transcript=transcript, aborted=True)
             return
 
         # 코어가 보내오는 메시지(자막·오디오 등)를 계속 읽어 버린다.
         # 안 읽으면 websockets 수신 버퍼가 무한정 쌓여 장시간 방송에서
         # 메모리 누수/정지가 난다(24h 안정성의 핵심).
-        drain_task = asyncio.create_task(self._drain_core(bridge))
+        # 읽으면서 AI 실제 발화는 트랜스크립트에 남긴다(사고발언 점검).
+        on_core = transcript.on_core_message if transcript else None
+        drain_task = asyncio.create_task(self._drain_core(bridge, on_core))
 
-        pipeline = ChatPipeline(bridge, cfg.broadcast, on_message=self.memory.note_chat)
+        def on_chat(msg):
+            self.memory.note_chat(msg)
+            if transcript is not None:
+                transcript.log_chat(msg)
+
+        pipeline = ChatPipeline(bridge, cfg.broadcast, on_message=on_chat)
         try:
             source = make_chat_source(cfg)
             pipeline_task = asyncio.create_task(pipeline.run(source, chat_stop))
         except Exception as e:
             log.error("채팅 소스 시작 실패: %s — 채팅 없이 진행", e)
+
+        # 게임(8단계, 선택): 사이드카 이벤트 → AI 반응. 채팅 소통은 그대로.
+        if cfg.game.enabled:
+            from .game import MinecraftFeed
+            def on_game_event(data):
+                self.memory.record_event("game", **data)
+                if transcript is not None:
+                    transcript.log_event("game", **data)
+            feed = MinecraftFeed(bridge, cfg.game, on_event=on_game_event)
+            game_task = asyncio.create_task(feed.run(chat_stop))
+            log.info("게임 연동 켜짐 (%s)", cfg.game.ws_url)
 
         # 4) 종료 판단 루프
         ej = EndJudge(cfg.end_judge, start_dt)
@@ -157,10 +190,12 @@ class Orchestrator:
             await self._sleep_or_stop(_CLOSING_WAIT_SEC)
 
         await self._teardown(obs, bridge, pipeline, pipeline_task, chat_stop,
-                             start_dt, drain_task=drain_task)
+                             start_dt, drain_task=drain_task,
+                             transcript=transcript, game_task=game_task)
 
     async def _teardown(self, obs, bridge, pipeline, pipeline_task, chat_stop,
-                        start_dt, drain_task=None, aborted: bool = False):
+                        start_dt, drain_task=None, transcript=None,
+                        game_task=None, aborted: bool = False):
         # 채팅 파이프라인 정지 (취소 후 반드시 회수해서 태스크 누수 방지)
         if chat_stop is not None:
             chat_stop.set()
@@ -174,6 +209,11 @@ class Orchestrator:
             except Exception:  # pipeline_task 내부 예외는 무시(로그는 내부에서)
                 pass
             await asyncio.gather(pipeline_task, return_exceptions=True)
+
+        # 게임 피드 정지 (chat_stop 공유 — 취소 후 회수)
+        if game_task is not None:
+            game_task.cancel()
+            await asyncio.gather(game_task, return_exceptions=True)
 
         # 코어 수신 드레인 정지
         if drain_task is not None:
@@ -190,8 +230,25 @@ class Orchestrator:
         # 코어 연결 종료
         await bridge.close()
 
+        # 트랜스크립트 마감
+        transcript_path = None
+        if transcript is not None:
+            transcript_path = transcript.path
+            transcript.close()
+
         # 세션 기억 저장
         self.memory.end_session()
+
+        # 방송 후 리포트(다시보기 학습) — 실패해도 조용히 넘어감
+        if not aborted and self.cfg.logging.auto_report:
+            try:
+                generate_report(
+                    self.memory, self.cfg.logging.reports_dir,
+                    transcript_path=transcript_path,
+                    next_stream=self._next_stream_hint(),
+                )
+            except Exception:
+                log.exception("리포트 생성 실패(방송에는 영향 없음)")
 
         if not aborted:
             end_dt = _now(self.cfg.scheduler.timezone)
@@ -255,14 +312,14 @@ class Orchestrator:
         except Exception as e:
             log.debug("코어 신호 전송 실패(무시): %s", e)
 
-    async def _drain_core(self, bridge):
-        """코어가 보내는 메시지를 계속 읽어 버린다(수신 버퍼 누적 방지).
+    async def _drain_core(self, bridge, on_message=None):
+        """코어가 보내는 메시지를 계속 읽는다(수신 버퍼 누적 방지).
 
-        보조 신호(audio-play-start 등)를 종료 판단에 쓰고 싶으면 여기서
-        확장할 수 있다. 지금은 읽어서 버리는 것만으로 충분하다.
+        on_message 가 있으면 각 메시지를 넘긴다 — 트랜스크립트가 AI 실제
+        발화(type=audio 의 display_text)를 여기서 잡아 기록한다.
         """
         try:
-            await bridge.recv_loop()
+            await bridge.recv_loop(on_message=on_message)
         except asyncio.CancelledError:
             raise
         except Exception as e:  # 연결 종료 등은 정상 흐름
