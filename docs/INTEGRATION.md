@@ -66,6 +66,8 @@ LLM+페르소나가 대답을 만들고 TTS+Live2D 로 출력합니다. **여기
 - OBS 에서 **obs-websocket** 활성화(도구 → WebSocket 서버 설정). 포트·비밀번호를
   `config.yaml` 의 `obs.*` 와 `.env` 의 `OBS_PASSWORD` 에 맞춘다.
 - 코어의 아바타 창을 OBS 소스로 캡처(윈도우 캡처/브라우저 소스).
+  **중요: 웹UI 전체가 아니라 아바타 영역만 캡처(크롭)할 것.** 자막·입력
+  텍스트(귓속말/채팅 원문)가 방송 화면에 노출되면 안 된다.
 - TTS 음성을 OBS 로 보내려면 가상 오디오 케이블(Windows: VB-CABLE, mac:
   BlackHole)을 깔고, 코어/시스템 출력 → 케이블 → OBS 오디오 입력으로 연결.
 - 테스트 단계에선 `obs.start_stream: false` 로 두고 OBS 스트림은 수동으로

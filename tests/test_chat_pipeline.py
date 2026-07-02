@@ -28,7 +28,7 @@ class FakeSource(ChatSource):
             yield m
             await asyncio.sleep(0)
         # 끝나지 않게 잠깐 대기(소비 완료 후 stop 설정될 시간)
-        await asyncio.sleep(0.2)
+        await asyncio.sleep(5)
 
     async def close(self):
         pass
@@ -39,22 +39,62 @@ def _msgs(n, sc=False):
                         is_superchat=sc) for i in range(n)]
 
 
-def test_forwards_all_chat_by_default():
+def _all_texts(said):
+    return "\n".join(t for (_s, t) in said)
+
+
+def test_all_chat_reaches_ai():
+    """다 반응(절대 원칙): 채팅 5개가 전부 AI 에게 전달된다.
+
+    '입 하나' 모델이라 첫 개는 즉시, 나머지는 말 끝난 뒤 묶여 전달될 수
+    있지만 하나도 버려지지 않는다.
+    """
     async def run():
         bridge = FakeBridge()
         reads = []
-        cfg = BroadcastConfig(idle_proactive_speak=False)
+        cfg = BroadcastConfig(idle_proactive_speak=False, core_busy_timeout_sec=0)
         pipe = ChatPipeline(bridge, cfg, on_message=lambda m: reads.append(m.author))
         stop = asyncio.Event()
         task = asyncio.create_task(pipe.run(FakeSource(_msgs(5)), stop))
-        await asyncio.sleep(0.1)
+        await asyncio.sleep(0.9)   # pacer(0.3s)가 잔여분 흘려보낼 시간
         stop.set()
         await asyncio.wait_for(task, timeout=2)
         return bridge.said, reads
 
     said, reads = asyncio.run(run())
-    assert len(said) == 5          # 다 반응 (절대 원칙)
-    assert len(reads) == 5         # 다 읽음
+    joined = _all_texts(said)
+    for i in range(5):
+        assert f"m{i}" in joined          # 다 반응 (절대 원칙)
+    assert len(reads) == 5                # 다 읽음
+
+
+def test_one_mouth_buffers_while_speaking_and_resumes():
+    """말하는 중엔 쌓고, 말 끝(chain-end)나는 순간 전부 이어받는다."""
+    async def run():
+        bridge = FakeBridge()
+        cfg = BroadcastConfig(idle_proactive_speak=False)   # timeout 기본(90s)
+        pipe = ChatPipeline(bridge, cfg)
+        stop = asyncio.Event()
+        task = asyncio.create_task(pipe.run(FakeSource(_msgs(3)), stop))
+        await asyncio.sleep(0.5)
+        # m0 은 즉시 나가고 busy 잠김 → m1, m2 는 쌓여 있어야 함
+        first_said = list(bridge.said)
+        pending_before = pipe.has_pending()
+        # 코어가 말 끝 신호를 보냄 → pacer 가 쌓인 걸 한 호흡으로 전달
+        pipe.on_core_message({"type": "control", "text": "conversation-chain-end"})
+        await asyncio.sleep(0.7)
+        stop.set()
+        await asyncio.wait_for(task, timeout=2)
+        return first_said, pending_before, bridge.said
+
+    first_said, pending_before, said = asyncio.run(run())
+    assert len(first_said) == 1 and "m0" in first_said[0][1]
+    assert pending_before is True
+    # 말 끝난 뒤 m1+m2 가 '한 번에' 이어받아짐 (버려진 것 없음, 순서 유지)
+    assert len(said) == 2
+    batch = said[1][1]
+    assert "m1" in batch and "m2" in batch
+    assert batch.index("m1") < batch.index("m2")
 
 
 def test_flood_handling_limits_forward_but_reads_all():
@@ -62,13 +102,13 @@ def test_flood_handling_limits_forward_but_reads_all():
         bridge = FakeBridge()
         reads = []
         cfg = BroadcastConfig(
-            idle_proactive_speak=False,
+            idle_proactive_speak=False, core_busy_timeout_sec=0,
             flood_handling=FloodHandling(enabled=True, max_per_window=1, window_sec=10),
         )
         pipe = ChatPipeline(bridge, cfg, on_message=lambda m: reads.append(m.author))
         stop = asyncio.Event()
         task = asyncio.create_task(pipe.run(FakeSource(_msgs(4)), stop))
-        await asyncio.sleep(0.1)
+        await asyncio.sleep(0.6)
         stop.set()
         await asyncio.wait_for(task, timeout=2)
         return bridge.said, reads
@@ -76,3 +116,24 @@ def test_flood_handling_limits_forward_but_reads_all():
     said, reads = asyncio.run(run())
     assert len(reads) == 4         # 읽기는 전부
     assert len(said) == 1          # 폭주 구간이라 AI 발화로는 1건만
+
+
+def test_idle_backoff_threshold_grows():
+    """혼잣말 눈치: 연속 혼잣말일수록 간격이 길어지고, 채팅 오면 리셋."""
+    cfg = BroadcastConfig(idle_seconds_before_proactive=45,
+                          idle_backoff_multiplier=2.0,
+                          idle_backoff_max_multiple=4.0)
+    pipe = ChatPipeline(FakeBridge(), cfg)
+
+    def threshold():
+        base = float(cfg.idle_seconds_before_proactive)
+        mult = cfg.idle_backoff_multiplier ** pipe._consecutive_idle_speaks
+        return base * min(mult, cfg.idle_backoff_max_multiple)
+
+    assert threshold() == 45.0
+    pipe._consecutive_idle_speaks = 1
+    assert threshold() == 90.0
+    pipe._consecutive_idle_speaks = 2
+    assert threshold() == 180.0
+    pipe._consecutive_idle_speaks = 10   # 상한
+    assert threshold() == 45.0 * 4.0

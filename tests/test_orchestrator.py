@@ -90,7 +90,8 @@ def _config(tmp_path):
     # 즉시 종료되게: max=0, min=0, wind_down off
     cfg.end_judge = EndJudgeConfig(max_minutes=0, min_minutes=0,
                                    wind_down=WindDown(enabled=False))
-    cfg.broadcast = BroadcastConfig(idle_proactive_speak=False)
+    cfg.broadcast = BroadcastConfig(idle_proactive_speak=False,
+                                    core_busy_timeout_sec=0)
     cfg.announce = AnnounceConfig()
     cfg.announce.discord.enabled = False
     cfg.announce.naver_cafe.enabled = False
@@ -135,7 +136,7 @@ def test_chat_actually_flows_through_orchestrator(tmp_path, monkeypatch):
 
     async def run():
         task = asyncio.create_task(orch.run_one_now())
-        await asyncio.sleep(0.2)      # 채팅이 흐를 시간
+        await asyncio.sleep(0.9)      # 채팅 + pacer 가 흐를 시간
         orch.request_stop()
         await asyncio.wait_for(task, timeout=5)
 
@@ -143,7 +144,11 @@ def test_chat_actually_flows_through_orchestrator(tmp_path, monkeypatch):
 
     said = [e[1] for e in FakeBridge.last.events
             if isinstance(e, tuple) and e[0] == "say"]
-    assert said == msgs                       # 다 반응(절대 원칙) + 순서 유지
+    # 다 반응(절대 원칙) + 순서 유지: 입 하나 모델이라 뒤쪽은 묶여서 갈 수 있음
+    joined = "\n".join(said)
+    pos = [joined.index(m) for m in msgs]
+    assert all(m in joined for m in msgs)
+    assert pos == sorted(pos)
     sessions = json.loads((Path(tmp_path) / "sessions.json").read_text(encoding="utf-8"))
     assert len(sessions[0]["viewers"]) == 3   # 다 읽음(기억에 반영)
 

@@ -86,12 +86,23 @@ class FloodHandling:
 
 @dataclass
 class BroadcastConfig:
-    """방송 진행(핵심 루프) — 채팅 처리 기본 방침을 담는다."""
+    """방송 진행(핵심 루프) — 채팅 처리 기본 방침을 담는다.
+
+    채팅 처리는 '입 하나' 모델(운영자 지시): 말 안 하는 중이면 즉답,
+    말하는 중이면 쌓아뒀다가 말이 끝나는 순간 전부 이어받는다.
+    타이머/랜덤 없음. 채팅은 하나도 버리지 않는다(다 반응).
+    """
     # 절대 원칙: 기본은 다 읽고 다 반응, 자연스러운 속도.
     respond_to_all_chat: bool = True
     artificial_delay_sec: float = 0.0
+    # 코어의 말 끝(chain-end) 신호가 유실됐을 때 잠금 해제 폴백(초)
+    core_busy_timeout_sec: float = 90.0
+    # 혼잣말(눈치껏): 말하는 중엔 안 하고, 채팅 없이 혼잣말이 이어지면
+    # 간격이 점점 길어진다(사람은 침묵을 매번 같은 간격으로 채우지 않음).
     idle_proactive_speak: bool = True
     idle_seconds_before_proactive: int = 45
+    idle_backoff_multiplier: float = 1.7   # 연속 혼잣말마다 간격 배율
+    idle_backoff_max_multiple: float = 8.0  # 간격 상한(기본값의 몇 배까지)
     flood_handling: FloodHandling = field(default_factory=FloodHandling)
 
 
@@ -108,6 +119,10 @@ class WindDown:
     enabled: bool = True
     pre_notice_minutes_before_end: int = 10
     closing_greeting: bool = True
+    # 눈치 종료(운영자 지시): 예정 시각이 돼도 바로 끊지 않고,
+    # 말 안 하는 중 + 채팅이 잠깐 소강인 타이밍을 잡아 마무리한다.
+    natural_pause_lull_sec: int = 8       # "소강"으로 볼 채팅 공백(초)
+    max_overtime_minutes: int = 10        # 타이밍 못 잡아도 이 이상은 안 기다림
 
 
 @dataclass
@@ -148,6 +163,7 @@ class AnnounceConfig:
     fixed_start_template: str = "방송 시작했어요! {link}"
     fixed_end_template: str = "오늘 방송 끝! 다음에 또 봐요."
     link: str = ""
+    history_size: int = 8               # 최근 쓴 문구 기억(반복 방지)
     discord: DiscordAnnounce = field(default_factory=DiscordAnnounce)
     naver_cafe: NaverCafeAnnounce = field(default_factory=NaverCafeAnnounce)
 

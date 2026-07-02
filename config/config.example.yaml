@@ -66,12 +66,19 @@ scheduler:
   start_jitter_min: 0     # 예: 60 -> 예정 시각에서 0~60분 흩뜨림
   jitter_mode: "after"    # after(늦게만) | symmetric(앞뒤)
 
-# --- 방송 진행 (핵심 루프) — 3단계. 채팅 처리 기본 방침 ---
+# --- 방송 진행 (핵심 루프) — 3단계. 채팅 처리 = '입 하나' 모델 ---
+# 말 안 하는 중이면 즉답, 말하는 중이면 쌓아뒀다가 말 끝나는 순간 전부
+# 이어받음(사람이 방송하는 방식 그대로). 채팅은 하나도 버리지 않음.
 broadcast:
   respond_to_all_chat: true        # 기본 true. 일부러 일부만 답하지 않음.
   artificial_delay_sec: 0          # 기본 0. 인위적 딜레이 넣지 않음.
-  idle_proactive_speak: true       # 채팅 정말 없을 때만 혼잣말
+  core_busy_timeout_sec: 90        # 말 끝 신호 유실 시 잠금 해제 폴백(초)
+  # 혼잣말(눈치껏): 말하는 중엔 안 하고, 채팅 없이 혼잣말이 이어지면
+  # 간격이 점점 길어짐. 채팅 살아나면 원래 간격으로 리셋.
+  idle_proactive_speak: true
   idle_seconds_before_proactive: 45
+  idle_backoff_multiplier: 1.7     # 연속 혼잣말마다 간격 배율
+  idle_backoff_max_multiple: 8.0   # 간격 상한(기본값의 몇 배까지)
   # 채팅 폭주 처리: 기본 off. 실제 폭주가 생긴 뒤 운영자가 켠다.
   flood_handling:
     enabled: false
@@ -88,11 +95,15 @@ end_judge:
     enabled: false
     quiet_minutes: 20
   end_jitter_min: 0       # 종료 시각 랜덤 변주(선택). 0 이면 정확히.
-  # 자연스러운 마무리 (뚝 끄지 않음): 예고 → 인사 → 종료
+  # 자연스러운 마무리 (뚝 끄지 않음): 예고 → 눈치 → 인사 → 종료
+  # 눈치 종료: 예정 시각이 돼도 말하는 중/채팅 달아오른 중엔 안 끊고,
+  # 소강 타이밍을 잡아 마무리(상한까지만 기다림).
   wind_down:
     enabled: true
     pre_notice_minutes_before_end: 10
     closing_greeting: true
+    natural_pause_lull_sec: 8       # "소강"으로 볼 채팅 공백(초)
+    max_overtime_minutes: 10        # 타이밍 못 잡아도 이 이상은 안 넘김
 
 # --- 공지 자동화 — 6단계 ---
 announce:

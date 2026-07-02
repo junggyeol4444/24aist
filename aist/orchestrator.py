@@ -38,10 +38,12 @@ from .vtuber_bridge import VTuberBridge
 
 log = logging.getLogger("aist.orchestrator")
 
-# 마무리 단계에서 코어가 자연스럽게 멘트하도록 보내는 시스템 안내(운영자가
-# 원하면 문구 수정). 정확한 행동은 페르소나/코어가 정한다 — 여기선 신호만.
-_CUE_WIND_DOWN = "(시스템 안내: 이제 슬슬 방송을 마무리할 시간이야. 시청자들에게 곧 마무리한다고 자연스럽게 한마디 해줘.)"
-_CUE_CLOSING = "(시스템 안내: 방송을 마칠 시간이야. 오늘 와준 시청자들에게 자연스럽게 마무리 인사를 해줘.)"
+# 마무리 단계의 '매니저 귓속말' — 페르소나 무대규칙에 따라 AI 는 이 내용을
+# 입 밖에 내지 않고 행동으로만 반영한다. (운영자가 문구 수정 가능)
+_CUE_WIND_DOWN = ("(매니저 귓속말: 슬슬 방송 마무리할 시간이야. 시청자들한테 "
+                  "곧 마무리한다고 자연스럽게 얘기해줘. 이 귓속말은 절대 언급하지 마.)")
+_CUE_CLOSING = ("(매니저 귓속말: 이제 방송 끝낼 시간이야. 오늘 와준 시청자들한테 "
+                "자연스럽게 마무리 인사해줘. 이 귓속말은 절대 언급하지 마.)")
 _CLOSING_WAIT_SEC = 12  # 마무리 인사 TTS 가 나갈 시간
 
 
@@ -136,19 +138,25 @@ class Orchestrator:
                                  transcript=transcript, aborted=True)
             return
 
-        # 코어가 보내오는 메시지(자막·오디오 등)를 계속 읽어 버린다.
-        # 안 읽으면 websockets 수신 버퍼가 무한정 쌓여 장시간 방송에서
-        # 메모리 누수/정지가 난다(24h 안정성의 핵심).
-        # 읽으면서 AI 실제 발화는 트랜스크립트에 남긴다(사고발언 점검).
-        on_core = transcript.on_core_message if transcript else None
-        drain_task = asyncio.create_task(self._drain_core(bridge, on_core))
-
         def on_chat(msg):
             self.memory.note_chat(msg)
             if transcript is not None:
                 transcript.log_chat(msg)
 
         pipeline = ChatPipeline(bridge, cfg.broadcast, on_message=on_chat)
+
+        # 코어가 보내오는 메시지(자막·오디오·control 등)를 계속 읽는다.
+        # 안 읽으면 websockets 수신 버퍼가 무한정 쌓여 장시간 방송에서
+        # 메모리 누수/정지가 난다(24h 안정성의 핵심). 읽으면서:
+        #  - AI 실제 발화는 트랜스크립트에 (사고발언 점검)
+        #  - 말 시작/끝 신호는 파이프라인에 ('입 하나' 모델의 눈)
+        def on_core(data):
+            if transcript is not None:
+                transcript.on_core_message(data)
+            pipeline.on_core_message(data)
+
+        drain_task = asyncio.create_task(self._drain_core(bridge, on_core))
+
         try:
             source = make_chat_source(cfg)
             pipeline_task = asyncio.create_task(pipeline.run(source, chat_stop))
@@ -176,6 +184,9 @@ class Orchestrator:
             decision = ej.evaluate(now, last_chat)
             if decision.phase is Phase.END:
                 log.info("종료 판단: %s", decision.detail)
+                # 눈치 종료(운영자 지시): 뚝 끊지 말고, 말 안 하는 중 +
+                # 채팅 잠깐 소강인 타이밍을 잡아 마무리. 상한까지만 기다림.
+                await self._wait_natural_pause(pipeline, cfg.end_judge.wind_down)
                 break
             if decision.phase is Phase.PRE_NOTICE and not pre_notified:
                 pre_notified = True
@@ -270,7 +281,8 @@ class Orchestrator:
             recent_note=self.memory.recent_summary() if kind == "start" else "",
             next_stream_hint=self._next_stream_hint() if kind == "end" else "",
         )
-        text = compose(self.persona, ctx, cfg, llm=self.llm, now=now)
+        text = compose(self.persona, ctx, cfg, llm=self.llm, now=now,
+                       history_path=Path(self.cfg.memory.path) / "announce_history.json")
         log.info("[공지/%s] %s", kind, text.replace("\n", " "))
 
         announcers = self._announcers()
@@ -298,6 +310,29 @@ class Orchestrator:
             return ""
         days = ["월", "화", "수", "목", "금", "토", "일"]
         return f"다음엔 {days[nxt.weekday()]}요일 {nxt.strftime('%H:%M')}에"
+
+    async def _wait_natural_pause(self, pipeline, wind_down):
+        """종료 타이밍 눈치 보기: 말 안 하는 중 + 채팅 소강일 때 마무리.
+
+        wind_down 이 꺼져 있으면(뚝 끊기 모드) 기다리지 않는다.
+        max_overtime_minutes 를 넘기면 타이밍과 무관하게 진행한다.
+        """
+        if pipeline is None or not wind_down.enabled:
+            return
+        deadline = asyncio.get_event_loop().time() + wind_down.max_overtime_minutes * 60
+        lull = wind_down.natural_pause_lull_sec
+        while not self._stop.is_set():
+            quiet = (not pipeline.is_speaking()
+                     and not pipeline.has_pending()
+                     and pipeline.seconds_since_last_chat() >= lull)
+            if quiet:
+                log.info("소강 타이밍 포착 → 마무리 진행")
+                return
+            if asyncio.get_event_loop().time() >= deadline:
+                log.info("소강 타이밍을 못 잡음(+%d분 경과) → 마무리 진행",
+                         wind_down.max_overtime_minutes)
+                return
+            await self._sleep_or_stop(2)
 
     # --------------------------------------------------------------- 유틸
     async def _sleep_or_stop(self, seconds: float):
