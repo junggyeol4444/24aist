@@ -56,7 +56,15 @@ LLM+페르소나가 대답을 만들고 TTS+Live2D 로 출력합니다. **여기
 2. 본인/동의/라이선스 음성 1분 내외로 클로닝, 레퍼런스 오디오 준비.
 3. 코어 `conf.yaml` 의 `gpt_sovits_tts.api_url`, `ref_audio_path`,
    `prompt_text`, `text_lang: ko` 채우기.
-4. 톤을 더 다듬고 싶으면 RVC 2차 변환 추가(선택).
+4. 톤을 더 다듬고 싶으면 **RVC 2차 변조**(기획안 3-4): 코어에 후처리 훅을
+   개조해 뒀다. 환경변수 하나로 켠다 —
+   ```bash
+   # {in} 이 TTS 오디오 파일 경로로 치환됨. 명령은 제자리(in-place) 변환.
+   export AIST_TTS_POST_CMD="bash /path/to/rvc_convert.sh {in}"
+   ```
+   RVC 프로젝트의 추론 CLI 를 감싼 스크립트를 지정하면 모든 TTS 출력이
+   송출 전에 변조된다. 실패하면 원본 오디오로 방송은 계속(best-effort).
+   개조 위치: `Open-LLM-VTuber/src/.../tts_manager.py` (`NOTICE-vendored.md` 참고)
 
 > 법적 주의: 실존 인물(연예인·지인) 무단 클로닝은 금지. 본인 목소리거나
 > 동의/라이선스 받은 음성만.

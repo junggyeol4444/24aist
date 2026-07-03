@@ -44,6 +44,10 @@ _CUE_WIND_DOWN = ("(매니저 귓속말: 슬슬 방송 마무리할 시간이야
                   "곧 마무리한다고 자연스럽게 얘기해줘. 이 귓속말은 절대 언급하지 마.)")
 _CUE_CLOSING = ("(매니저 귓속말: 이제 방송 끝낼 시간이야. 오늘 와준 시청자들한테 "
                 "자연스럽게 마무리 인사해줘. 이 귓속말은 절대 언급하지 마.)")
+# 워밍업 오프닝(4-1): 켜자마자 각 잡고 떠들지 않고 세팅 확인하듯 시작
+_CUE_OPENING = ("(매니저 귓속말: 방송 방금 켜졌어. 각 잡고 시작하지 말고, 세팅 "
+                "확인하는 것처럼 가볍게 워밍업하면서 자연스럽게 시작해줘. 들어오는 "
+                "사람 있으면 편하게 인사하고. 이 귓속말은 절대 언급하지 마.)")
 _CLOSING_WAIT_SEC = 12  # 마무리 인사 TTS 가 나갈 시간
 
 
@@ -83,11 +87,24 @@ class Orchestrator:
                 continue
             wait = self.scheduler.seconds_until(start_at, now)
             log.info("다음 방송: %s (%.0f분 후)", start_at.isoformat(), wait / 60)
+
+            # 방송 시작 전 공지(2-2②): 시작 X분 전에 미리 게시(선택).
+            pre_announced = False
+            lead_sec = self.cfg.announce.pre_announce_minutes * 60
+            if lead_sec > 0 and self.cfg.announce.on_start and wait > lead_sec:
+                await self._sleep_or_stop(wait - lead_sec)
+                if self._stop.is_set():
+                    break
+                await self._announce("start", _now(self.cfg.scheduler.timezone))
+                pre_announced = True
+                now = _now(self.cfg.scheduler.timezone)
+                wait = self.scheduler.seconds_until(start_at, now)
+
             await self._sleep_or_stop(wait)
             if self._stop.is_set():
                 break
             try:
-                await self._run_broadcast()
+                await self._run_broadcast(skip_start_announce=pre_announced)
             except Exception:
                 log.exception("방송 사이클 중 오류 — 루프는 계속 유지")
 
@@ -96,7 +113,7 @@ class Orchestrator:
         await self._run_broadcast()
 
     # ------------------------------------------------------------ 한 사이클
-    async def _run_broadcast(self):
+    async def _run_broadcast(self, skip_start_announce: bool = False):
         cfg = self.cfg
         start_dt = _now(cfg.scheduler.timezone)
         log.info("=== 방송 시작 (%s) ===", start_dt.isoformat())
@@ -118,8 +135,9 @@ class Orchestrator:
                 log.warning("트랜스크립트 시작 실패(기록 없이 진행): %s", e)
                 transcript = None
 
-        # 1) 시작 공지 (실패해도 방송은 진행)
-        await self._announce("start", start_dt)
+        # 1) 시작 공지 (실패해도 방송은 진행). 사전 공지 했으면 중복 방지.
+        if not skip_start_announce:
+            await self._announce("start", start_dt)
 
         # 2) OBS 시작
         try:
@@ -173,6 +191,10 @@ class Orchestrator:
             feed = MinecraftFeed(bridge, cfg.game, on_event=on_game_event)
             game_task = asyncio.create_task(feed.run(chat_stop))
             log.info("게임 연동 켜짐 (%s)", cfg.game.ws_url)
+
+        # 워밍업 오프닝(4-1): 켜자마자 각 잡지 않고 자연스럽게 시작
+        if cfg.broadcast.warmup_opening:
+            await self._safe(bridge.say_to_ai(_CUE_OPENING))
 
         # 4) 종료 판단 루프
         ej = EndJudge(cfg.end_judge, start_dt)
@@ -260,6 +282,17 @@ class Orchestrator:
                 )
             except Exception:
                 log.exception("리포트 생성 실패(방송에는 영향 없음)")
+
+        # 종료 후 컨텐츠 제작(2-2⑦): 하이라이트 후보·제목 초안
+        if not aborted and self.cfg.logging.auto_content:
+            try:
+                from .content import generate_content_pack
+                generate_content_pack(
+                    self.persona, transcript_path,
+                    self.cfg.logging.content_dir, llm=self.llm,
+                )
+            except Exception:
+                log.exception("컨텐츠 팩 생성 실패(방송에는 영향 없음)")
 
         if not aborted:
             end_dt = _now(self.cfg.scheduler.timezone)

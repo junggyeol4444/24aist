@@ -94,6 +94,7 @@ aist run                    # 스케줄러로 완전 자동 운영
 | 장기기억 | `aist/memory.py` | "저번에~", 단골 닉네임 (+chroma 의미검색) |
 | 트랜스크립트 | `aist/transcript.py` | 채팅+**AI 발화 전문** 기록(사고발언 점검) |
 | 방송후 리포트 | `aist/report.py` | 다시보기 학습 — 매 방송 자동 생성(`aist report`) |
+| 컨텐츠 제작 | `aist/content.py` | 하이라이트 후보(채팅 급증 구간)·제목 초안(`aist content`) |
 | 게임(8단계) | `aist/game/` + `game/minecraft/` | 마인크래프트(mineflayer 사이드카) |
 | 지휘 | `aist/orchestrator.py` | 하루 동선 전체를 묶는 메인 컨트롤러 |
 | CLI | `aist/cli.py` | check / plan / doctor / report / build-persona / run ... |

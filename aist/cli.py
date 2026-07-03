@@ -331,6 +331,26 @@ def cmd_report(args) -> int:
     return 0
 
 
+def cmd_content(args) -> int:
+    """직전 방송의 컨텐츠 팩(하이라이트 후보·제목 초안) 생성/재생성."""
+    from .content import generate_content_pack
+    from .llm import LLMClient
+    cfg, persona = _load(args)
+    tdir = Path(cfg.logging.dir) / "transcripts"
+    latest = None
+    if tdir.exists():
+        files = sorted(tdir.glob("*.jsonl"))
+        latest = files[-1] if files else None
+    path = generate_content_pack(persona, latest, cfg.logging.content_dir,
+                                 llm=LLMClient(cfg.llm, cfg.secrets))
+    if path is None:
+        print("트랜스크립트가 없습니다. (방송 후 다시 실행)")
+        return 1
+    print(f"컨텐츠 팩 생성됨: {path}\n")
+    print(path.read_text(encoding="utf-8"))
+    return 0
+
+
 def cmd_broadcast_now(args) -> int:
     from .orchestrator import Orchestrator
     cfg, persona = _load(args)
@@ -384,6 +404,8 @@ def build_parser() -> argparse.ArgumentParser:
     sp.set_defaults(func=cmd_build_persona)
 
     sub.add_parser("report", help="직전 방송 리포트 생성(다시보기 학습)").set_defaults(func=cmd_report)
+
+    sub.add_parser("content", help="컨텐츠 팩 생성(하이라이트 후보·제목 초안)").set_defaults(func=cmd_content)
 
     sub.add_parser("broadcast-now", help="지금 한 방송만(시작 수동, 종료 자동)").set_defaults(func=cmd_broadcast_now)
     sub.add_parser("run", help="완전 자동 루프(스케줄러)").set_defaults(func=cmd_run)

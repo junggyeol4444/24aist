@@ -58,6 +58,10 @@ class ObsConfig:
     port: int = 4455
     password: str = ""          # 비우면 .env 의 OBS_PASSWORD 사용
     start_stream: bool = True    # False 면 OBS 시작은 운영자 수동(테스트 단계)
+    # OBS 프로그램 자동 실행(2-2③): 연결 실패 시 OBS 를 직접 켠다.
+    launch_if_not_running: bool = False
+    launch_command: str = ""     # 예: "obs --disable-shutdown-check" (경로는 환경마다)
+    launch_wait_sec: int = 20    # 켠 뒤 연결될 때까지 기다리는 최대 시간
     simulcast: SimulcastConfig = field(default_factory=SimulcastConfig)
 
 
@@ -95,6 +99,8 @@ class BroadcastConfig:
     # 절대 원칙: 기본은 다 읽고 다 반응, 자연스러운 속도.
     respond_to_all_chat: bool = True
     artificial_delay_sec: float = 0.0
+    # 워밍업 오프닝(4-1): 켜자마자 각 잡지 않고 세팅 확인하듯 가볍게 시작
+    warmup_opening: bool = True
     # 코어의 말 끝(chain-end) 신호가 유실됐을 때 잠금 해제 폴백(초)
     core_busy_timeout_sec: float = 90.0
     # 혼잣말(눈치껏): 말하는 중엔 안 하고, 채팅 없이 혼잣말이 이어지면
@@ -141,6 +147,10 @@ class DiscordAnnounce:
     enabled: bool = True
     channel_id: int = 0
     mention_role_id: int = 0      # 0 이면 멘션 없음
+    use_embed: bool = False       # 카드형(임베드) 공지
+    embed_color: int = 5793266    # 임베드 색 (기본: 디스코드 블루플)
+    image_url: str = ""           # 임베드에 넣을 이미지 URL(선택)
+    image_path: str = ""          # 로컬 이미지 첨부(선택, 파일 업로드)
 
 
 @dataclass
@@ -157,6 +167,9 @@ class AnnounceConfig:
     """공지 자동화 — 6단계."""
     on_start: bool = True
     on_end: bool = True
+    # 방송 시작 전 미리 공지(2-2②). 0 이면 시작 시점에 게시.
+    # (스케줄러 자동 모드에서만 동작 — broadcast-now 는 즉시 시작이라 불가)
+    pre_announce_minutes: int = 0
     avoid_late_night: bool = True
     late_night_window: List[str] = field(default_factory=lambda: ["01:00", "08:00"])
     style: str = "varied"               # varied | fixed
@@ -246,6 +259,9 @@ class LoggingConfig:
     transcript: bool = True        # 방송별 채팅+AI발화 JSONL (사고발언 점검)
     auto_report: bool = True       # 방송 종료 시 리포트 자동 생성
     reports_dir: str = "data/reports"
+    # 종료 후 컨텐츠 제작(2-2⑦): 하이라이트 후보(채팅 급증 구간)·제목 초안
+    auto_content: bool = True
+    content_dir: str = "data/content"
 
 
 @dataclass

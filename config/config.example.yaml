@@ -35,6 +35,10 @@ obs:
   port: 4455
   password: ""            # 비우면 .env 의 OBS_PASSWORD 사용
   start_stream: true       # false 면 OBS 스트림은 운영자가 수동(3단계 테스트)
+  # OBS 프로그램 자동 실행: 연결 안 되면 직접 켜고 기다렸다 재시도
+  launch_if_not_running: false
+  launch_command: ""       # 예(윈도우): "C:/Program Files/obs-studio/bin/64bit/obs64.exe --disable-shutdown-check"
+  launch_wait_sec: 20
   # 영상 동출(다중 RTMP). obs-multi-rtmp 같은 플러그인이 있다는 가정.
   simulcast:
     enabled: false
@@ -72,6 +76,7 @@ scheduler:
 broadcast:
   respond_to_all_chat: true        # 기본 true. 일부러 일부만 답하지 않음.
   artificial_delay_sec: 0          # 기본 0. 인위적 딜레이 넣지 않음.
+  warmup_opening: true             # 켜자마자 각 안 잡고 세팅 확인하듯 워밍업 시작
   core_busy_timeout_sec: 90        # 말 끝 신호 유실 시 잠금 해제 폴백(초)
   # 혼잣말(눈치껏): 말하는 중엔 안 하고, 채팅 없이 혼잣말이 이어지면
   # 간격이 점점 길어짐. 채팅 살아나면 원래 간격으로 리셋.
@@ -109,6 +114,7 @@ end_judge:
 announce:
   on_start: true
   on_end: true
+  pre_announce_minutes: 0    # 방송 시작 X분 전에 미리 공지(0=시작 시점). 예: 30
   avoid_late_night: true            # 새벽 게시 회피
   late_night_window: ["01:00", "08:00"]
   style: "varied"                   # varied(매번 다르게) | fixed(고정 문구)
@@ -119,6 +125,10 @@ announce:
     enabled: true
     channel_id: 0                   # 공지 올릴 채널 ID
     mention_role_id: 0              # 0 이면 멘션 없음
+    use_embed: false                # true 면 카드형(임베드) 공지
+    embed_color: 5793266
+    image_url: ""                   # 임베드 이미지 URL(선택)
+    image_path: ""                  # 로컬 이미지 첨부(선택)
   naver_cafe:
     enabled: false
     cafe_id: ""
@@ -155,3 +165,5 @@ logging:
   transcript: true         # 방송별 채팅+AI발화 기록 (사고발언 점검용 JSONL)
   auto_report: true        # 방송 종료 시 리포트 자동 생성 (다시보기 학습)
   reports_dir: "data/reports"
+  auto_content: true       # 종료 후 컨텐츠 팩(하이라이트 후보·제목 초안) 자동 생성
+  content_dir: "data/content"
