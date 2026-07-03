@@ -20,7 +20,10 @@ def make_single_source(platform: str, cfg: Config) -> ChatSource:
         )
     if platform == "youtube":
         from .youtube import YouTubeChat
-        return YouTubeChat(video_id=c.youtube.video_id or s.youtube_video_id)
+        return YouTubeChat(
+            video_id=c.youtube.video_id or s.youtube_video_id,
+            channel=c.youtube.channel,
+        )
     if platform == "chzzk":
         from .chzzk import ChzzkChat
         return ChzzkChat(channel_id=c.chzzk.channel_id or s.chzzk_channel_id)

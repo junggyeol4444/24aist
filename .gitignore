@@ -45,3 +45,7 @@ GPT-SoVITS/
 .pytest_cache/
 .coverage
 htmlcov/
+
+# Node (게임 사이드카)
+node_modules/
+package-lock.json

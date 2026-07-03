@@ -22,6 +22,28 @@ from .config import VTuberConfig
 
 log = logging.getLogger("aist.vtuber")
 
+# 플랫폼 한글 표기(동출 때 어디서 온 채팅인지 자연스럽게 알리는 용도)
+_PLATFORM_KR = {
+    "twitch": "트위치", "youtube": "유튜브", "chzzk": "치지직",
+    "soop": "숲", "kick": "킥", "twitcasting": "트위캐스팅",
+    "minecraft": "게임",
+}
+
+
+def format_chat_line(text: str, source: Optional[str] = None,
+                     platform: Optional[str] = None) -> str:
+    """채팅 한 줄을 자연스러운 형식으로. 로봇 태그([닉/twitch]) 금지.
+
+    - "neo: 안녕"                (기본)
+    - "neo (치지직): 안녕"       (동출 등 플랫폼 구분이 필요할 때만)
+    """
+    if not source:
+        return text
+    if platform:
+        kr = _PLATFORM_KR.get(platform, platform)
+        return f"{source} ({kr}): {text}"
+    return f"{source}: {text}"
+
 
 class VTuberBridge:
     def __init__(self, cfg: VTuberConfig):
@@ -65,18 +87,12 @@ class VTuberBridge:
                         platform: Optional[str] = None):
         """채팅/입력을 AI 에게 전달해 반응을 만들게 한다.
 
-        source(닉네임)와 platform 을 함께 넘기면 코어가 누가/어디서 한
-        말인지 알고 호명하거나 단골을 기억하기 쉽다. 동출(동시 송출) 때
-        "트위치의 누구", "치지직의 누구"처럼 구분할 수 있다.
+        source(닉네임)가 있으면 "닉: 내용" 자연 형식으로, platform 은
+        동출처럼 구분이 필요할 때만 넘긴다("닉 (치지직): 내용").
+        AI 가 따라 읽어도 어색하지 않은 형식만 쓴다.
         """
-        if source and platform:
-            tag = f"[{source}/{platform}]"
-        elif source:
-            tag = f"[{source}]"
-        else:
-            tag = ""
-        msg = f"{tag} {text}".strip() if tag else text
-        await self._send({"type": "text-input", "text": msg})
+        await self._send({"type": "text-input",
+                          "text": format_chat_line(text, source, platform)})
 
     async def proactive_speak(self):
         """채팅이 정말 없을 때 혼잣말 트리거(능동 발화)."""

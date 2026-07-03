@@ -12,6 +12,7 @@ import logging
 import random
 from dataclasses import dataclass
 from datetime import datetime, time
+from pathlib import Path
 from typing import List, Optional
 
 from ..config import AnnounceConfig
@@ -29,18 +30,24 @@ class AnnounceContext:
     recent_note: str = ""        # 예: "저번에 그 게임 이어서"
 
 
-_START_POOL: List[str] = [
-    "오늘 방송 켰어요! 편하게 놀러와요",
-    "ㅎㅇ 오늘도 달려봅시다",
-    "심심한데 방송이나 켤까~ 지금 시작!",
-    "방송 시작했어요 :) 들렀다 가요",
-    "오늘도 방송 ON! 같이 놀아요",
+# 오프라인 변주: 머리+꼬리 조합(수십 가지) + 최근 사용 기억으로 반복 회피.
+# LLM 을 켜면 어차피 매번 새로 작성되고, 이건 LLM 없이도 단조롭지 않게.
+_START_HEADS: List[str] = [
+    "오늘 방송 켰어요!", "ㅎㅇ 방송 시작~", "심심한데 방송이나 켤까 하다가 진짜 켬",
+    "방송 시작했어요 :)", "오늘도 방송 ON", "자 오늘도 가봅시다", "짠, 방송 켰다",
+    "슬슬 시작해볼까요", "왔어요 왔어 방송", "오늘 방송 고고",
 ]
-_END_POOL: List[str] = [
-    "오늘 방송 끝! 와줘서 고마워요",
-    "여기까지~ 다음에 또 봐요",
-    "오늘은 이만 마무리할게요. 푹 쉬어요",
-    "방송 종료! 오늘도 즐거웠어요",
+_START_TAILS: List[str] = [
+    "편하게 놀러와요", "들렀다 가요", "같이 놀아요", "오늘도 달려봅시다",
+    "심심하면 오세요", "채팅 치러 와요", "",
+]
+_END_HEADS: List[str] = [
+    "오늘 방송 끝!", "여기까지~", "오늘은 이만 마무리할게요", "방송 종료!",
+    "오늘도 수고했어요 우리", "자, 오늘은 여기까지", "끝났습니다~", "오늘 방송 마감",
+]
+_END_TAILS: List[str] = [
+    "와줘서 고마워요", "다음에 또 봐요", "푹 쉬어요", "오늘도 즐거웠어요",
+    "내일 또 봐요", "",
 ]
 _EMOJI: List[str] = ["🎮", "✨", "🙌", "🌙", "🔥"]
 
@@ -72,9 +79,21 @@ def should_post(now: datetime, cfg: AnnounceConfig) -> bool:
     return True
 
 
-def _offline_varied(ctx: AnnounceContext, rng: random.Random) -> str:
-    pool = _START_POOL if ctx.kind == "start" else _END_POOL
-    text = rng.choice(pool)
+def _offline_varied(ctx: AnnounceContext, rng: random.Random,
+                    avoid: Optional[set] = None):
+    """(최종 문구, 조합 원형) 을 돌려준다. 원형이 최근 이력에 있으면 다시 뽑는다."""
+    heads = _START_HEADS if ctx.kind == "start" else _END_HEADS
+    tails = _START_TAILS if ctx.kind == "start" else _END_TAILS
+    avoid = avoid or set()
+    base = ""
+    for _ in range(15):   # 최근 쓴 조합은 피해서 다시 뽑기
+        base = rng.choice(heads)
+        tail = rng.choice(tails)
+        if tail:
+            base += " " + tail
+        if base not in avoid:
+            break
+    text = base
     if ctx.kind == "start" and ctx.recent_note:
         text += f" ({ctx.recent_note})"
     if ctx.kind == "end" and ctx.next_stream_hint:
@@ -82,7 +101,24 @@ def _offline_varied(ctx: AnnounceContext, rng: random.Random) -> str:
     # 길이·이모지 변주(어떤 날은 이모지, 어떤 날은 아님)
     if rng.random() < 0.5:
         text += " " + rng.choice(_EMOJI)
-    return text
+    return text, base
+
+
+def _load_history(path: Path) -> List[str]:
+    try:
+        import json
+        return json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return []
+
+
+def _save_history(path: Path, history: List[str]) -> None:
+    try:
+        import json
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(history[-20:], ensure_ascii=False), encoding="utf-8")
+    except OSError:
+        log.debug("공지 이력 저장 실패(무시)")
 
 
 def _llm_varied(
@@ -112,8 +148,13 @@ def compose(
     llm: Optional[LLMClient] = None,
     now: Optional[datetime] = None,
     rng: Optional[random.Random] = None,
+    history_path: Optional[Path] = None,
 ) -> str:
-    """공지 본문을 만든다. (디스코드 역할 멘션은 게시 단계에서 별도로 붙음)"""
+    """공지 본문을 만든다. (디스코드 역할 멘션은 게시 단계에서 별도로 붙음)
+
+    history_path 를 주면 최근 쓴 문구를 기억해 같은 공지가 반복되지 않게
+    한다(오프라인 변주일 때 특히 중요 — 반복은 봇 티).
+    """
     rng = rng or random
     now = now or datetime.now()
 
@@ -122,15 +163,21 @@ def compose(
         return tmpl.format(link=ctx.link or cfg.link).strip()
 
     # style == "varied"
+    history = _load_history(history_path) if history_path else []
     text = ""
+    base = ""
     if llm is not None and llm.available():
         try:
             text = _llm_varied(persona, ctx, llm).strip()
+            base = text
         except Exception:  # noqa: BLE001 - LLM 실패 시 오프라인 변주로 폴백
             log.exception("LLM 공지 생성 실패 → 오프라인 변주로 대체")
             text = ""
     if not text:
-        text = _offline_varied(ctx, rng)
+        text, base = _offline_varied(ctx, rng, avoid=set(history[-cfg.history_size:]))
+    if history_path:
+        history.append(base)
+        _save_history(history_path, history)
 
     # 시작 공지엔 링크를 붙인다(본문에 이미 없으면).
     link = ctx.link or cfg.link

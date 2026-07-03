@@ -23,6 +23,11 @@
   `live2d_model_name: mao_pro`. 실행 시 `cp conf.korean.yaml conf.yaml` 후
   GPT-SoVITS 의 `api_url`/`ref_audio_path` 를 채워서 사용.
 - `characters/kr_별이.yaml` — 한국어 캐릭터(alt) 설정.
+- `src/open_llm_vtuber/conversations/tts_manager.py` — **[코드 개조]**
+  TTS 출력 후처리 훅(`_post_process_audio`) 추가. 환경변수
+  `AIST_TTS_POST_CMD` 가 설정되면 생성된 오디오 파일에 외부 명령(예: RVC
+  2차 변조)을 실행(제자리 변환, 실패 시 원본 사용). 기획안 3-4.
+  원본 업데이트 시 이 개조를 다시 적용해야 한다.
 
 ## 업데이트 방법
 

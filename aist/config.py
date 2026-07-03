@@ -58,6 +58,10 @@ class ObsConfig:
     port: int = 4455
     password: str = ""          # 비우면 .env 의 OBS_PASSWORD 사용
     start_stream: bool = True    # False 면 OBS 시작은 운영자 수동(테스트 단계)
+    # OBS 프로그램 자동 실행(2-2③): 연결 실패 시 OBS 를 직접 켠다.
+    launch_if_not_running: bool = False
+    launch_command: str = ""     # 예: "obs --disable-shutdown-check" (경로는 환경마다)
+    launch_wait_sec: int = 20    # 켠 뒤 연결될 때까지 기다리는 최대 시간
     simulcast: SimulcastConfig = field(default_factory=SimulcastConfig)
 
 
@@ -86,12 +90,25 @@ class FloodHandling:
 
 @dataclass
 class BroadcastConfig:
-    """방송 진행(핵심 루프) — 채팅 처리 기본 방침을 담는다."""
+    """방송 진행(핵심 루프) — 채팅 처리 기본 방침을 담는다.
+
+    채팅 처리는 '입 하나' 모델(운영자 지시): 말 안 하는 중이면 즉답,
+    말하는 중이면 쌓아뒀다가 말이 끝나는 순간 전부 이어받는다.
+    타이머/랜덤 없음. 채팅은 하나도 버리지 않는다(다 반응).
+    """
     # 절대 원칙: 기본은 다 읽고 다 반응, 자연스러운 속도.
     respond_to_all_chat: bool = True
     artificial_delay_sec: float = 0.0
+    # 워밍업 오프닝(4-1): 켜자마자 각 잡지 않고 세팅 확인하듯 가볍게 시작
+    warmup_opening: bool = True
+    # 코어의 말 끝(chain-end) 신호가 유실됐을 때 잠금 해제 폴백(초)
+    core_busy_timeout_sec: float = 90.0
+    # 혼잣말(눈치껏): 말하는 중엔 안 하고, 채팅 없이 혼잣말이 이어지면
+    # 간격이 점점 길어진다(사람은 침묵을 매번 같은 간격으로 채우지 않음).
     idle_proactive_speak: bool = True
     idle_seconds_before_proactive: int = 45
+    idle_backoff_multiplier: float = 1.7   # 연속 혼잣말마다 간격 배율
+    idle_backoff_max_multiple: float = 8.0  # 간격 상한(기본값의 몇 배까지)
     flood_handling: FloodHandling = field(default_factory=FloodHandling)
 
 
@@ -108,6 +125,10 @@ class WindDown:
     enabled: bool = True
     pre_notice_minutes_before_end: int = 10
     closing_greeting: bool = True
+    # 눈치 종료(운영자 지시): 예정 시각이 돼도 바로 끊지 않고,
+    # 말 안 하는 중 + 채팅이 잠깐 소강인 타이밍을 잡아 마무리한다.
+    natural_pause_lull_sec: int = 8       # "소강"으로 볼 채팅 공백(초)
+    max_overtime_minutes: int = 10        # 타이밍 못 잡아도 이 이상은 안 기다림
 
 
 @dataclass
@@ -126,6 +147,10 @@ class DiscordAnnounce:
     enabled: bool = True
     channel_id: int = 0
     mention_role_id: int = 0      # 0 이면 멘션 없음
+    use_embed: bool = False       # 카드형(임베드) 공지
+    embed_color: int = 5793266    # 임베드 색 (기본: 디스코드 블루플)
+    image_url: str = ""           # 임베드에 넣을 이미지 URL(선택)
+    image_path: str = ""          # 로컬 이미지 첨부(선택, 파일 업로드)
 
 
 @dataclass
@@ -142,12 +167,17 @@ class AnnounceConfig:
     """공지 자동화 — 6단계."""
     on_start: bool = True
     on_end: bool = True
+    # 방송 시작 전 미리 공지(2-2② 기본 동선: 공지 → 방송 시작).
+    # 사람도 방송 전에 미리 알린다 — 기본 30분 전. 0 이면 시작 시점에 게시.
+    # (스케줄러 자동 모드에서 동작 — broadcast-now 는 즉시 시작이라 시작 시점 게시)
+    pre_announce_minutes: int = 30
     avoid_late_night: bool = True
     late_night_window: List[str] = field(default_factory=lambda: ["01:00", "08:00"])
     style: str = "varied"               # varied | fixed
     fixed_start_template: str = "방송 시작했어요! {link}"
     fixed_end_template: str = "오늘 방송 끝! 다음에 또 봐요."
     link: str = ""
+    history_size: int = 8               # 최근 쓴 문구 기억(반복 방지)
     discord: DiscordAnnounce = field(default_factory=DiscordAnnounce)
     naver_cafe: NaverCafeAnnounce = field(default_factory=NaverCafeAnnounce)
 
@@ -167,6 +197,9 @@ class TwitchChatCfg:
 @dataclass
 class YouTubeChatCfg:
     video_id: str = ""       # 라이브 영상 ID. 비우면 .env YOUTUBE_VIDEO_ID
+    # 완전 자동화용(권장): 채널 핸들(@이름) 또는 채널 ID(UC…)를 주면
+    # 방송 시작 시 현재 라이브의 video_id 를 자동으로 찾는다.
+    channel: str = ""
 
 
 @dataclass
@@ -201,10 +234,14 @@ class ChatConfig:
 
 @dataclass
 class LlmConfig:
-    """공지 문구 생성용 LLM. 키는 .env 에서."""
-    provider: str = "dummy"   # openai | anthropic | gemini | dummy
+    """공지 문구 생성용 LLM. 키는 .env 에서.
+
+    ollama: 로컬 LLM(비용 0). Ollama 의 OpenAI 호환 엔드포인트를 쓴다.
+    base_url 비우면 http://127.0.0.1:11434/v1 기본.
+    """
+    provider: str = "dummy"   # openai | anthropic | gemini | ollama | dummy
     model: str = "gpt-4o-mini"
-    base_url: str = ""        # OpenAI 호환 엔드포인트면 지정
+    base_url: str = ""        # OpenAI 호환 엔드포인트면 지정 (ollama 포함)
     temperature: float = 0.9
     max_tokens: int = 300
 
@@ -219,6 +256,31 @@ class MemoryConfig:
 class LoggingConfig:
     level: str = "INFO"
     dir: str = "data/logs"
+    file_log: bool = True          # 회전 파일 로그(dir/aist.log)
+    transcript: bool = True        # 방송별 채팅+AI발화 JSONL (사고발언 점검)
+    auto_report: bool = True       # 방송 종료 시 리포트 자동 생성
+    reports_dir: str = "data/reports"
+    # 종료 후 컨텐츠 제작(2-2⑦): 하이라이트 후보(채팅 급증 구간)·제목 초안
+    auto_content: bool = True
+    content_dir: str = "data/content"
+
+
+@dataclass
+class GameConfig:
+    """게임 플레이(8단계, 선택). 봇 API 연동이 쉬운 마인크래프트부터.
+
+    mineflayer 사이드카(game/minecraft/bot.js)가 게임에 접속해 이벤트를
+    WebSocket 으로 중계하고, 우리 GameFeed 가 그걸 AI 반응으로 잇는다.
+    """
+    enabled: bool = False
+    type: str = "minecraft"                 # 현재 minecraft 만
+    ws_url: str = "ws://127.0.0.1:8765"     # 사이드카 주소
+    # 게임 내 채팅을 시청자 채팅처럼 AI 에게 전달할지
+    forward_game_chat: bool = True
+    # 어떤 이벤트에 반응할지 (사이드카가 보내는 event 이름)
+    react_events: List[str] = field(default_factory=lambda: [
+        "death", "respawn", "kicked", "health_low",
+    ])
 
 
 @dataclass
@@ -287,6 +349,7 @@ class Config:
     llm: LlmConfig = field(default_factory=LlmConfig)
     memory: MemoryConfig = field(default_factory=MemoryConfig)
     logging: LoggingConfig = field(default_factory=LoggingConfig)
+    game: GameConfig = field(default_factory=GameConfig)
     secrets: Secrets = field(default_factory=Secrets)
 
     def active_platforms(self) -> List[str]:
@@ -365,6 +428,7 @@ def load_config(path: Union[str, Path]) -> Config:
         llm=_build(LlmConfig, raw.get("llm")),
         memory=_build(MemoryConfig, raw.get("memory")),
         logging=_build(LoggingConfig, raw.get("logging")),
+        game=_build(GameConfig, raw.get("game")),
         secrets=Secrets.from_env(),
     )
     cfg.resolve_secrets()
@@ -386,8 +450,10 @@ def _validate(cfg: Config) -> None:
         )
     if cfg.announce.style not in ("varied", "fixed"):
         raise ConfigError(f"announce.style 은 varied|fixed 여야 합니다: {cfg.announce.style!r}")
-    if cfg.llm.provider not in ("openai", "anthropic", "gemini", "dummy"):
+    if cfg.llm.provider not in ("openai", "anthropic", "gemini", "ollama", "dummy"):
         raise ConfigError(f"llm.provider 가 올바르지 않습니다: {cfg.llm.provider!r}")
+    if cfg.game.enabled and cfg.game.type != "minecraft":
+        raise ConfigError(f"game.type 은 현재 minecraft 만 지원합니다: {cfg.game.type!r}")
     if cfg.obs.simulcast.mode not in ("plugin_autostart", "vendor"):
         raise ConfigError(
             f"obs.simulcast.mode 는 plugin_autostart|vendor 여야 합니다: {cfg.obs.simulcast.mode!r}"

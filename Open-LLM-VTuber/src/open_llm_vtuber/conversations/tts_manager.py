@@ -166,10 +166,45 @@ class TTSTaskManager:
     async def _generate_audio(self, tts_engine: TTSInterface, text: str) -> str:
         """Generate audio file from text"""
         logger.debug(f"🏃Generating audio for '''{text}'''...")
-        return await tts_engine.async_generate_audio(
+        audio_path = await tts_engine.async_generate_audio(
             text=text,
             file_name_no_ext=f"{datetime.now().strftime('%Y%m%d_%H%M%S')}_{str(uuid.uuid4())[:8]}",
         )
+        return await self._post_process_audio(audio_path)
+
+    async def _post_process_audio(self, audio_path: str) -> str:
+        """[aist 개조] TTS 출력 후처리 훅 — RVC 2차 변조 등(기획안 3-4).
+
+        환경변수 AIST_TTS_POST_CMD 가 설정돼 있으면 그 명령을 실행한다.
+        명령의 {in} 이 오디오 파일 경로로 치환되며(없으면 끝에 추가),
+        명령은 해당 파일을 제자리(in-place)에서 변환해야 한다.
+        실패해도 원본 오디오로 방송은 계속된다(best-effort).
+        예: AIST_TTS_POST_CMD="bash /path/rvc_convert.sh {in}"
+        """
+        import os
+        import shlex
+
+        cmd = os.environ.get("AIST_TTS_POST_CMD", "").strip()
+        if not cmd or not audio_path:
+            return audio_path
+        try:
+            if "{in}" in cmd:
+                args = [a.replace("{in}", audio_path) for a in shlex.split(cmd)]
+            else:
+                args = shlex.split(cmd) + [audio_path]
+            proc = await asyncio.create_subprocess_exec(
+                *args,
+                stdout=asyncio.subprocess.DEVNULL,
+                stderr=asyncio.subprocess.DEVNULL,
+            )
+            try:
+                await asyncio.wait_for(proc.wait(), timeout=30)
+            except asyncio.TimeoutError:
+                proc.kill()
+                logger.warning("TTS 후처리 명령 시간 초과(30s) — 원본 오디오 사용")
+        except Exception as e:
+            logger.warning(f"TTS 후처리 실패({e}) — 원본 오디오 사용")
+        return audio_path
 
     def clear(self) -> None:
         """Clear all pending tasks and reset state"""

@@ -13,8 +13,8 @@
 | **4** 종료 자동화 | 끄는 건 AI 가 알아서 | `end_judge.py`(설정 기반 종료 룰 + 마무리) | 종료 값 조정(설정) |
 | **5** 시작 자동화 ★ | 정해진 시간에 스스로 켬 | `scheduler.py`, `orchestrator.run()`, `aist run` | 시작 시각/요일 설정 |
 | **6** 공지 자동화 | 디스코드 → 네이버 카페 | `announce/`(discord_bot, naver_cafe, composer) | 디스코드 봇·네이버 앱 등록 |
-| **7** 24h 서버화 ★ | 며칠씩 알아서, 자동 재시작 | systemd 유닛 예시(`docs/INTEGRATION.md`), 로그 | 서버 배포, 며칠 운영하며 안정화 |
-| **8**(선택) 게임 | 마인크래프트 등 봇 연동 | (확장 자리) 코어/AIRI 연동 검토 | 게임 봇 연동 |
+| **7** 24h 서버화 ★ | 며칠씩 알아서, 자동 재시작 | `deploy/install.sh` + systemd 유닛(실파일), 회전 파일 로그, 방송후 리포트(`aist report`) | `bash deploy/install.sh` 실행, 며칠 운영하며 안정화 |
+| **8**(선택) 게임 | 마인크래프트 등 봇 연동 | `game/minecraft/`(mineflayer 사이드카) + `aist/game/`(이벤트→AI 반응, 게임 채팅 전달) | 마크 서버 준비, `npm install && node bot.js`, `game.enabled: true` |
 
 ★ = 기획안이 강조한 핵심 검증/달성 지점.
 

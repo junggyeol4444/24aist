@@ -16,7 +16,8 @@ platform: twitch          # twitch | youtube | chzzk | soop | kick | twitcasting
 # 플랫폼별 식별자 (토큰/키는 .env 에). 쓰는 플랫폼 것만 채우면 됨.
 chat:
   twitch:      { channel: "" }       # 채널명. 비우면 .env TWITCH_CHANNEL
-  youtube:     { video_id: "" }      # 라이브 영상 ID. 비우면 .env YOUTUBE_VIDEO_ID
+  # 유튜브: channel(핸들 @이름 또는 UC채널ID)을 주면 라이브 video_id 자동발견(권장).
+  youtube:     { video_id: "", channel: "" }
   chzzk:       { channel_id: "" }    # 치지직 채널 ID. 비우면 .env CHZZK_CHANNEL_ID
   soop:        { bj_id: "" }         # SOOP(아프리카TV) BJ 아이디
   kick:        { channel: "" }       # kick.com 채널 슬러그
@@ -34,6 +35,10 @@ obs:
   port: 4455
   password: ""            # 비우면 .env 의 OBS_PASSWORD 사용
   start_stream: true       # false 면 OBS 스트림은 운영자가 수동(3단계 테스트)
+  # OBS 프로그램 자동 실행: 연결 안 되면 직접 켜고 기다렸다 재시도
+  launch_if_not_running: false
+  launch_command: ""       # 예(윈도우): "C:/Program Files/obs-studio/bin/64bit/obs64.exe --disable-shutdown-check"
+  launch_wait_sec: 20
   # 영상 동출(다중 RTMP). obs-multi-rtmp 같은 플러그인이 있다는 가정.
   simulcast:
     enabled: false
@@ -65,12 +70,20 @@ scheduler:
   start_jitter_min: 0     # 예: 60 -> 예정 시각에서 0~60분 흩뜨림
   jitter_mode: "after"    # after(늦게만) | symmetric(앞뒤)
 
-# --- 방송 진행 (핵심 루프) — 3단계. 채팅 처리 기본 방침 ---
+# --- 방송 진행 (핵심 루프) — 3단계. 채팅 처리 = '입 하나' 모델 ---
+# 말 안 하는 중이면 즉답, 말하는 중이면 쌓아뒀다가 말 끝나는 순간 전부
+# 이어받음(사람이 방송하는 방식 그대로). 채팅은 하나도 버리지 않음.
 broadcast:
   respond_to_all_chat: true        # 기본 true. 일부러 일부만 답하지 않음.
   artificial_delay_sec: 0          # 기본 0. 인위적 딜레이 넣지 않음.
-  idle_proactive_speak: true       # 채팅 정말 없을 때만 혼잣말
+  warmup_opening: true             # 켜자마자 각 안 잡고 세팅 확인하듯 워밍업 시작
+  core_busy_timeout_sec: 90        # 말 끝 신호 유실 시 잠금 해제 폴백(초)
+  # 혼잣말(눈치껏): 말하는 중엔 안 하고, 채팅 없이 혼잣말이 이어지면
+  # 간격이 점점 길어짐. 채팅 살아나면 원래 간격으로 리셋.
+  idle_proactive_speak: true
   idle_seconds_before_proactive: 45
+  idle_backoff_multiplier: 1.7     # 연속 혼잣말마다 간격 배율
+  idle_backoff_max_multiple: 8.0   # 간격 상한(기본값의 몇 배까지)
   # 채팅 폭주 처리: 기본 off. 실제 폭주가 생긴 뒤 운영자가 켠다.
   flood_handling:
     enabled: false
@@ -87,16 +100,21 @@ end_judge:
     enabled: false
     quiet_minutes: 20
   end_jitter_min: 0       # 종료 시각 랜덤 변주(선택). 0 이면 정확히.
-  # 자연스러운 마무리 (뚝 끄지 않음): 예고 → 인사 → 종료
+  # 자연스러운 마무리 (뚝 끄지 않음): 예고 → 눈치 → 인사 → 종료
+  # 눈치 종료: 예정 시각이 돼도 말하는 중/채팅 달아오른 중엔 안 끊고,
+  # 소강 타이밍을 잡아 마무리(상한까지만 기다림).
   wind_down:
     enabled: true
     pre_notice_minutes_before_end: 10
     closing_greeting: true
+    natural_pause_lull_sec: 8       # "소강"으로 볼 채팅 공백(초)
+    max_overtime_minutes: 10        # 타이밍 못 잡아도 이 이상은 안 넘김
 
 # --- 공지 자동화 — 6단계 ---
 announce:
   on_start: true
   on_end: true
+  pre_announce_minutes: 30   # 방송 시작 X분 전에 미리 공지(기본 동선). 0=시작 시점
   avoid_late_night: true            # 새벽 게시 회피
   late_night_window: ["01:00", "08:00"]
   style: "varied"                   # varied(매번 다르게) | fixed(고정 문구)
@@ -107,6 +125,10 @@ announce:
     enabled: true
     channel_id: 0                   # 공지 올릴 채널 ID
     mention_role_id: 0              # 0 이면 멘션 없음
+    use_embed: false                # true 면 카드형(임베드) 공지
+    embed_color: 5793266
+    image_url: ""                   # 임베드 이미지 URL(선택)
+    image_path: ""                  # 로컬 이미지 첨부(선택)
   naver_cafe:
     enabled: false
     cafe_id: ""
@@ -116,11 +138,20 @@ announce:
 
 # --- 공지 문구 생성용 LLM (키는 .env) ---
 llm:
-  provider: "dummy"        # openai | anthropic | gemini | dummy(키 없이 테스트)
-  model: "gpt-4o-mini"
-  base_url: ""             # OpenAI 호환 엔드포인트면 지정 (예: 로컬 vLLM)
+  provider: "dummy"        # openai | anthropic | gemini | ollama(로컬,비용0) | dummy
+  model: "gpt-4o-mini"     # ollama 면 예: "llama3.1" 등 로컬 모델명
+  base_url: ""             # OpenAI 호환 엔드포인트. ollama 기본: http://127.0.0.1:11434/v1
   temperature: 0.9
   max_tokens: 300
+
+# --- 게임 플레이 (8단계, 선택) — 마인크래프트 ---
+# 사이드카 실행: cd game/minecraft && npm install && node bot.js
+game:
+  enabled: false
+  type: "minecraft"
+  ws_url: "ws://127.0.0.1:8765"      # 사이드카 주소
+  forward_game_chat: true            # 게임 내 채팅을 시청자 채팅처럼 전달
+  react_events: ["death", "respawn", "kicked", "health_low"]
 
 # --- 장기기억 ("저번에~", 단골 기억) ---
 memory:
@@ -130,3 +161,9 @@ memory:
 logging:
   level: "INFO"
   dir: "data/logs"
+  file_log: true           # 회전 파일 로그 (dir/aist.log)
+  transcript: true         # 방송별 채팅+AI발화 기록 (사고발언 점검용 JSONL)
+  auto_report: true        # 방송 종료 시 리포트 자동 생성 (다시보기 학습)
+  reports_dir: "data/reports"
+  auto_content: true       # 종료 후 컨텐츠 팩(하이라이트 후보·제목 초안) 자동 생성
+  content_dir: "data/content"

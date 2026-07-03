@@ -36,15 +36,23 @@ def test_partial_config_uses_defaults(tmp_path):
 
 
 def test_defaults_reflect_principles():
-    """기본값이 기획안의 디폴트(다 반응/딜레이0/변주0)인지."""
+    """기본값 = '사람처럼 방송하는 AI' (운영자 지시: 사람같음은 기본값)."""
     c = Config()
+    # 다 반응 + 선별/딜레이 없음 (절대 원칙)
     assert c.broadcast.respond_to_all_chat is True
     assert c.broadcast.artificial_delay_sec == 0.0
-    assert c.scheduler.start_jitter_min == 0
-    assert c.end_judge.end_jitter_min == 0
     assert c.end_judge.chat_low.enabled is False
-    assert c.announce.style == "varied"
-    assert c.announce.avoid_late_night is True
+    # 사람같음 기본 ON
+    assert c.broadcast.warmup_opening is True            # 워밍업 오프닝
+    assert c.end_judge.wind_down.enabled is True         # 눈치 종료
+    assert c.broadcast.idle_backoff_multiplier > 1.0     # 눈치 혼잣말
+    assert c.announce.style == "varied"                  # 공지 변주
+    assert c.announce.history_size > 0                   # 반복 회피
+    assert c.announce.avoid_late_night is True           # 새벽 회피
+    assert c.announce.pre_announce_minutes == 30         # 사전 예고
+    # 시작 시각은 항상 동일 (운영자 지시 — 랜덤 아님)
+    assert c.scheduler.start_jitter_min == 0
+    assert c.end_judge.end_jitter_min == 0               # 종료도 랜덤 아닌 눈치
 
 
 def test_min_greater_than_max_rejected(tmp_path):

@@ -27,19 +27,24 @@
 
 ## 가장 중요한 원칙 (코드에 박혀 있음)
 
-> **"사람처럼"의 판단 주체는 운영자다.** 코드/AI 가 "이러면 사람 같겠지"
-> 라고 추측해서 딜레이·채팅 선별 같은 행동 규칙을 미리 박지 않는다.
+> 이건 **"사람처럼 방송하는 AI"** 다. LLM 이 채팅에 답을 뱉는 물건이 아니다.
+> **사람같음은 옵션이 아니라 기본값이고**, 무엇이 자연스러운지의 최종 판단은
+> 운영자가 한다(운영자가 보고 지시 → 수정).
 
-- **채팅은 기본적으로 다 읽고 다 반응** (`broadcast.respond_to_all_chat=true`)
-- **인위적 딜레이를 기본으로 넣지 않음** (`broadcast.artificial_delay_sec=0`)
-- **랜덤 변주는 전부 선택지** — 시작/종료 시각, 공지 문구·시간 변주는
-  설정으로 켜고 끈다. 기본은 변주 0(정확히).
-- 이상한 부분은 **운영자가 보고 지시 → 그때 수정**. (다듬기 워크플로는
-  [`docs/OPERATOR.md`](docs/OPERATOR.md))
+**기본으로 켜져 있는 것 (끄는 게 아니라 다듬는 대상):**
+- **입 하나 모델** — 말 안 하는 중이면 즉답, 말하는 중이면 쌓았다가 말
+  끝나는 순간 이어받음(사람의 물리 제약 그대로. 구조 자체라 끌 수 없음)
+- **채팅은 다 읽고 다 반응** — 선별·인위적 딜레이 없음
+- **워밍업 오프닝** — 켜자마자 각 잡지 않고 세팅 확인하듯 시작
+- **눈치 종료** — 예정 시각이 돼도 말하는 중/채팅 달아오른 중엔 안 끊고
+  소강 타이밍에 마무리
+- **눈치 혼잣말** — 정각 타이머 없음. 침묵이 길어질수록 간격도 늘어남
+- **무대 규칙** — 귓속말/시스템 언급 금지, "AI지?"엔 캐릭터로 받아침
+- **공지: 시작 30분 전 예고 + 매번 다른 문구 + 반복 회피 + 새벽 회피**
+- **시작 시각은 항상 동일** (운영자 지시 — 사람도 정해진 시간에 켠다)
 
-이 원칙들은 빈말이 아니라 [`aist/chat_pipeline.py`](aist/chat_pipeline.py),
-[`aist/config.py`](aist/config.py) 의 기본값과
-[`tests/test_config.py`](tests/test_config.py) 의 테스트로 강제됩니다.
+설정(config.yaml)은 이 동작들을 **끄기 위한 게 아니라 값을 다듬기 위한**
+것입니다. 다듬기 워크플로는 [`docs/OPERATOR.md`](docs/OPERATOR.md).
 
 ---
 
@@ -91,9 +96,14 @@ aist run                    # 스케줄러로 완전 자동 운영
 | 코어 브릿지 | `aist/vtuber_bridge.py` | Open-LLM-VTuber `/client-ws` 로 입력 전달 |
 | OBS 제어 | `aist/obs_control.py` | obs-websocket 스트림 시작/종료 |
 | 공지 | `aist/announce/` | 디스코드(REST)·네이버 카페(공식 API) + 문구 변주 |
-| 장기기억 | `aist/memory.py` | "저번에~", 단골 닉네임 |
+| 장기기억 | `aist/memory.py` | "저번에~", 단골 닉네임 (+chroma 의미검색) |
+| 트랜스크립트 | `aist/transcript.py` | 채팅+**AI 발화 전문** 기록(사고발언 점검) |
+| 방송후 리포트 | `aist/report.py` | 다시보기 학습 — 매 방송 자동 생성(`aist report`) |
+| 컨텐츠 제작 | `aist/content.py` | 하이라이트 후보(채팅 급증 구간)·제목 초안(`aist content`) |
+| 게임(8단계) | `aist/game/` + `game/minecraft/` | 마인크래프트(mineflayer 사이드카) |
 | 지휘 | `aist/orchestrator.py` | 하루 동선 전체를 묶는 메인 컨트롤러 |
-| CLI | `aist/cli.py` | check / plan / persona / build-persona / run ... |
+| CLI | `aist/cli.py` | check / plan / doctor / report / build-persona / run ... |
+| 배포(7단계) | `deploy/` | systemd 유닛 + install.sh (자동 재시작) |
 
 ---
 
@@ -114,6 +124,11 @@ aist run                    # 스케줄러로 완전 자동 운영
 - 브릿지가 **실제 websockets 서버**와 text-input/ai-speak-signal 송수신 +
   수신 드레인(장시간 메모리 누수 방지)
 - 코어 통신 규약을 vendored Open-LLM-VTuber 소스로 대조
+
+**검증됨(추가): 57개 테스트**
+- 방송 트랜스크립트(채팅+AI 발화)와 방송 후 리포트가 방송 사이클에서
+  실제로 생성되는 것까지 통합 테스트로 확인.
+- 게임 이벤트→AI 반응/게임 채팅 전달, 유튜브 라이브 ID 파싱.
 
 **아직 실제 서비스로 못 돌려본 것(이 환경엔 GPU/실계정 없음 → 운영자 테스트 필요):**
 - Open-LLM-VTuber 코어 실행 + TTS/Live2D 실제 송출

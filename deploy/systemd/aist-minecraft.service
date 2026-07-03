@@ -1,0 +1,19 @@
+# 마인크래프트 사이드카(선택, 8단계) — systemd 서비스
+[Unit]
+Description=AI Streamer Minecraft sidecar (mineflayer)
+After=network-online.target
+
+[Service]
+Type=simple
+User=__USER__
+WorkingDirectory=__WORKDIR__/game/minecraft
+# MC_HOST/MC_PORT 등은 여기서 지정하거나 Environment 파일로
+Environment=MC_HOST=127.0.0.1
+Environment=MC_PORT=25565
+Environment=MC_USERNAME=aist_bot
+ExecStart=/usr/bin/env node bot.js
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
