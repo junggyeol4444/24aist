@@ -114,7 +114,7 @@ end_judge:
 announce:
   on_start: true
   on_end: true
-  pre_announce_minutes: 0    # 방송 시작 X분 전에 미리 공지(0=시작 시점). 예: 30
+  pre_announce_minutes: 30   # 방송 시작 X분 전에 미리 공지(기본 동선). 0=시작 시점
   avoid_late_night: true            # 새벽 게시 회피
   late_night_window: ["01:00", "08:00"]
   style: "varied"                   # varied(매번 다르게) | fixed(고정 문구)

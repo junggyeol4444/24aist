@@ -120,6 +120,7 @@ def test_content_pack_none_without_transcript(tmp_path):
 
 
 # ------------------------- 사전 공지 (2-2②) -------------------------
-def test_pre_announce_config_default_off():
+def test_pre_announce_default_on():
+    """사람도 방송 전에 미리 알린다 — 사전 공지는 기본값(30분 전)."""
     from aist.config import AnnounceConfig
-    assert AnnounceConfig().pre_announce_minutes == 0
+    assert AnnounceConfig().pre_announce_minutes == 30

@@ -167,9 +167,10 @@ class AnnounceConfig:
     """공지 자동화 — 6단계."""
     on_start: bool = True
     on_end: bool = True
-    # 방송 시작 전 미리 공지(2-2②). 0 이면 시작 시점에 게시.
-    # (스케줄러 자동 모드에서만 동작 — broadcast-now 는 즉시 시작이라 불가)
-    pre_announce_minutes: int = 0
+    # 방송 시작 전 미리 공지(2-2② 기본 동선: 공지 → 방송 시작).
+    # 사람도 방송 전에 미리 알린다 — 기본 30분 전. 0 이면 시작 시점에 게시.
+    # (스케줄러 자동 모드에서 동작 — broadcast-now 는 즉시 시작이라 시작 시점 게시)
+    pre_announce_minutes: int = 30
     avoid_late_night: bool = True
     late_night_window: List[str] = field(default_factory=lambda: ["01:00", "08:00"])
     style: str = "varied"               # varied | fixed
