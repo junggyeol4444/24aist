@@ -76,14 +76,13 @@ scheduler:
 broadcast:
   respond_to_all_chat: true        # 기본 true. 일부러 일부만 답하지 않음.
   artificial_delay_sec: 0          # 기본 0. 인위적 딜레이 넣지 않음.
-  warmup_opening: true             # 켜자마자 각 안 잡고 세팅 확인하듯 워밍업 시작
+  opening_greeting: true           # 방송 켜지면 방송인처럼 여는 인사로 시작
   core_busy_timeout_sec: 90        # 말 끝 신호 유실 시 잠금 해제 폴백(초)
-  # 혼잣말(눈치껏): 말하는 중엔 안 하고, 채팅 없이 혼잣말이 이어지면
-  # 간격이 점점 길어짐. 채팅 살아나면 원래 간격으로 리셋.
+  # 혼잣말(진행자 모드): 방송인은 손님이 아니라 진행자다. 채팅이 없을수록
+  # 조용해지는 게 아니라, 짧은 공백만 생겨도 말을 걸어 방송을 끌고 간다.
   idle_proactive_speak: true
-  idle_seconds_before_proactive: 45
-  idle_backoff_multiplier: 1.7     # 연속 혼잣말마다 간격 배율
-  idle_backoff_max_multiple: 8.0   # 간격 상한(기본값의 몇 배까지)
+  idle_gap_min_sec: 6              # 말 끝난 뒤 이 정도만 조용해도 말 이음
+  idle_gap_max_sec: 15             # 아무리 늦어도 이 안엔 말을 건다
   # 채팅 폭주 처리: 기본 off. 실제 폭주가 생긴 뒤 운영자가 켠다.
   flood_handling:
     enabled: false

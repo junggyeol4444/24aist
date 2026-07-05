@@ -52,7 +52,7 @@
 | 바꾸고 싶은 것 | 보통 어디를 고치나 |
 |----------------|--------------------|
 | 말투/성격 | `persona.yaml` → `aist build-persona` 로 재주입 |
-| 혼잣말이 너무 많음 | `config.yaml` `broadcast.idle_*`(빈도↓) 또는 끄기 |
+| 혼잣말이 너무 많음/적음 | `config.yaml` `broadcast.idle_gap_min_sec`/`idle_gap_max_sec`(키우면 덜 말함) |
 | 더 빨리/천천히 답 | `broadcast.artificial_delay_sec`(기본 0 유지 권장) |
 | 너무 일찍/늦게 끔 | `end_judge.max_minutes/min_minutes` |
 | 채팅 없으면 끄고 싶음 | `end_judge.chat_low.enabled: true` |
@@ -84,9 +84,10 @@
 
 | 반영 내용 | 어디서 조정 |
 |---|---|
-| **입 하나 모델**: 말 안 하는 중 즉답, 말하는 중이면 쌓았다가 말 끝나면 전부 이어받음 (답변 겹침 버그도 해결) | `broadcast.core_busy_timeout_sec` |
+| **입 하나 모델**: 말 안 하는 중 즉답, 말하는 중이면 쌓임 → 말 끝나면 쌓인 채팅을 하나하나 다 답하지 않고 '훑어보듯' 반응 | `broadcast.core_busy_timeout_sec` |
+| **여는 인사 오프닝**: 방송 켜지면 방송인처럼 인사로 시작 | `broadcast.opening_greeting` |
 | **눈치 종료**: 예정 시각이 돼도 소강 타이밍 잡아 마무리 (시작 시각은 항상 동일 유지) | `end_judge.wind_down.natural_pause_lull_sec`, `max_overtime_minutes` |
-| **눈치 혼잣말**: 정각 타이머 삭제, 연속 혼잣말이면 간격 점점 증가 | `broadcast.idle_backoff_*` |
+| **진행자 혼잣말**: 채팅 없을수록 조용해지는 게 아니라 짧은 공백에도 말 걸어 방송 끌기 | `broadcast.idle_gap_min_sec`, `idle_gap_max_sec` |
 | **무대 규칙**: 귓속말/프롬프트/시스템 언급 금지, "AI지?" 캐물음엔 RP로 받아치기, 비서 말투 금지 | `aist/persona.py` 무대 규칙(페르소나 재주입: `aist build-persona`) |
 | **채팅 태그 자연화**: `[닉/twitch]` → `닉: 내용` (동출일 때만 `닉 (치지직): 내용`) | 코드 기본 |
 | **공지 반복 방지**: 조합 변주 + 최근 문구 기억 | `announce.history_size` |

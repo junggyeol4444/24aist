@@ -99,16 +99,16 @@ class BroadcastConfig:
     # 절대 원칙: 기본은 다 읽고 다 반응, 자연스러운 속도.
     respond_to_all_chat: bool = True
     artificial_delay_sec: float = 0.0
-    # 워밍업 오프닝(4-1): 켜자마자 각 잡지 않고 세팅 확인하듯 가볍게 시작
-    warmup_opening: bool = True
+    # 방송 오프닝(4-1): 켜지면 방송인이 하듯 여는 인사로 시작
+    opening_greeting: bool = True
     # 코어의 말 끝(chain-end) 신호가 유실됐을 때 잠금 해제 폴백(초)
     core_busy_timeout_sec: float = 90.0
-    # 혼잣말(눈치껏): 말하는 중엔 안 하고, 채팅 없이 혼잣말이 이어지면
-    # 간격이 점점 길어진다(사람은 침묵을 매번 같은 간격으로 채우지 않음).
+    # 혼잣말(진행자 모드): 방송인은 손님이 아니라 진행자다. 채팅이 없으면
+    # 오히려 말을 더 걸어 방송을 끌고 간다. 말하는 중엔 안 하고, 마지막
+    # 발화/채팅 이후 idle_min~idle_max 사이 짧은 공백만 생겨도 말을 잇는다.
     idle_proactive_speak: bool = True
-    idle_seconds_before_proactive: int = 45
-    idle_backoff_multiplier: float = 1.7   # 연속 혼잣말마다 간격 배율
-    idle_backoff_max_multiple: float = 8.0  # 간격 상한(기본값의 몇 배까지)
+    idle_gap_min_sec: float = 6.0     # 말 끝난 뒤 이 정도만 조용해도 말 이음
+    idle_gap_max_sec: float = 15.0    # 아무리 늦어도 이 안에는 말을 건다
     flood_handling: FloodHandling = field(default_factory=FloodHandling)
 
 

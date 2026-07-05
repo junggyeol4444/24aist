@@ -8,11 +8,12 @@ from aist.persona import Persona
 import aist.orchestrator as orch_mod
 
 
-# ------------------------- 워밍업 오프닝 (4-1) -------------------------
-def test_opening_cue_is_whisper():
+# ------------------------- 방송 오프닝 (4-1) -------------------------
+def test_opening_cue_is_greeting_not_setup():
     cue = orch_mod._CUE_OPENING
     assert cue.startswith("(매니저 귓속말:")
-    assert "워밍업" in cue
+    assert "인사" in cue                 # 여는 인사로 시작
+    assert "세팅" not in cue             # 방송 켜고 세팅 확인은 말이 안 됨
     assert "언급하지 마" in cue
 
 

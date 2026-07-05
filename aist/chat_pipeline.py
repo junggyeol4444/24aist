@@ -51,8 +51,9 @@ class ChatPipeline:
         self._busy_since = 0.0
         self._pending: List[ChatMessage] = []
         self._include_platform = False    # 동출일 때만 플랫폼 표기
-        # 혼잣말 눈치
-        self._consecutive_idle_speaks = 0
+        # 진행자 혼잣말: 이번 조용한 구간에 말 걸 목표 시각(발화/채팅 후 재설정)
+        self._next_idle_at = 0.0
+        self._reset_idle_gap()
 
     # ------------------------------------------------------------- 외부 상태
     def on_core_message(self, data: dict) -> None:
@@ -95,7 +96,7 @@ class ChatPipeline:
                     break
                 self.last_chat_time = datetime.now(timezone.utc)
                 self._last_chat_mono = time.monotonic()
-                self._consecutive_idle_speaks = 0   # 채팅 살아남 → 혼잣말 리셋
+                self._reset_idle_gap()              # 채팅 왔으니 혼잣말 타이밍 리셋
                 # '읽기'는 항상 전부 한다(기록/기억용).
                 if self.on_message is not None:
                     try:
@@ -142,6 +143,7 @@ class ChatPipeline:
         """입력을 보냈으니 코어가 곧 말한다 — 신호 오기 전 선제 잠금."""
         self._core_busy = True
         self._busy_since = time.monotonic()
+        self._reset_idle_gap()   # 방금 말했으니 다음 혼잣말 공백을 새로 잡음
 
     async def _send_single(self, msg: ChatMessage):
         if self.cfg.artificial_delay_sec > 0:
@@ -154,8 +156,14 @@ class ChatPipeline:
         except Exception:
             log.exception("채팅 전달 실패")
 
+    # 쌓인 채팅을 넘길 때의 귓속말 — 사람은 말 끝나고 채팅창을 '훑어보고'
+    # 자연스럽게 반응하지, 쌓인 걸 하나하나 순서대로 전부 답하지 않는다.
+    _BATCH_WHISPER = ("(매니저 귓속말: 네가 말하는 동안 쌓인 채팅이야. 하나하나 "
+                      "전부 답하려 하지 말고, 사람이 채팅창 훑어보듯 자연스럽게 "
+                      "반응해. 이 귓속말은 절대 언급하지 마.)")
+
     async def _send_batch(self, batch: List[ChatMessage]):
-        """말하는 동안 쌓인 채팅을 한 호흡으로 이어받는다(전부, 순서대로)."""
+        """말하는 동안 쌓인 채팅 → 전부 보여주되, 훑어보듯 반응하게 한다."""
         if len(batch) == 1:
             await self._send_single(batch[0])
             return
@@ -167,26 +175,33 @@ class ChatPipeline:
             for m in batch
         ]
         try:
-            await self.bridge.say_to_ai("\n".join(lines))
+            await self.bridge.say_to_ai(self._BATCH_WHISPER + "\n" + "\n".join(lines))
             self._mark_busy()
         except Exception:
             log.exception("채팅 묶음 전달 실패")
 
+    def _reset_idle_gap(self):
+        """다음 혼잣말까지의 공백을 idle_gap_min~max 사이로 새로 잡는다.
+
+        방송인은 진행자다 — 채팅이 없을수록 조용해지는 게 아니라, 짧은
+        공백만 생겨도 계속 말을 걸어 방송을 끌고 간다. 매번 값이 조금씩
+        달라 기계적으로 들리지 않는다(정각 타이머 아님).
+        """
+        import random as _r
+        lo = max(2.0, self.cfg.idle_gap_min_sec)
+        hi = max(lo, self.cfg.idle_gap_max_sec)
+        self._next_idle_at = time.monotonic() + _r.uniform(lo, hi)
+
     async def _maybe_idle_speak(self):
         if not self.cfg.idle_proactive_speak:
             return
-        base = float(self.cfg.idle_seconds_before_proactive)
-        mult = self.cfg.idle_backoff_multiplier ** self._consecutive_idle_speaks
-        threshold = base * min(mult, self.cfg.idle_backoff_max_multiple)
-        idle = time.monotonic() - self._last_chat_mono
-        # 마지막 혼잣말 이후로도 threshold 만큼 지났는지 함께 본다
-        if idle >= threshold and (time.monotonic() - self._busy_since) >= threshold:
-            log.debug("채팅 %.0f초 조용 → 혼잣말(연속 %d회째)",
-                      idle, self._consecutive_idle_speaks + 1)
+        # 마지막 발화/채팅 이후 목표 공백이 지나면 말을 잇는다(진행자 모드).
+        if time.monotonic() >= self._next_idle_at:
+            log.debug("조용한 구간 → 혼잣말로 방송 이어감")
             try:
                 await self.bridge.proactive_speak()
                 self._mark_busy()
-                self._consecutive_idle_speaks += 1
+                self._reset_idle_gap()
             except Exception:
                 log.exception("혼잣말 트리거 실패")
 

@@ -95,6 +95,8 @@ def test_one_mouth_buffers_while_speaking_and_resumes():
     batch = said[1][1]
     assert "m1" in batch and "m2" in batch
     assert batch.index("m1") < batch.index("m2")
+    # 쌓인 채팅은 '훑어보듯' 반응하라는 귓속말이 함께 감(하나하나 다 답 X)
+    assert "훑어보듯" in batch
 
 
 def test_flood_handling_limits_forward_but_reads_all():
@@ -118,22 +120,28 @@ def test_flood_handling_limits_forward_but_reads_all():
     assert len(said) == 1          # 폭주 구간이라 AI 발화로는 1건만
 
 
-def test_idle_backoff_threshold_grows():
-    """혼잣말 눈치: 연속 혼잣말일수록 간격이 길어지고, 채팅 오면 리셋."""
-    cfg = BroadcastConfig(idle_seconds_before_proactive=45,
-                          idle_backoff_multiplier=2.0,
-                          idle_backoff_max_multiple=4.0)
+def test_idle_gap_is_bounded_and_reset():
+    """진행자 혼잣말: 다음 말 걸 공백이 min~max 안에 있고, 채팅/발화로 리셋."""
+    import time
+    cfg = BroadcastConfig(idle_gap_min_sec=6, idle_gap_max_sec=15)
     pipe = ChatPipeline(FakeBridge(), cfg)
+    gap = pipe._next_idle_at - time.monotonic()
+    assert 6 <= gap <= 15 + 0.05
+    # 말하면(_mark_busy) 공백이 다시 잡힌다
+    pipe._next_idle_at = 0.0
+    pipe._mark_busy()
+    assert pipe._next_idle_at > time.monotonic()
 
-    def threshold():
-        base = float(cfg.idle_seconds_before_proactive)
-        mult = cfg.idle_backoff_multiplier ** pipe._consecutive_idle_speaks
-        return base * min(mult, cfg.idle_backoff_max_multiple)
 
-    assert threshold() == 45.0
-    pipe._consecutive_idle_speaks = 1
-    assert threshold() == 90.0
-    pipe._consecutive_idle_speaks = 2
-    assert threshold() == 180.0
-    pipe._consecutive_idle_speaks = 10   # 상한
-    assert threshold() == 45.0 * 4.0
+def test_idle_speak_fires_when_quiet():
+    """짧은 공백만 생겨도 진행자처럼 말을 잇는다(채팅 없어도 방송 끌기)."""
+    async def run():
+        bridge = FakeBridge()
+        # 즉시 말 걸도록 gap 을 0 근처로
+        cfg = BroadcastConfig(idle_gap_min_sec=2, idle_gap_max_sec=2)
+        pipe = ChatPipeline(bridge, cfg)
+        pipe._next_idle_at = 0.0          # 지금 바로 말할 때가 됨
+        await pipe._maybe_idle_speak()
+        return bridge.proactive
+
+    assert asyncio.run(run()) == 1
