@@ -58,47 +58,18 @@ def test_announce_no_history_still_works():
     assert out
 
 
-# ------------------------- 눈치 종료 -------------------------
-class _FakePipe:
-    def __init__(self, speaking=False, pending=False, quiet_sec=999.0):
-        self.speaking = speaking
-        self.pending = pending
-        self.quiet = quiet_sec
-
-    def is_speaking(self):
-        return self.speaking
-
-    def has_pending(self):
-        return self.pending
-
-    def seconds_since_last_chat(self):
-        return self.quiet
-
-
-def _orch():
-    from aist.config import Config
+# ------------------------- 종료 마무리 (채팅 안 기다림) -------------------------
+def test_wind_down_defaults_are_streamer_like():
+    """예고 20분 전, 마무리 인사 후 30~60초 여운. 채팅 소강 대기 없음."""
+    wd = WindDown()
+    assert wd.pre_notice_minutes_before_end == 20
+    assert 30 <= wd.closing_wait_sec <= 60
+    # 삭제된 '채팅 소강 대기' 필드/로직이 남아있지 않아야 함
+    assert not hasattr(wd, "natural_pause_lull_sec")
     from aist.orchestrator import Orchestrator
-    return Orchestrator(Config(), Persona())
+    assert not hasattr(Orchestrator, "_wait_natural_pause")
 
 
-def test_natural_pause_immediate_when_quiet():
-    o = _orch()
-    wd = WindDown(enabled=True, natural_pause_lull_sec=8, max_overtime_minutes=10)
-    # 조용 + 말 안 함 → 바로 리턴 (2초 이내)
-    asyncio.run(asyncio.wait_for(
-        o._wait_natural_pause(_FakePipe(quiet_sec=100), wd), timeout=1))
-
-
-def test_natural_pause_respects_overtime_cap():
-    o = _orch()
-    # 계속 말하는 중이어도 상한(0분)이면 기다리지 않고 진행
-    wd = WindDown(enabled=True, natural_pause_lull_sec=8, max_overtime_minutes=0)
-    asyncio.run(asyncio.wait_for(
-        o._wait_natural_pause(_FakePipe(speaking=True), wd), timeout=1))
-
-
-def test_natural_pause_skipped_when_wind_down_off():
-    o = _orch()
-    wd = WindDown(enabled=False)
-    asyncio.run(asyncio.wait_for(
-        o._wait_natural_pause(_FakePipe(speaking=True), wd), timeout=1))
+def test_closing_and_wind_down_cues_are_whispers():
+    assert orch_mod._CUE_WIND_DOWN.startswith("(매니저 귓속말:")
+    assert orch_mod._CUE_CLOSING.startswith("(매니저 귓속말:")
