@@ -43,9 +43,10 @@ def test_defaults_reflect_principles():
     assert c.broadcast.artificial_delay_sec == 0.0
     assert c.end_judge.chat_low.enabled is False
     # 사람같음 기본 ON
-    assert c.broadcast.warmup_opening is True            # 워밍업 오프닝
+    assert c.broadcast.opening_greeting is True          # 방송 여는 인사
     assert c.end_judge.wind_down.enabled is True         # 눈치 종료
-    assert c.broadcast.idle_backoff_multiplier > 1.0     # 눈치 혼잣말
+    assert c.broadcast.idle_proactive_speak is True      # 진행자 혼잣말
+    assert c.broadcast.idle_gap_max_sec <= 30            # 조용하면 곧 말 이음
     assert c.announce.style == "varied"                  # 공지 변주
     assert c.announce.history_size > 0                   # 반복 회피
     assert c.announce.avoid_late_night is True           # 새벽 회피

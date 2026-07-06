@@ -99,16 +99,16 @@ class BroadcastConfig:
     # 절대 원칙: 기본은 다 읽고 다 반응, 자연스러운 속도.
     respond_to_all_chat: bool = True
     artificial_delay_sec: float = 0.0
-    # 워밍업 오프닝(4-1): 켜자마자 각 잡지 않고 세팅 확인하듯 가볍게 시작
-    warmup_opening: bool = True
+    # 방송 오프닝(4-1): 켜지면 방송인이 하듯 여는 인사로 시작
+    opening_greeting: bool = True
     # 코어의 말 끝(chain-end) 신호가 유실됐을 때 잠금 해제 폴백(초)
     core_busy_timeout_sec: float = 90.0
-    # 혼잣말(눈치껏): 말하는 중엔 안 하고, 채팅 없이 혼잣말이 이어지면
-    # 간격이 점점 길어진다(사람은 침묵을 매번 같은 간격으로 채우지 않음).
+    # 혼잣말(진행자 모드): 방송인은 손님이 아니라 진행자다. 채팅이 없으면
+    # 오히려 말을 더 걸어 방송을 끌고 간다. 말하는 중엔 안 하고, 마지막
+    # 발화/채팅 이후 idle_min~idle_max 사이 짧은 공백만 생겨도 말을 잇는다.
     idle_proactive_speak: bool = True
-    idle_seconds_before_proactive: int = 45
-    idle_backoff_multiplier: float = 1.7   # 연속 혼잣말마다 간격 배율
-    idle_backoff_max_multiple: float = 8.0  # 간격 상한(기본값의 몇 배까지)
+    idle_gap_min_sec: float = 6.0     # 말 끝난 뒤 이 정도만 조용해도 말 이음
+    idle_gap_max_sec: float = 15.0    # 아무리 늦어도 이 안에는 말을 건다
     flood_handling: FloodHandling = field(default_factory=FloodHandling)
 
 
@@ -121,14 +121,15 @@ class ChatLow:
 
 @dataclass
 class WindDown:
-    # 자연스러운 마무리(뚝 끄지 않음): 예고 → 인사 → 종료.
+    # 눈치껏 마무리: 예고 → (숨 고르는 틈 대기) → 마무리 인사 → 여운 → 종료.
+    # 종료 시각이 와도 말 중간·밀린 채팅·방금 온 후원 중엔 안 끊는다.
+    # 지금 하던 말/반응을 끝낸 자연스러운 틈에 마무리로 넘어간다.
+    # (채팅이 조용해지길 기다리는 게 아니다 — 그 틈은 바쁜 채팅에도 계속 생긴다.)
     enabled: bool = True
-    pre_notice_minutes_before_end: int = 10
+    pre_notice_minutes_before_end: int = 20   # "슬슬 마무리할까" 예고 시점
+    end_grace_minutes: int = 5                # 틈 못 찾아도 이만큼 지나면 마무리(안전 상한)
     closing_greeting: bool = True
-    # 눈치 종료(운영자 지시): 예정 시각이 돼도 바로 끊지 않고,
-    # 말 안 하는 중 + 채팅이 잠깐 소강인 타이밍을 잡아 마무리한다.
-    natural_pause_lull_sec: int = 8       # "소강"으로 볼 채팅 공백(초)
-    max_overtime_minutes: int = 10        # 타이밍 못 잡아도 이 이상은 안 기다림
+    closing_wait_sec: int = 45                # 마무리 인사 후 스트림 내리기까지(30~60초)
 
 
 @dataclass

@@ -58,21 +58,27 @@ def test_announce_no_history_still_works():
     assert out
 
 
-# ------------------------- 눈치 종료 -------------------------
+# ------------------------- 눈치껏 종료 -------------------------
+def test_wind_down_defaults_are_streamer_like():
+    """예고 20분 전, 마무리 인사 후 30~60초 여운. 채팅 소강 대기 필드 없음."""
+    wd = WindDown()
+    assert wd.pre_notice_minutes_before_end == 20
+    assert 30 <= wd.closing_wait_sec <= 60
+    # v1 의 '채팅 조용해질 때까지 대기' 필드는 없어야 함
+    assert not hasattr(wd, "natural_pause_lull_sec")
+
+
 class _FakePipe:
-    def __init__(self, speaking=False, pending=False, quiet_sec=999.0):
+    """말하는 중 여부/밀린 채팅 여부만 흉내낸다(채팅 소강과 무관)."""
+    def __init__(self, speaking=False, pending=False):
         self.speaking = speaking
         self.pending = pending
-        self.quiet = quiet_sec
 
     def is_speaking(self):
         return self.speaking
 
     def has_pending(self):
         return self.pending
-
-    def seconds_since_last_chat(self):
-        return self.quiet
 
 
 def _orch():
@@ -81,24 +87,34 @@ def _orch():
     return Orchestrator(Config(), Persona())
 
 
-def test_natural_pause_immediate_when_quiet():
+def test_natural_break_returns_immediately_at_a_gap():
+    """말 안 하고 밀린 채팅도 없으면 = 지금이 틈 → 바로 마무리로."""
     o = _orch()
-    wd = WindDown(enabled=True, natural_pause_lull_sec=8, max_overtime_minutes=10)
-    # 조용 + 말 안 함 → 바로 리턴 (2초 이내)
+    wd = WindDown(enabled=True, end_grace_minutes=5)
     asyncio.run(asyncio.wait_for(
-        o._wait_natural_pause(_FakePipe(quiet_sec=100), wd), timeout=1))
+        o._wait_for_natural_break(_FakePipe(speaking=False, pending=False), wd),
+        timeout=1))
 
 
-def test_natural_pause_respects_overtime_cap():
+def test_natural_break_does_not_wait_for_chat_silence():
+    """바쁜 채팅이어도(밀린 채팅 없고 말 안 하면) 틈으로 본다 — 소강 무관."""
     o = _orch()
-    # 계속 말하는 중이어도 상한(0분)이면 기다리지 않고 진행
-    wd = WindDown(enabled=True, natural_pause_lull_sec=8, max_overtime_minutes=0)
+    wd = WindDown(enabled=True, end_grace_minutes=5)
+    # 채팅이 방금 왔든 말든(_FakePipe 는 채팅 시각을 안 봄) 발화·백로그만 본다
     asyncio.run(asyncio.wait_for(
-        o._wait_natural_pause(_FakePipe(speaking=True), wd), timeout=1))
+        o._wait_for_natural_break(_FakePipe(speaking=False, pending=False), wd),
+        timeout=1))
 
 
-def test_natural_pause_skipped_when_wind_down_off():
+def test_natural_break_grace_cap_when_never_idle():
+    """말/밀린채팅이 안 끝나도 grace 상한(0분)이면 마무리로 진행."""
     o = _orch()
-    wd = WindDown(enabled=False)
+    wd = WindDown(enabled=True, end_grace_minutes=0)
     asyncio.run(asyncio.wait_for(
-        o._wait_natural_pause(_FakePipe(speaking=True), wd), timeout=1))
+        o._wait_for_natural_break(_FakePipe(speaking=True, pending=True), wd),
+        timeout=1))
+
+
+def test_closing_and_wind_down_cues_are_whispers():
+    assert orch_mod._CUE_WIND_DOWN.startswith("(매니저 귓속말:")
+    assert orch_mod._CUE_CLOSING.startswith("(매니저 귓속말:")

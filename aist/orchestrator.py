@@ -40,15 +40,17 @@ log = logging.getLogger("aist.orchestrator")
 
 # 마무리 단계의 '매니저 귓속말' — 페르소나 무대규칙에 따라 AI 는 이 내용을
 # 입 밖에 내지 않고 행동으로만 반영한다. (운영자가 문구 수정 가능)
-_CUE_WIND_DOWN = ("(매니저 귓속말: 슬슬 방송 마무리할 시간이야. 시청자들한테 "
-                  "곧 마무리한다고 자연스럽게 얘기해줘. 이 귓속말은 절대 언급하지 마.)")
+_CUE_WIND_DOWN = ("(매니저 귓속말: 슬슬 마무리 분위기로 가자. 새 주제나 새 판 "
+                  "벌이지 말고 지금 하던 얘기·게임을 정리하면서, 곧 마무리한다고 "
+                  "자연스럽게 흘려줘. 이 귓속말은 절대 언급하지 마.)")
 _CUE_CLOSING = ("(매니저 귓속말: 이제 방송 끝낼 시간이야. 오늘 와준 시청자들한테 "
                 "자연스럽게 마무리 인사해줘. 이 귓속말은 절대 언급하지 마.)")
-# 워밍업 오프닝(4-1): 켜자마자 각 잡고 떠들지 않고 세팅 확인하듯 시작
-_CUE_OPENING = ("(매니저 귓속말: 방송 방금 켜졌어. 각 잡고 시작하지 말고, 세팅 "
-                "확인하는 것처럼 가볍게 워밍업하면서 자연스럽게 시작해줘. 들어오는 "
-                "사람 있으면 편하게 인사하고. 이 귓속말은 절대 언급하지 마.)")
-_CLOSING_WAIT_SEC = 12  # 마무리 인사 TTS 가 나갈 시간
+# 방송 오프닝(4-1): 방송 켜지면 방송인이 하듯 인사로 문을 연다.
+_CUE_OPENING = ("(매니저 귓속말: 방송 방금 시작했어. 방송 여는 인사로 시작해줘. "
+                "\"안녕~ 오늘도 왔어요\" 같은 느낌으로 반갑게, 오늘 뭐 할지 살짝 "
+                "얘기하면서 자연스럽게 문 열어줘. 이 귓속말은 절대 언급하지 마.)")
+# 마무리 인사하고 실제 스트림을 내리기까지의 여유(초). 사람도 인사 후 바로
+# 안 끄고 30초~1분 정도 여운을 둔다. config.end_judge.wind_down 에서 조정.
 
 
 def _now(tz_name: str) -> datetime:
@@ -192,8 +194,8 @@ class Orchestrator:
             game_task = asyncio.create_task(feed.run(chat_stop))
             log.info("게임 연동 켜짐 (%s)", cfg.game.ws_url)
 
-        # 워밍업 오프닝(4-1): 켜자마자 각 잡지 않고 자연스럽게 시작
-        if cfg.broadcast.warmup_opening:
+        # 방송 오프닝(4-1): 켜지면 여는 인사로 문을 연다
+        if cfg.broadcast.opening_greeting:
             await self._safe(bridge.say_to_ai(_CUE_OPENING))
 
         # 4) 종료 판단 루프
@@ -206,9 +208,10 @@ class Orchestrator:
             decision = ej.evaluate(now, last_chat)
             if decision.phase is Phase.END:
                 log.info("종료 판단: %s", decision.detail)
-                # 눈치 종료(운영자 지시): 뚝 끊지 말고, 말 안 하는 중 +
-                # 채팅 잠깐 소강인 타이밍을 잡아 마무리. 상한까지만 기다림.
-                await self._wait_natural_pause(pipeline, cfg.end_judge.wind_down)
+                # 눈치껏: 종료 시각이 와도 말 중간·밀린 채팅·방금 온 후원
+                # 중엔 안 끊고, 지금 하던 걸 끝낸 자연스러운 틈에 마무리로
+                # 넘어간다(채팅 소강을 기다리는 게 아님).
+                await self._wait_for_natural_break(pipeline, cfg.end_judge.wind_down)
                 break
             if decision.phase is Phase.PRE_NOTICE and not pre_notified:
                 pre_notified = True
@@ -217,10 +220,10 @@ class Orchestrator:
                     await self._safe(bridge.say_to_ai(_CUE_WIND_DOWN))
             await self._sleep_or_stop(5)
 
-        # 5) 마무리 인사 → 종료
+        # 5) 마무리 인사 → (여운 두고) 종료
         if cfg.end_judge.wind_down.enabled and cfg.end_judge.wind_down.closing_greeting:
             await self._safe(bridge.say_to_ai(_CUE_CLOSING))
-            await self._sleep_or_stop(_CLOSING_WAIT_SEC)
+            await self._sleep_or_stop(cfg.end_judge.wind_down.closing_wait_sec)
 
         await self._teardown(obs, bridge, pipeline, pipeline_task, chat_stop,
                              start_dt, drain_task=drain_task,
@@ -344,28 +347,27 @@ class Orchestrator:
         days = ["월", "화", "수", "목", "금", "토", "일"]
         return f"다음엔 {days[nxt.weekday()]}요일 {nxt.strftime('%H:%M')}에"
 
-    async def _wait_natural_pause(self, pipeline, wind_down):
-        """종료 타이밍 눈치 보기: 말 안 하는 중 + 채팅 소강일 때 마무리.
+    async def _wait_for_natural_break(self, pipeline, wd):
+        """눈치껏 종료: 지금 하던 말/반응이 끝난 '숨 고르는 틈'을 기다린다.
 
-        wind_down 이 꺼져 있으면(뚝 끊기 모드) 기다리지 않는다.
-        max_overtime_minutes 를 넘기면 타이밍과 무관하게 진행한다.
+        - 말하는 중이거나(is_speaking) 밀린 채팅이 있으면(has_pending) 안 끊고
+          그것부터 끝내게 둔다.
+        - 그 틈은 채팅이 바빠도 계속 생긴다(발화가 끝나는 순간마다). 채팅이
+          '조용해지길' 기다리는 게 아니다.
+        - end_grace_minutes 는 안전 상한(그 안에 틈을 못 잡아도 마무리 진행).
         """
-        if pipeline is None or not wind_down.enabled:
+        if pipeline is None or not wd.enabled:
             return
-        deadline = asyncio.get_event_loop().time() + wind_down.max_overtime_minutes * 60
-        lull = wind_down.natural_pause_lull_sec
+        loop = asyncio.get_event_loop()
+        deadline = loop.time() + max(0, wd.end_grace_minutes) * 60
         while not self._stop.is_set():
-            quiet = (not pipeline.is_speaking()
-                     and not pipeline.has_pending()
-                     and pipeline.seconds_since_last_chat() >= lull)
-            if quiet:
-                log.info("소강 타이밍 포착 → 마무리 진행")
+            if not pipeline.is_speaking() and not pipeline.has_pending():
+                log.info("자연스러운 틈 포착 → 마무리로 넘어감")
                 return
-            if asyncio.get_event_loop().time() >= deadline:
-                log.info("소강 타이밍을 못 잡음(+%d분 경과) → 마무리 진행",
-                         wind_down.max_overtime_minutes)
+            if loop.time() >= deadline:
+                log.info("틈을 못 잡음(+%d분) → 마무리 진행", wd.end_grace_minutes)
                 return
-            await self._sleep_or_stop(2)
+            await self._sleep_or_stop(1)
 
     # --------------------------------------------------------------- 유틸
     async def _sleep_or_stop(self, seconds: float):
