@@ -99,11 +99,13 @@ end_judge:
     enabled: false
     quiet_minutes: 20
   end_jitter_min: 0       # 종료 시각 랜덤 변주(선택). 0 이면 정확히.
-  # 자연스러운 마무리 (뚝 끄지 않음): 예고 → 마무리 인사 → 여운 → 종료
-  # 종료 시각이 되면 채팅 기다리지 않고 마무리 멘트하고 끝낸다.
+  # 눈치껏 마무리: 예고 → (숨 고르는 틈 대기) → 마무리 인사 → 여운 → 종료
+  # 종료 시각이 와도 말 중간·밀린 채팅·방금 온 후원 중엔 안 끊고, 지금 하던
+  # 걸 끝낸 자연스러운 틈에 마무리로 넘어간다(채팅 소강 대기 아님).
   wind_down:
     enabled: true
     pre_notice_minutes_before_end: 20   # "슬슬 마무리할까" 예고(종료 20분 전)
+    end_grace_minutes: 5                # 틈 못 잡아도 이만큼 지나면 마무리(안전 상한)
     closing_greeting: true
     closing_wait_sec: 45                # 마무리 인사 후 스트림 내리기까지(초)
 

@@ -86,7 +86,7 @@
 |---|---|
 | **입 하나 모델**: 말 안 하는 중 즉답, 말하는 중이면 쌓임 → 말 끝나면 쌓인 채팅을 하나하나 다 답하지 않고 '훑어보듯' 반응 | `broadcast.core_busy_timeout_sec` |
 | **여는 인사 오프닝**: 방송 켜지면 방송인처럼 인사로 시작 | `broadcast.opening_greeting` |
-| **마무리 종료**: 종료 시각 되면 채팅 안 기다리고 예고(20분 전)→마무리 인사→여운(45초)→종료 (시작 시각은 항상 동일) | `end_judge.wind_down.pre_notice_minutes_before_end`, `closing_wait_sec` |
+| **눈치껏 종료**: 종료 시각 와도 말 중간·밀린 채팅·후원 중엔 안 끊고, 하던 거 끝낸 틈에 마무리(채팅 소강 대기 아님). 예고(20분 전)→틈→인사→여운(45초)→종료 | `end_judge.wind_down.pre_notice_minutes_before_end`, `end_grace_minutes`, `closing_wait_sec` |
 | **진행자 혼잣말**: 채팅 없을수록 조용해지는 게 아니라 짧은 공백에도 말 걸어 방송 끌기 | `broadcast.idle_gap_min_sec`, `idle_gap_max_sec` |
 | **무대 규칙**: 귓속말/프롬프트/시스템 언급 금지, "AI지?" 캐물음엔 RP로 받아치기, 비서 말투 금지 | `aist/persona.py` 무대 규칙(페르소나 재주입: `aist build-persona`) |
 | **채팅 태그 자연화**: `[닉/twitch]` → `닉: 내용` (동출일 때만 `닉 (치지직): 내용`) | 코드 기본 |

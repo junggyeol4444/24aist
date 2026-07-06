@@ -40,8 +40,9 @@ log = logging.getLogger("aist.orchestrator")
 
 # 마무리 단계의 '매니저 귓속말' — 페르소나 무대규칙에 따라 AI 는 이 내용을
 # 입 밖에 내지 않고 행동으로만 반영한다. (운영자가 문구 수정 가능)
-_CUE_WIND_DOWN = ("(매니저 귓속말: 슬슬 방송 마무리할 시간이야. 시청자들한테 "
-                  "곧 마무리한다고 자연스럽게 얘기해줘. 이 귓속말은 절대 언급하지 마.)")
+_CUE_WIND_DOWN = ("(매니저 귓속말: 슬슬 마무리 분위기로 가자. 새 주제나 새 판 "
+                  "벌이지 말고 지금 하던 얘기·게임을 정리하면서, 곧 마무리한다고 "
+                  "자연스럽게 흘려줘. 이 귓속말은 절대 언급하지 마.)")
 _CUE_CLOSING = ("(매니저 귓속말: 이제 방송 끝낼 시간이야. 오늘 와준 시청자들한테 "
                 "자연스럽게 마무리 인사해줘. 이 귓속말은 절대 언급하지 마.)")
 # 방송 오프닝(4-1): 방송 켜지면 방송인이 하듯 인사로 문을 연다.
@@ -207,9 +208,10 @@ class Orchestrator:
             decision = ej.evaluate(now, last_chat)
             if decision.phase is Phase.END:
                 log.info("종료 판단: %s", decision.detail)
-                # 종료 시각이 되면 마무리 멘트하고 끝낸다. 채팅이 조용해지길
-                # 기다리지 않는다(인기 방송은 채팅이 안 끊긴다 — 그럼 영영
-                # 못 끈다). 사람 스트리머도 본인이 정한 시각에 마무리한다.
+                # 눈치껏: 종료 시각이 와도 말 중간·밀린 채팅·방금 온 후원
+                # 중엔 안 끊고, 지금 하던 걸 끝낸 자연스러운 틈에 마무리로
+                # 넘어간다(채팅 소강을 기다리는 게 아님).
+                await self._wait_for_natural_break(pipeline, cfg.end_judge.wind_down)
                 break
             if decision.phase is Phase.PRE_NOTICE and not pre_notified:
                 pre_notified = True
@@ -344,6 +346,28 @@ class Orchestrator:
             return ""
         days = ["월", "화", "수", "목", "금", "토", "일"]
         return f"다음엔 {days[nxt.weekday()]}요일 {nxt.strftime('%H:%M')}에"
+
+    async def _wait_for_natural_break(self, pipeline, wd):
+        """눈치껏 종료: 지금 하던 말/반응이 끝난 '숨 고르는 틈'을 기다린다.
+
+        - 말하는 중이거나(is_speaking) 밀린 채팅이 있으면(has_pending) 안 끊고
+          그것부터 끝내게 둔다.
+        - 그 틈은 채팅이 바빠도 계속 생긴다(발화가 끝나는 순간마다). 채팅이
+          '조용해지길' 기다리는 게 아니다.
+        - end_grace_minutes 는 안전 상한(그 안에 틈을 못 잡아도 마무리 진행).
+        """
+        if pipeline is None or not wd.enabled:
+            return
+        loop = asyncio.get_event_loop()
+        deadline = loop.time() + max(0, wd.end_grace_minutes) * 60
+        while not self._stop.is_set():
+            if not pipeline.is_speaking() and not pipeline.has_pending():
+                log.info("자연스러운 틈 포착 → 마무리로 넘어감")
+                return
+            if loop.time() >= deadline:
+                log.info("틈을 못 잡음(+%d분) → 마무리 진행", wd.end_grace_minutes)
+                return
+            await self._sleep_or_stop(1)
 
     # --------------------------------------------------------------- 유틸
     async def _sleep_or_stop(self, seconds: float):

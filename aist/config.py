@@ -121,10 +121,13 @@ class ChatLow:
 
 @dataclass
 class WindDown:
-    # 자연스러운 마무리(뚝 끄지 않음): 예고 → 마무리 인사 → (여운) → 종료.
-    # 종료 시각이 되면 채팅을 기다리지 않고 마무리 멘트하고 끝낸다.
+    # 눈치껏 마무리: 예고 → (숨 고르는 틈 대기) → 마무리 인사 → 여운 → 종료.
+    # 종료 시각이 와도 말 중간·밀린 채팅·방금 온 후원 중엔 안 끊는다.
+    # 지금 하던 말/반응을 끝낸 자연스러운 틈에 마무리로 넘어간다.
+    # (채팅이 조용해지길 기다리는 게 아니다 — 그 틈은 바쁜 채팅에도 계속 생긴다.)
     enabled: bool = True
     pre_notice_minutes_before_end: int = 20   # "슬슬 마무리할까" 예고 시점
+    end_grace_minutes: int = 5                # 틈 못 찾아도 이만큼 지나면 마무리(안전 상한)
     closing_greeting: bool = True
     closing_wait_sec: int = 45                # 마무리 인사 후 스트림 내리기까지(30~60초)
 
