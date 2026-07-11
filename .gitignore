@@ -49,3 +49,7 @@ htmlcov/
 # Node (게임 사이드카)
 node_modules/
 package-lock.json
+
+# PyInstaller (exe 빌드 산출물)
+*.spec
+
