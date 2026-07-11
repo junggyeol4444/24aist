@@ -58,11 +58,11 @@
 
 `windows\` 폴더의 파일을 순서대로 더블클릭하세요 (자세한 건 [`windows/사용법.md`](windows/사용법.md)):
 
-1. **설치.bat** — 설치 + 설정 파일 준비 (처음 한 번)
+1. **install.bat** — 설치 + 설정 파일 준비 (처음 한 번)
 2. `config.yaml` / `persona.yaml` / `.env` 를 메모장으로 채우기
-3. **코어실행.bat** → **점검.bat** → **테스트방송.bat** → **방송시작.bat**
-   (또는 **전체실행.bat** 하나로 코어+자동운영)
-- 진짜 exe 가 필요하면 **EXE만들기.bat** → `dist\aist.exe`
+3. **core.bat** → **doctor.bat** → **test-broadcast.bat** → **run.bat**
+   (또는 **run-all.bat** 하나로 코어+자동운영)
+- 진짜 exe 가 필요하면 **build-exe.bat** → `dist\aist.exe`
 
 ### 리눅스 / 맥 (또는 직접)
 
