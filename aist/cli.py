@@ -132,7 +132,36 @@ def cmd_check(args) -> int:
         print(f"    {p:<11}: {key}={mark(val)}{extra}")
     if cfg.announce.naver_cafe.enabled:
         print(f"    NAVER          : token={mark(s.naver_access_token)} refresh={mark(s.naver_refresh_token)}")
-    print("\n점검 완료. (실제 연결 테스트는 broadcast-now / run 으로)")
+    # --- 실행 준비 상태 -------------------------------------------------
+    # 설정이 맞아도 패키지가 없으면 방송은 시작하자마자 중단된다.
+    # 여기서 걸러야 "점검 완료"가 거짓말이 되지 않는다.
+    from . import preflight
+    miss = preflight.missing(cfg)
+    fe_ok, fe_msg = preflight.core_frontend_ready()
+    blockers = [n for n in miss if n.blocking]
+
+    print("\n  실행 준비 상태:")
+    if not miss:
+        print("    패키지         : 켜진 기능에 필요한 것 모두 설치됨")
+    else:
+        for n in miss:
+            tag = "[X]" if n.blocking else "[!]"
+            print(f"    {tag} {n.package:<22} 없음 → {n.feature}")
+    print(f"    코어 웹UI      : {'OK' if fe_ok else '[X] ' + fe_msg}")
+
+    print()
+    if blockers or not fe_ok:
+        print("지금 상태로는 방송이 안 됩니다. 아래를 먼저 해결하세요:")
+        if blockers:
+            print(f"  - 패키지 설치: {preflight.install_hint(miss)}")
+        if not fe_ok:
+            print("  - 코어 웹UI 받기: ./scripts/fetch_frontend.sh"
+                  "  (윈도우: windows\\프론트엔드받기.bat)")
+        print("  ( 한 번에: ./run.sh setup  /  윈도우: windows\\설치.bat )")
+        return 1
+    if miss:
+        print("방송은 가능하지만 일부 기능이 꺼진 채 돕니다([!] 항목).")
+    print("점검 완료. (실제 연결 테스트는 doctor / broadcast-now 로)")
     return 0
 
 
@@ -190,6 +219,19 @@ def cmd_doctor(args) -> int:
     cfg, _ = _load(args)
     print("연결 점검 (코어 WS / OBS)\n")
     ok = True
+
+    # 연결을 시도하기 전에, 애초에 시도할 수 있는 상태인지부터 본다.
+    from . import preflight
+    miss = preflight.missing(cfg)
+    if miss:
+        for n in miss:
+            print(f"  [{'X' if n.blocking else '!'}] {n.package} 미설치 → {n.feature}")
+        print(f"      → {preflight.install_hint(miss)}\n")
+        ok = ok and not any(n.blocking for n in miss)
+    fe_ok, fe_msg = preflight.core_frontend_ready()
+    if not fe_ok:
+        ok = False
+        print(f"  [X] 코어 웹UI: {fe_msg}\n")
 
     # 1) 코어 WebSocket (점검은 빠르게 1회만 시도)
     cfg.vtuber.connect_timeout_sec = min(cfg.vtuber.connect_timeout_sec, 3)
@@ -351,9 +393,33 @@ def cmd_content(args) -> int:
     return 0
 
 
+def _gate(cfg, force: bool) -> bool:
+    """방송을 시작하기 전에, 애초에 될 수 있는 상태인지 막아선다.
+
+    없으면 orchestrator 가 사이클을 돌다가 조용히 중단되는데, 로그만 보면
+    "돌긴 돌았다"로 보인다. 시작 전에 크게 말하고 세운다.
+    """
+    from . import preflight
+    blockers = [n for n in preflight.missing(cfg) if n.blocking]
+    if not blockers:
+        return True
+    print("방송을 시작할 수 없습니다 — 필요한 패키지가 없습니다:")
+    for n in blockers:
+        print(f"  [X] {n.package} → {n.feature}")
+    print(f"\n  {preflight.install_hint(blockers)}")
+    print("  ( 한 번에: ./run.sh setup  /  윈도우: windows\\설치.bat )")
+    if force:
+        print("\n--force 라서 그대로 진행합니다. 중간에 멈출 수 있습니다.")
+        return True
+    print("\n그래도 강행하려면 --force 를 붙이세요. 자세한 점검은 aist check.")
+    return False
+
+
 def cmd_broadcast_now(args) -> int:
     from .orchestrator import Orchestrator
     cfg, persona = _load(args)
+    if not _gate(cfg, getattr(args, "force", False)):
+        return 1
     orch = Orchestrator(cfg, persona)
     try:
         asyncio.run(orch.run_one_now())
@@ -365,6 +431,8 @@ def cmd_broadcast_now(args) -> int:
 def cmd_run(args) -> int:
     from .orchestrator import Orchestrator
     cfg, persona = _load(args)
+    if not _gate(cfg, getattr(args, "force", False)):
+        return 1
     orch = Orchestrator(cfg, persona)
     try:
         asyncio.run(orch.run())
@@ -407,8 +475,14 @@ def build_parser() -> argparse.ArgumentParser:
 
     sub.add_parser("content", help="컨텐츠 팩 생성(하이라이트 후보·제목 초안)").set_defaults(func=cmd_content)
 
-    sub.add_parser("broadcast-now", help="지금 한 방송만(시작 수동, 종료 자동)").set_defaults(func=cmd_broadcast_now)
-    sub.add_parser("run", help="완전 자동 루프(스케줄러)").set_defaults(func=cmd_run)
+    p_bn = sub.add_parser("broadcast-now", help="지금 한 방송만(시작 수동, 종료 자동)")
+    p_bn.add_argument("--force", action="store_true",
+                      help="패키지가 빠져 있어도 강행(중간에 멈출 수 있음)")
+    p_bn.set_defaults(func=cmd_broadcast_now)
+    p_run = sub.add_parser("run", help="완전 자동 루프(스케줄러)")
+    p_run.add_argument("--force", action="store_true",
+                       help="패키지가 빠져 있어도 강행(중간에 멈출 수 있음)")
+    p_run.set_defaults(func=cmd_run)
     return p
 
 

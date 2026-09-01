@@ -67,9 +67,16 @@
 ### 리눅스 / 맥 (또는 직접)
 
 ```bash
-# 1) 설치 (핵심 로직은 PyYAML 만으로 동작)
-pip install -e .            # 또는: pip install -r requirements.txt
-#   기능을 켤 땐: pip install -e ".[all]"  (websockets/obs/discord/...)
+# 0) 한 방에 (설치 + 설정파일 + 프론트엔드 + 점검) — 이걸 권장
+./run.sh setup
+
+# --- 또는 직접 한 단계씩 ---
+# 1) 설치
+#    주의: `pip install -e .` 는 PyYAML 만 깝니다. 이러면 check/plan 같은
+#    오프라인 명령만 되고 방송은 시작 즉시 중단됩니다(코어 연결 불가).
+#    실제로 방송하려면 반드시 extras 를 함께:
+pip install -e ".[vtuber,obs,discord,platforms,naver,llm]"
+#   전부 다: pip install -e ".[all]"
 
 # 2) 설정 준비
 cp config/config.example.yaml config.yaml
@@ -77,7 +84,8 @@ cp config/persona.example.yaml persona.yaml
 cp .env.example .env        # 키/토큰은 .env 에 (config.yaml 에 적지 않음)
 
 # 3) 네트워크 없이 점검/미리보기 (지금 바로 됨)
-aist check                  # 설정·키 상태 점검
+aist check                  # 설정·키 + "지금 방송 가능한 상태인가" 점검
+                            #   방송 불가면 종료코드 1 로 이유를 알려줍니다
 aist plan                   # 다음 방송 일정 + 종료 타임라인
 aist persona                # 코어에 들어갈 페르소나 프롬프트
 aist announce-preview       # 공지 문구 변주 미리보기
@@ -96,6 +104,10 @@ aist run                    # 스케줄러로 완전 자동 운영
 > GPU/OBS/플랫폼 키가 없어도 `check / plan / persona / announce-preview /
 > build-persona` 는 동작합니다. 실제 송출(`broadcast-now`, `run`)은 코어·OBS·
 > 키가 갖춰진 운영자 환경에서 돌립니다.
+>
+> **`aist check` 가 "지금 상태로는 방송이 안 됩니다" 라고 하면 실제로 안 됩니다.**
+> 거기 적힌 것(패키지 설치 / 코어 웹UI 받기)을 먼저 해결하세요. 이 명령이
+> 통과해야 `doctor` → `broadcast-now` 로 넘어갈 수 있습니다.
 
 ---
 

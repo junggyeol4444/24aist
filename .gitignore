@@ -53,3 +53,6 @@ package-lock.json
 # PyInstaller (exe 빌드 산출물)
 *.spec
 
+# 운영자가 예제를 복사해 만드는 로컬 설정 — 각자 환경/키가 들어가므로 커밋 금지
+config.yaml
+persona.yaml
