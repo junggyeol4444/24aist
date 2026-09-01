@@ -138,6 +138,7 @@ def cmd_check(args) -> int:
     from . import preflight
     miss = preflight.missing(cfg)
     fe_ok, fe_msg = preflight.core_frontend_ready()
+    conf_ok, conf_msg = preflight.core_conf_ready()
     blockers = [n for n in miss if n.blocking]
 
     print("\n  실행 준비 상태:")
@@ -148,15 +149,18 @@ def cmd_check(args) -> int:
             tag = "[X]" if n.blocking else "[!]"
             print(f"    {tag} {n.package:<22} 없음 → {n.feature}")
     print(f"    코어 웹UI      : {'OK' if fe_ok else '[X] ' + fe_msg}")
+    print(f"    코어 conf.yaml : {'OK' if conf_ok else '[X] ' + conf_msg}")
 
     print()
-    if blockers or not fe_ok:
+    if blockers or not fe_ok or not conf_ok:
         print("지금 상태로는 방송이 안 됩니다. 아래를 먼저 해결하세요:")
         if blockers:
             print(f"  - 패키지 설치: {preflight.install_hint(miss)}")
         if not fe_ok:
             print("  - 코어 웹UI 받기: ./scripts/fetch_frontend.sh"
                   "  (윈도우: windows\\프론트엔드받기.bat)")
+        if not conf_ok:
+            print("  - 코어 설정 만들기: bash scripts/setup_openllm_vtuber.sh")
         print("  ( 한 번에: ./run.sh setup  /  윈도우: windows\\설치.bat )")
         return 1
     if miss:
@@ -232,6 +236,10 @@ def cmd_doctor(args) -> int:
     if not fe_ok:
         ok = False
         print(f"  [X] 코어 웹UI: {fe_msg}\n")
+    conf_ok, conf_msg = preflight.core_conf_ready()
+    if not conf_ok:
+        ok = False
+        print(f"  [X] 코어 설정: {conf_msg}\n")
 
     # 1) 코어 WebSocket (점검은 빠르게 1회만 시도)
     cfg.vtuber.connect_timeout_sec = min(cfg.vtuber.connect_timeout_sec, 3)

@@ -91,3 +91,24 @@ def test_gate_passes_when_nothing_blocking(monkeypatch):
     from aist.cli import _gate
     monkeypatch.setattr(preflight, "missing", lambda cfg: [])
     assert _gate(_cfg(), force=False) is True
+
+
+def test_core_conf_missing_is_reported():
+    """conf.yaml 이 없으면 코어가 안 뜬다 — '준비됨'이라고 하면 안 된다."""
+    ok, msg = preflight.core_conf_ready(preflight.repo_root())
+    expected = (preflight.repo_root() / "Open-LLM-VTuber" / "conf.yaml").is_file()
+    assert ok is expected
+    if not ok:
+        assert "conf.yaml" in msg
+
+
+def test_core_conf_ready_when_present(tmp_path):
+    core = tmp_path / "Open-LLM-VTuber"
+    core.mkdir()
+    (core / "conf.korean.yaml").write_text("x", encoding="utf-8")
+    ok, msg = preflight.core_conf_ready(tmp_path)
+    assert ok is False and "setup_openllm_vtuber" in msg
+
+    (core / "conf.yaml").write_text("x", encoding="utf-8")
+    ok, _ = preflight.core_conf_ready(tmp_path)
+    assert ok is True

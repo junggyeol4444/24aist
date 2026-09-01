@@ -122,3 +122,21 @@ def core_frontend_ready(root: Path | None = None) -> tuple[bool, str]:
     if (core / "frontend" / "index.html").is_file():
         return True, "받아짐"
     return False, "프론트엔드(웹UI) 미설치 — scripts/fetch_frontend.sh (윈도우: windows\\프론트엔드받기.bat)"
+
+
+def core_conf_ready(root: Path | None = None) -> tuple[bool, str]:
+    """코어의 conf.yaml 이 있는지.
+
+    run_server.py 가 conf.yaml 을 바로 읽는다 — 없으면 코어가 뜨지 않는다.
+    conf.korean.yaml(한국어 개조본)을 복사해서 만든다.
+    """
+    root = root or repo_root()
+    core = root / "Open-LLM-VTuber"
+    if not core.is_dir():
+        return False, "Open-LLM-VTuber/ 디렉터리가 없습니다"
+    if (core / "conf.yaml").is_file():
+        return True, "있음"
+    if (core / "conf.korean.yaml").is_file():
+        return False, ("conf.yaml 없음 — bash scripts/setup_openllm_vtuber.sh "
+                       "(또는 conf.korean.yaml 을 conf.yaml 로 복사)")
+    return False, "conf.yaml 없음 (conf.korean.yaml 도 없음 — 저장소가 온전한지 확인)"

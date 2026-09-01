@@ -45,6 +45,14 @@ if not exist "Open-LLM-VTuber\frontend\index.html" (
   echo     이미 받아져 있음
 )
 
+REM 코어는 conf.yaml 을 바로 읽는다 — 없으면 코어가 뜨지 않는다.
+if not exist "Open-LLM-VTuber\conf.yaml" (
+  if exist "Open-LLM-VTuber\conf.korean.yaml" (
+    copy "Open-LLM-VTuber\conf.korean.yaml" "Open-LLM-VTuber\conf.yaml" >nul
+    echo     코어 설정 conf.yaml 생성(한국어/페르소나 적용)
+  )
+)
+
 echo [5/5] 설정 점검...
 echo.
 aist --config config.yaml --persona persona.yaml check
