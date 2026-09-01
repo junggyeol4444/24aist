@@ -24,7 +24,12 @@ case "$CMD" in
     [ -f config.yaml ]  || cp config/config.example.yaml  config.yaml
     [ -f persona.yaml ] || cp config/persona.example.yaml persona.yaml
     [ -f .env ]         || cp .env.example .env
-    aist --config config.yaml --persona persona.yaml check
+    # 방송 코어 준비: 웹UI(커밋 안 된 컴파일 산출물) + conf.yaml + 코어 의존성.
+    # 이걸 빠뜨리면 aist 만 설치되고 정작 방송은 안 된다.
+    bash scripts/setup_openllm_vtuber.sh \
+      || echo "[경고] 코어 준비 실패 — bash scripts/setup_openllm_vtuber.sh 로 다시 시도하세요"
+    # check 는 '아직 방송 불가'면 1 을 돌려준다(정상). set -e 로 죽지 않게.
+    aist --config config.yaml --persona persona.yaml check || true
     echo "설치 끝. config.yaml / persona.yaml / .env 를 채운 뒤 ./run.sh doctor" ;;
   doctor)  ensure_venv; aist --config config.yaml --persona persona.yaml doctor ;;
   test)    ensure_venv; aist --config config.yaml --persona persona.yaml broadcast-now ;;
