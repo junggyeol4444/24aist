@@ -99,7 +99,8 @@ bash scripts/setup_openllm_vtuber.sh
 aist wait-core              # 코어가 뜰 때까지 대기(모델 로딩이 오래 걸릴 때)
 aist doctor                 # 코어 WS / OBS 가 실제로 닿는지 점검
 aist rehearse --minutes 3   # 리허설: 플랫폼·키·OBS 없이 흐름만(가짜 채팅)
-                            #   코어만 띄워두면 됨. 송출/공지 안 나감
+                            #   코어만 띄워두면 됨. 송출/공지 안 나가고,
+                            #   산출물은 data/rehearsal/ 에만 씀(실제 기억 보존)
 aist broadcast-now          # 지금 한 방송(시작 수동, 종료는 자동)
 aist run                    # 스케줄러로 완전 자동 운영
 ```

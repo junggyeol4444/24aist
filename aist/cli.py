@@ -506,6 +506,17 @@ def cmd_rehearse(args) -> int:
     cfg.end_judge.wind_down.end_grace_minutes = 1
     cfg.end_judge.wind_down.closing_wait_sec = 10
 
+    # 리허설은 진짜 기억·리포트를 건드리면 안 된다. 가짜 시청자/후원이
+    # 장기기억에 들어가면 다음 실제 방송 공지에 "저번 방송 땐 N명 왔었고"
+    # 처럼 인용된다. 산출물은 전부 data/rehearsal/ 아래로 보낸다.
+    reh = Path(args.rehearsal_dir)
+    cfg.memory.path = str(reh / "memory")
+    cfg.logging.dir = str(reh / "logs")
+    cfg.logging.reports_dir = str(reh / "reports")
+    cfg.logging.content_dir = str(reh / "content")
+    print(f"  산출물(기억/리포트/트랜스크립트)은 {reh}/ 에만 씁니다 — "
+          "실제 기억은 건드리지 않습니다.")
+
     # 코어 연결만은 진짜여야 의미가 있다.
     from . import preflight
     if not preflight.Need("", "websockets", "websockets", "vtuber", True).installed:
@@ -581,6 +592,8 @@ def build_parser() -> argparse.ArgumentParser:
     p_reh = sub.add_parser("rehearse",
                            help="플랫폼·키·OBS 없이 방송 흐름만 돌려보기(가짜 채팅)")
     p_reh.add_argument("--minutes", type=int, default=3, help="리허설 길이(기본 3분)")
+    p_reh.add_argument("--rehearsal-dir", default="data/rehearsal",
+                       help="리허설 산출물 경로(실제 기억과 분리)")
     p_reh.set_defaults(func=cmd_rehearse)
     p_run = sub.add_parser("run", help="완전 자동 루프(스케줄러)")
     p_run.add_argument("--force", action="store_true",

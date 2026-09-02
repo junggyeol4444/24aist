@@ -61,3 +61,65 @@ def test_rehearsal_needs_no_extra_package():
 
 def test_probe_describes_itself():
     assert "리허설" in asyncio.run(RehearsalChat().probe())
+
+
+def test_rehearse_writes_only_to_rehearsal_dir(monkeypatch, tmp_path):
+    """리허설이 진짜 기억·리포트를 건드리면 안 된다.
+
+    가짜 시청자/후원이 장기기억에 들어가면 다음 실제 방송 공지가
+    "저번 방송 땐 N명 왔었고" 처럼 인용한다.
+    """
+    import argparse
+    from aist import cli
+
+    captured = {}
+
+    class FakeOrch:
+        def __init__(self, cfg, persona):
+            captured["cfg"] = cfg
+
+        async def run_one_now(self):
+            return None
+
+    monkeypatch.setattr("aist.orchestrator.Orchestrator", FakeOrch)
+
+    reh = tmp_path / "reh"
+    cli.cmd_rehearse(argparse.Namespace(
+        config="config/config.example.yaml",
+        persona="config/persona.example.yaml",
+        minutes=1, rehearsal_dir=str(reh),
+    ))
+
+    cfg = captured["cfg"]
+    for path in (cfg.memory.path, cfg.logging.dir,
+                 cfg.logging.reports_dir, cfg.logging.content_dir):
+        assert str(reh) in path, f"실제 경로로 샜다: {path}"
+
+
+def test_rehearse_disables_stream_and_announce(monkeypatch, tmp_path):
+    """송출·공지가 실수로 나가면 안 된다."""
+    import argparse
+    from aist import cli
+
+    captured = {}
+
+    class FakeOrch:
+        def __init__(self, cfg, persona):
+            captured["cfg"] = cfg
+
+        async def run_one_now(self):
+            return None
+
+    monkeypatch.setattr("aist.orchestrator.Orchestrator", FakeOrch)
+    cli.cmd_rehearse(argparse.Namespace(
+        config="config/config.example.yaml",
+        persona="config/persona.example.yaml",
+        minutes=1, rehearsal_dir=str(tmp_path / "reh"),
+    ))
+
+    cfg = captured["cfg"]
+    assert cfg.obs.start_stream is False
+    assert cfg.obs.launch_if_not_running is False
+    assert cfg.announce.discord.enabled is False
+    assert cfg.announce.naver_cafe.enabled is False
+    assert cfg.platform == "rehearsal"
