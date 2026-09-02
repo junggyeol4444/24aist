@@ -445,6 +445,42 @@ def cmd_broadcast_now(args) -> int:
     return 0
 
 
+def cmd_wait_core(args) -> int:
+    """코어(Open-LLM-VTuber)가 뜰 때까지 기다린다.
+
+    코어는 모델 로딩 때문에 뜨는 데 몇 분 걸리기도 한다. 고정 시간만
+    기다렸다가 방송을 시작하면 연결에 실패하고 그 사이클을 통째로
+    날린다(스케줄러면 다음 방송까지 대기). 그래서 실제로 붙을 때까지 본다.
+    """
+    import asyncio as _asyncio
+    cfg, _ = _load(args)
+    cfg.vtuber.connect_timeout_sec = min(cfg.vtuber.connect_timeout_sec, 3)
+    cfg.vtuber.reconnect = False
+
+    async def _try_once() -> bool:
+        from .vtuber_bridge import VTuberBridge
+        b = VTuberBridge(cfg.vtuber)
+        try:
+            await b.connect()
+            await b.close()
+            return True
+        except Exception:
+            return False
+
+    import time
+    deadline = time.monotonic() + args.timeout
+    print(f"코어 대기 중 — {cfg.vtuber.ws_url} (최대 {args.timeout}초)")
+    while True:
+        if _asyncio.run(_try_once()):
+            print("코어 떴습니다.")
+            return 0
+        if time.monotonic() >= deadline:
+            print(f"[오류] {args.timeout}초 안에 코어가 뜨지 않았습니다.")
+            print("       코어실행.bat / run.sh core 가 떠 있는지, 포트가 맞는지 확인하세요.")
+            return 1
+        time.sleep(2)
+
+
 def cmd_rehearse(args) -> int:
     """플랫폼·키·OBS 없이 방송 흐름만 돌려본다.
 
@@ -539,6 +575,9 @@ def build_parser() -> argparse.ArgumentParser:
     p_bn.add_argument("--force", action="store_true",
                       help="패키지가 빠져 있어도 강행(중간에 멈출 수 있음)")
     p_bn.set_defaults(func=cmd_broadcast_now)
+    p_wc = sub.add_parser("wait-core", help="코어가 뜰 때까지 대기(고정 대기 대신)")
+    p_wc.add_argument("--timeout", type=int, default=300, help="최대 대기 초(기본 300)")
+    p_wc.set_defaults(func=cmd_wait_core)
     p_reh = sub.add_parser("rehearse",
                            help="플랫폼·키·OBS 없이 방송 흐름만 돌려보기(가짜 채팅)")
     p_reh.add_argument("--minutes", type=int, default=3, help="리허설 길이(기본 3분)")

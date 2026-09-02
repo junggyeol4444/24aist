@@ -33,6 +33,8 @@ case "$CMD" in
     aist --config config.yaml --persona persona.yaml check || true
     echo "설치 끝. config.yaml / persona.yaml / .env 를 채운 뒤 ./run.sh doctor" ;;
   doctor)  ensure_venv; aist --config config.yaml --persona persona.yaml doctor ;;
+  wait-core) ensure_venv; shift || true
+           aist --config config.yaml --persona persona.yaml wait-core "$@" ;;
   rehearse) ensure_venv; shift || true
            aist --config config.yaml --persona persona.yaml rehearse "$@" ;;
   test)    ensure_venv; aist --config config.yaml --persona persona.yaml broadcast-now ;;
@@ -40,5 +42,5 @@ case "$CMD" in
   report)  ensure_venv; aist --config config.yaml --persona persona.yaml report;
            aist --config config.yaml --persona persona.yaml content ;;
   core)    ( cd Open-LLM-VTuber && { command -v uv >/dev/null && uv run run_server.py || python run_server.py; } ) ;;
-  *) echo "사용: ./run.sh [setup|doctor|rehearse|test|start|report|core]" ;;
+  *) echo "사용: ./run.sh [setup|doctor|wait-core|rehearse|test|start|report|core]" ;;
 esac

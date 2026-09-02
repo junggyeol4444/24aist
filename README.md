@@ -96,6 +96,7 @@ bash scripts/setup_openllm_vtuber.sh
 #   aist build-persona --conf Open-LLM-VTuber/conf.yaml --live2d <모델명>
 
 # 5) 배선 점검 후 한 방송만 수동으로(3·4단계) → 완전 자동(5단계)
+aist wait-core              # 코어가 뜰 때까지 대기(모델 로딩이 오래 걸릴 때)
 aist doctor                 # 코어 WS / OBS 가 실제로 닿는지 점검
 aist rehearse --minutes 3   # 리허설: 플랫폼·키·OBS 없이 흐름만(가짜 채팅)
                             #   코어만 띄워두면 됨. 송출/공지 안 나감
