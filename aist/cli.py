@@ -445,6 +445,49 @@ def cmd_broadcast_now(args) -> int:
     return 0
 
 
+def cmd_rehearse(args) -> int:
+    """플랫폼·키·OBS 없이 방송 흐름만 돌려본다.
+
+    코어(Open-LLM-VTuber)만 떠 있으면 된다. 가짜 채팅을 흘려보내면서
+    여는 인사 → 채팅 반응 → 혼잣말 → 마무리 인사가 실제로 도는지 본다.
+    송출은 하지 않는다(OBS 를 건드리지 않고 공지도 보내지 않는다).
+    """
+    from .orchestrator import Orchestrator
+    cfg, persona = _load(args)
+
+    # 리허설은 '진짜로 나가는 것'을 전부 끈다. 실수로 송출/공지가 나가면 안 된다.
+    cfg.platform = "rehearsal"
+    cfg.platforms = []
+    cfg.obs.start_stream = False
+    cfg.obs.launch_if_not_running = False
+    cfg.announce.discord.enabled = False
+    cfg.announce.naver_cafe.enabled = False
+    cfg.end_judge.min_minutes = 0
+    cfg.end_judge.max_minutes = max(1, args.minutes)
+    # 마무리 단계도 리허설 길이에 맞춰 줄인다. 실제 방송의 기본값(유예 5분,
+    # 여운 45초)을 그대로 쓰면 1분 리허설이 7분 걸린다.
+    cfg.end_judge.end_jitter_min = 0
+    cfg.end_judge.wind_down.end_grace_minutes = 1
+    cfg.end_judge.wind_down.closing_wait_sec = 10
+
+    # 코어 연결만은 진짜여야 의미가 있다.
+    from . import preflight
+    if not preflight.Need("", "websockets", "websockets", "vtuber", True).installed:
+        print("리허설도 코어 연결은 진짜로 합니다 — websockets 가 필요합니다.")
+        print('  pip install -e ".[vtuber]"')
+        return 1
+
+    print(f"리허설 시작 — 약 {args.minutes}분 + 마무리 약 1분. 송출/공지 없음, 가짜 채팅.")
+    print(f"  코어: {cfg.vtuber.ws_url} (먼저 띄워두세요)\n")
+    orch = Orchestrator(cfg, persona)
+    try:
+        asyncio.run(orch.run_one_now())
+    except KeyboardInterrupt:
+        print("\n중단됨")
+    print("\n리허설 끝. 위 흐름이 어색하면 persona.yaml / config.yaml 을 다듬으세요.")
+    return 0
+
+
 def cmd_run(args) -> int:
     from .orchestrator import Orchestrator
     cfg, persona = _load(args)
@@ -496,6 +539,10 @@ def build_parser() -> argparse.ArgumentParser:
     p_bn.add_argument("--force", action="store_true",
                       help="패키지가 빠져 있어도 강행(중간에 멈출 수 있음)")
     p_bn.set_defaults(func=cmd_broadcast_now)
+    p_reh = sub.add_parser("rehearse",
+                           help="플랫폼·키·OBS 없이 방송 흐름만 돌려보기(가짜 채팅)")
+    p_reh.add_argument("--minutes", type=int, default=3, help="리허설 길이(기본 3분)")
+    p_reh.set_defaults(func=cmd_rehearse)
     p_run = sub.add_parser("run", help="완전 자동 루프(스케줄러)")
     p_run.add_argument("--force", action="store_true",
                        help="패키지가 빠져 있어도 강행(중간에 멈출 수 있음)")

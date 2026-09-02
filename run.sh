@@ -2,6 +2,7 @@
 # 리눅스/맥 간편 실행기. 사용:
 #   ./run.sh setup      # 설치 + 설정 파일 준비
 #   ./run.sh doctor     # 배선 점검
+#   ./run.sh rehearse   # 리허설(플랫폼·키·OBS 없이 흐름만)
 #   ./run.sh test       # 지금 한 방송(테스트)
 #   ./run.sh start       # 완전 자동 운영
 #   ./run.sh report      # 리포트 + 컨텐츠 팩
@@ -32,10 +33,12 @@ case "$CMD" in
     aist --config config.yaml --persona persona.yaml check || true
     echo "설치 끝. config.yaml / persona.yaml / .env 를 채운 뒤 ./run.sh doctor" ;;
   doctor)  ensure_venv; aist --config config.yaml --persona persona.yaml doctor ;;
+  rehearse) ensure_venv; shift || true
+           aist --config config.yaml --persona persona.yaml rehearse "$@" ;;
   test)    ensure_venv; aist --config config.yaml --persona persona.yaml broadcast-now ;;
   start)   ensure_venv; aist --config config.yaml --persona persona.yaml run ;;
   report)  ensure_venv; aist --config config.yaml --persona persona.yaml report;
            aist --config config.yaml --persona persona.yaml content ;;
   core)    ( cd Open-LLM-VTuber && { command -v uv >/dev/null && uv run run_server.py || python run_server.py; } ) ;;
-  *) echo "사용: ./run.sh [setup|doctor|test|start|report|core]" ;;
+  *) echo "사용: ./run.sh [setup|doctor|rehearse|test|start|report|core]" ;;
 esac

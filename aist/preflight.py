@@ -49,6 +49,7 @@ def needs(cfg) -> list[Need]:
         "kick": [("websockets", "websockets", "kick"), ("requests", "requests", "kick")],
         "soop": [("websockets", "websockets", "soop"), ("requests", "requests", "soop")],
         "twitcasting": [("requests", "requests", "twitcasting")],
+        "rehearsal": [],   # 가짜 채팅 — 추가 패키지 없음
     }
     for p in cfg.active_platforms():
         for mod, pkg, extra in per_platform.get(p, []):
