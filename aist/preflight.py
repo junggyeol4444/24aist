@@ -140,3 +140,30 @@ def core_conf_ready(root: Path | None = None) -> tuple[bool, str]:
         return False, ("conf.yaml 없음 — bash scripts/setup_openllm_vtuber.sh "
                        "(또는 conf.korean.yaml 을 conf.yaml 로 복사)")
     return False, "conf.yaml 없음 (conf.korean.yaml 도 없음 — 저장소가 온전한지 확인)"
+
+
+# 코어가 실제로 뜨려면 코어 자신의 의존성(fastapi/loguru/tomli ...)도 필요하다.
+# 코어는 보통 uv 로 자기 가상환경에서 돈다 — 그래서 aist 인터프리터에서
+# import 되는지만 봐서는 단정할 수 없다. 둘 다 본다.
+_CORE_MARKERS = ("tomli", "fastapi", "loguru")
+
+
+def core_deps_ready(root: Path | None = None) -> tuple[bool, str]:
+    """코어 의존성이 준비돼 보이는지(확정 아님 — 최종 판단은 doctor 의 WS 연결).
+
+    코어 전용 가상환경(.venv)이 있으면 준비된 것으로 본다. 없으면 현재
+    인터프리터에서 코어의 대표 모듈이 import 되는지 확인한다.
+    """
+    root = root or repo_root()
+    core = root / "Open-LLM-VTuber"
+    if not core.is_dir():
+        return False, "Open-LLM-VTuber/ 디렉터리가 없습니다"
+    if (core / ".venv").is_dir():
+        return True, "코어 전용 .venv 있음"
+    missing_markers = [m for m in _CORE_MARKERS
+                       if Need("", m, m, "", False).installed is False]
+    if not missing_markers:
+        return True, "현재 환경에 설치됨"
+    return False, (f"코어 의존성 미설치({', '.join(missing_markers)} 없음) — "
+                   "bash scripts/setup_openllm_vtuber.sh "
+                   "(또는 cd Open-LLM-VTuber && uv sync)")
