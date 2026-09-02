@@ -122,7 +122,9 @@ def core_frontend_ready(root: Path | None = None) -> tuple[bool, str]:
         return False, "Open-LLM-VTuber/ 디렉터리가 없습니다"
     if (core / "frontend" / "index.html").is_file():
         return True, "받아짐"
-    return False, "프론트엔드(웹UI) 미설치 — scripts/fetch_frontend.sh (윈도우: windows\\프론트엔드받기.bat)"
+    return False, ("프론트엔드(웹UI) 미설치 — scripts/fetch_frontend.sh "
+                   "(윈도우: windows\\프론트엔드받기.bat). 다운로드가 막히면 "
+                   "스크립트가 손으로 받는 방법을 알려줍니다")
 
 
 def core_conf_ready(root: Path | None = None) -> tuple[bool, str]:
