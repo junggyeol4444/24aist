@@ -63,14 +63,16 @@ def test_probe_describes_itself():
     assert "리허설" in asyncio.run(RehearsalChat().probe())
 
 
-def test_rehearse_writes_only_to_rehearsal_dir(monkeypatch, tmp_path):
-    """리허설이 진짜 기억·리포트를 건드리면 안 된다.
+def _run_rehearse(monkeypatch, tmp_path, **overrides):
+    """cmd_rehearse 를 돌리고 orchestrator 에 넘어간 설정을 돌려준다.
 
-    가짜 시청자/후원이 장기기억에 들어가면 다음 실제 방송 공지가
-    "저번 방송 땐 N명 왔었고" 처럼 인용한다.
+    rehearse 는 코어 연결이 진짜라서 websockets 가 없으면 시작 전에
+    멈춘다. 그 판단 자체는 옳지만, 여기서 보려는 건 '설정을 어떻게
+    바꿔서 넘기는가' 라서 설치 여부와 무관하게 통과시킨다.
+    (CI 의 pytest 잡은 옵션 의존성을 깔지 않는다.)
     """
     import argparse
-    from aist import cli
+    from aist import cli, preflight
 
     captured = {}
 
@@ -82,15 +84,28 @@ def test_rehearse_writes_only_to_rehearsal_dir(monkeypatch, tmp_path):
             return None
 
     monkeypatch.setattr("aist.orchestrator.Orchestrator", FakeOrch)
+    monkeypatch.setattr(preflight.Need, "installed",
+                        property(lambda self: True))
 
-    reh = tmp_path / "reh"
-    cli.cmd_rehearse(argparse.Namespace(
+    args = argparse.Namespace(
         config="config/config.example.yaml",
         persona="config/persona.example.yaml",
-        minutes=1, rehearsal_dir=str(reh),
-    ))
+        minutes=1, rehearsal_dir=str(tmp_path / "reh"),
+    )
+    for k, v in overrides.items():
+        setattr(args, k, v)
+    assert cli.cmd_rehearse(args) == 0
+    return captured["cfg"]
 
-    cfg = captured["cfg"]
+
+def test_rehearse_writes_only_to_rehearsal_dir(monkeypatch, tmp_path):
+    """리허설이 진짜 기억·리포트를 건드리면 안 된다.
+
+    가짜 시청자/후원이 장기기억에 들어가면 다음 실제 방송 공지가
+    "저번 방송 땐 N명 왔었고" 처럼 인용한다.
+    """
+    cfg = _run_rehearse(monkeypatch, tmp_path)
+    reh = tmp_path / "reh"
     for path in (cfg.memory.path, cfg.logging.dir,
                  cfg.logging.reports_dir, cfg.logging.content_dir):
         assert str(reh) in path, f"실제 경로로 샜다: {path}"
@@ -98,31 +113,27 @@ def test_rehearse_writes_only_to_rehearsal_dir(monkeypatch, tmp_path):
 
 def test_rehearse_disables_stream_and_announce(monkeypatch, tmp_path):
     """송출·공지가 실수로 나가면 안 된다."""
-    import argparse
-    from aist import cli
-
-    captured = {}
-
-    class FakeOrch:
-        def __init__(self, cfg, persona):
-            captured["cfg"] = cfg
-
-        async def run_one_now(self):
-            return None
-
-    monkeypatch.setattr("aist.orchestrator.Orchestrator", FakeOrch)
-    cli.cmd_rehearse(argparse.Namespace(
-        config="config/config.example.yaml",
-        persona="config/persona.example.yaml",
-        minutes=1, rehearsal_dir=str(tmp_path / "reh"),
-    ))
-
-    cfg = captured["cfg"]
+    cfg = _run_rehearse(monkeypatch, tmp_path)
     assert cfg.obs.start_stream is False
     assert cfg.obs.launch_if_not_running is False
     assert cfg.announce.discord.enabled is False
     assert cfg.announce.naver_cafe.enabled is False
     assert cfg.platform == "rehearsal"
+
+
+def test_rehearse_blocks_without_websockets(monkeypatch, tmp_path):
+    """코어 연결은 진짜라서 websockets 가 없으면 시작 전에 멈춘다."""
+    import argparse
+    from aist import cli, preflight
+
+    monkeypatch.setattr(preflight.Need, "installed",
+                        property(lambda self: False))
+    rc = cli.cmd_rehearse(argparse.Namespace(
+        config="config/config.example.yaml",
+        persona="config/persona.example.yaml",
+        minutes=1, rehearsal_dir=str(tmp_path / "reh"),
+    ))
+    assert rc == 1
 
 
 def test_rehearsal_platform_passes_validation(tmp_path):
