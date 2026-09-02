@@ -1,3 +1,8 @@
+# 주의: 이 파일만 설치하면 방송은 안 된다(오프라인 명령만 동작).
+#       실제 방송하려면: pip install -e ".[vtuber,obs,discord,platforms,naver,llm]"
+#       코어까지 한 번에: ./run.sh setup  (윈도우: windows\설치.bat)
+#       준비됐는지 확인: aist check
+
 # 핵심(필수): 설정/페르소나/스케줄러/종료판단/공지문구 로직
 PyYAML>=6.0
 

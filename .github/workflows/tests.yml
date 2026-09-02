@@ -1,0 +1,61 @@
+name: tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  pytest:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.10", "3.12"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - name: 설치 (핵심 + 테스트)
+        run: |
+          python -m pip install -U pip
+          pip install -e ".[dev]"
+      - name: 테스트
+        run: pytest -q
+
+  # 방송 경로가 실제로 import 되는지 — 옵션 의존성까지 깔고 확인.
+  # "설정은 맞는데 정작 못 도는" 상태를 CI 에서 먼저 잡는다.
+  broadcast-imports:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: 설치 (방송 기능 포함)
+        run: |
+          python -m pip install -U pip
+          pip install -e ".[vtuber,obs,discord,platforms,naver,llm,dev]"
+      - name: 방송 경로 import
+        run: |
+          python -c "
+          from aist.orchestrator import Orchestrator
+          from aist.vtuber_bridge import VTuberBridge
+          from aist.obs_control import ObsController
+          from aist.chat.factory import make_chat_source
+          print('방송 경로 import OK')
+          "
+      - name: preflight 가 패키지를 다 만족한다고 보는지
+        run: |
+          cp config/config.example.yaml config.yaml
+          cp config/persona.example.yaml persona.yaml
+          python -c "
+          from aist import preflight
+          from aist.config import load_config
+          miss = [n.package for n in preflight.missing(load_config('config.yaml'))]
+          assert not miss, f'설치했는데도 빠졌다고 나옴: {miss}'
+          print('preflight 패키지 판정 OK')
+          "
+      - name: 테스트
+        run: pytest -q

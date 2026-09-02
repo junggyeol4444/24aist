@@ -188,6 +188,9 @@ class AnnounceConfig:
 # 동출(동시 송출)이면 platforms 에 여러 개를 넣고, 각 플랫폼 식별자를 채운다.
 # --------------------------------------------------------------------------- #
 VALID_PLATFORMS = ("twitch", "youtube", "chzzk", "soop", "kick", "twitcasting")
+# 리허설용 가짜 채팅(aist rehearse). 실제 송출 플랫폼이 아니라서 위 목록과
+# 나눠 두지만, 설정에 직접 적어도 되게 검증은 통과시킨다.
+REHEARSAL_PLATFORM = "rehearsal"
 
 
 @dataclass
@@ -439,10 +442,11 @@ def load_config(path: Union[str, Path]) -> Config:
 
 def _validate(cfg: Config) -> None:
     valid = "|".join(VALID_PLATFORMS)
+    allowed = VALID_PLATFORMS + (REHEARSAL_PLATFORM,)
     # 동출이면 platforms 를, 아니면 단일 platform 을 검증.
     targets = cfg.platforms if cfg.platforms else [cfg.platform]
     for p in targets:
-        if p not in VALID_PLATFORMS:
+        if p not in allowed:
             raise ConfigError(f"플랫폼은 {valid} 중 하나여야 합니다: {p!r}")
     ej = cfg.end_judge
     if ej.min_minutes > ej.max_minutes:

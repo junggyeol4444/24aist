@@ -139,6 +139,7 @@ def cmd_check(args) -> int:
     miss = preflight.missing(cfg)
     fe_ok, fe_msg = preflight.core_frontend_ready()
     conf_ok, conf_msg = preflight.core_conf_ready()
+    deps_ok, deps_msg = preflight.core_deps_ready()
     blockers = [n for n in miss if n.blocking]
 
     print("\n  실행 준비 상태:")
@@ -150,9 +151,10 @@ def cmd_check(args) -> int:
             print(f"    {tag} {n.package:<22} 없음 → {n.feature}")
     print(f"    코어 웹UI      : {'OK' if fe_ok else '[X] ' + fe_msg}")
     print(f"    코어 conf.yaml : {'OK' if conf_ok else '[X] ' + conf_msg}")
+    print(f"    코어 의존성    : {'OK (' + deps_msg + ')' if deps_ok else '[X] ' + deps_msg}")
 
     print()
-    if blockers or not fe_ok or not conf_ok:
+    if blockers or not fe_ok or not conf_ok or not deps_ok:
         print("지금 상태로는 방송이 안 됩니다. 아래를 먼저 해결하세요:")
         if blockers:
             print(f"  - 패키지 설치: {preflight.install_hint(miss)}")
@@ -161,6 +163,9 @@ def cmd_check(args) -> int:
                   "  (윈도우: windows\\프론트엔드받기.bat)")
         if not conf_ok:
             print("  - 코어 설정 만들기: bash scripts/setup_openllm_vtuber.sh")
+        if not deps_ok:
+            print("  - 코어 의존성 설치: cd Open-LLM-VTuber && uv sync"
+                  "  (uv 없으면 pip install -r requirements.txt)")
         print("  ( 한 번에: ./run.sh setup  /  윈도우: windows\\설치.bat )")
         return 1
     if miss:
@@ -240,6 +245,10 @@ def cmd_doctor(args) -> int:
     if not conf_ok:
         ok = False
         print(f"  [X] 코어 설정: {conf_msg}\n")
+    deps_ok, deps_msg = preflight.core_deps_ready()
+    if not deps_ok:
+        ok = False
+        print(f"  [X] 코어 의존성: {deps_msg}\n")
 
     # 1) 코어 WebSocket (점검은 빠르게 1회만 시도)
     cfg.vtuber.connect_timeout_sec = min(cfg.vtuber.connect_timeout_sec, 3)
@@ -436,6 +445,96 @@ def cmd_broadcast_now(args) -> int:
     return 0
 
 
+def cmd_wait_core(args) -> int:
+    """코어(Open-LLM-VTuber)가 뜰 때까지 기다린다.
+
+    코어는 모델 로딩 때문에 뜨는 데 몇 분 걸리기도 한다. 고정 시간만
+    기다렸다가 방송을 시작하면 연결에 실패하고 그 사이클을 통째로
+    날린다(스케줄러면 다음 방송까지 대기). 그래서 실제로 붙을 때까지 본다.
+    """
+    import asyncio as _asyncio
+    cfg, _ = _load(args)
+    cfg.vtuber.connect_timeout_sec = min(cfg.vtuber.connect_timeout_sec, 3)
+    cfg.vtuber.reconnect = False
+
+    async def _try_once() -> bool:
+        from .vtuber_bridge import VTuberBridge
+        b = VTuberBridge(cfg.vtuber)
+        try:
+            await b.connect()
+            await b.close()
+            return True
+        except Exception:
+            return False
+
+    import time
+    deadline = time.monotonic() + args.timeout
+    print(f"코어 대기 중 — {cfg.vtuber.ws_url} (최대 {args.timeout}초)")
+    while True:
+        if _asyncio.run(_try_once()):
+            print("코어 떴습니다.")
+            return 0
+        if time.monotonic() >= deadline:
+            print(f"[오류] {args.timeout}초 안에 코어가 뜨지 않았습니다.")
+            print("       코어실행.bat / run.sh core 가 떠 있는지, 포트가 맞는지 확인하세요.")
+            return 1
+        time.sleep(2)
+
+
+def cmd_rehearse(args) -> int:
+    """플랫폼·키·OBS 없이 방송 흐름만 돌려본다.
+
+    코어(Open-LLM-VTuber)만 떠 있으면 된다. 가짜 채팅을 흘려보내면서
+    여는 인사 → 채팅 반응 → 혼잣말 → 마무리 인사가 실제로 도는지 본다.
+    송출은 하지 않는다(OBS 를 건드리지 않고 공지도 보내지 않는다).
+    """
+    from .orchestrator import Orchestrator
+    cfg, persona = _load(args)
+
+    # 리허설은 '진짜로 나가는 것'을 전부 끈다. 실수로 송출/공지가 나가면 안 된다.
+    cfg.platform = "rehearsal"
+    cfg.platforms = []
+    cfg.obs.start_stream = False
+    cfg.obs.launch_if_not_running = False
+    cfg.announce.discord.enabled = False
+    cfg.announce.naver_cafe.enabled = False
+    cfg.end_judge.min_minutes = 0
+    cfg.end_judge.max_minutes = max(1, args.minutes)
+    # 마무리 단계도 리허설 길이에 맞춰 줄인다. 실제 방송의 기본값(유예 5분,
+    # 여운 45초)을 그대로 쓰면 1분 리허설이 7분 걸린다.
+    cfg.end_judge.end_jitter_min = 0
+    cfg.end_judge.wind_down.end_grace_minutes = 1
+    cfg.end_judge.wind_down.closing_wait_sec = 10
+
+    # 리허설은 진짜 기억·리포트를 건드리면 안 된다. 가짜 시청자/후원이
+    # 장기기억에 들어가면 다음 실제 방송 공지에 "저번 방송 땐 N명 왔었고"
+    # 처럼 인용된다. 산출물은 전부 data/rehearsal/ 아래로 보낸다.
+    reh = Path(args.rehearsal_dir)
+    cfg.memory.path = str(reh / "memory")
+    cfg.logging.dir = str(reh / "logs")
+    cfg.logging.reports_dir = str(reh / "reports")
+    cfg.logging.content_dir = str(reh / "content")
+    print(f"  산출물(기억/리포트/트랜스크립트)은 {reh}/ 에만 씁니다 — "
+          "실제 기억은 건드리지 않습니다.")
+
+    # 코어 연결만은 진짜여야 의미가 있다.
+    from . import preflight
+    if not preflight.Need("", "websockets", "websockets", "vtuber", True).installed:
+        print("리허설도 코어 연결은 진짜로 합니다 — websockets 가 필요합니다.")
+        print('  pip install -e ".[vtuber]"')
+        return 1
+
+    print(f"리허설 시작 — 약 {args.minutes}분 + 마무리 약 1분. 송출/공지 없음, 가짜 채팅.")
+    print(f"  코어: {cfg.vtuber.ws_url} (먼저 띄워두세요)\n")
+    orch = Orchestrator(cfg, persona)
+    try:
+        asyncio.run(orch.run_one_now())
+    except KeyboardInterrupt:
+        print("\n중단됨")
+    print("\n리허설 끝. 위 흐름이 어색하면 persona.yaml / config.yaml 을 다듬으세요.")
+    return 0
+
+
 def cmd_run(args) -> int:
     from .orchestrator import Orchestrator
     cfg, persona = _load(args)
@@ -487,6 +586,15 @@ def build_parser() -> argparse.ArgumentParser:
     p_bn.add_argument("--force", action="store_true",
                       help="패키지가 빠져 있어도 강행(중간에 멈출 수 있음)")
     p_bn.set_defaults(func=cmd_broadcast_now)
+    p_wc = sub.add_parser("wait-core", help="코어가 뜰 때까지 대기(고정 대기 대신)")
+    p_wc.add_argument("--timeout", type=int, default=300, help="최대 대기 초(기본 300)")
+    p_wc.set_defaults(func=cmd_wait_core)
+    p_reh = sub.add_parser("rehearse",
+                           help="플랫폼·키·OBS 없이 방송 흐름만 돌려보기(가짜 채팅)")
+    p_reh.add_argument("--minutes", type=int, default=3, help="리허설 길이(기본 3분)")
+    p_reh.add_argument("--rehearsal-dir", default="data/rehearsal",
+                       help="리허설 산출물 경로(실제 기억과 분리)")
+    p_reh.set_defaults(func=cmd_rehearse)
     p_run = sub.add_parser("run", help="완전 자동 루프(스케줄러)")
     p_run.add_argument("--force", action="store_true",
                        help="패키지가 빠져 있어도 강행(중간에 멈출 수 있음)")

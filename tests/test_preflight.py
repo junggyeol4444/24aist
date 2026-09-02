@@ -112,3 +112,17 @@ def test_core_conf_ready_when_present(tmp_path):
     (core / "conf.yaml").write_text("x", encoding="utf-8")
     ok, _ = preflight.core_conf_ready(tmp_path)
     assert ok is True
+
+
+def test_core_deps_reported_when_missing(tmp_path):
+    """코어 의존성이 없으면 '준비됨'이라고 하면 안 된다."""
+    core = tmp_path / "Open-LLM-VTuber"
+    core.mkdir()
+    ok, msg = preflight.core_deps_ready(tmp_path)
+    if not ok:
+        assert "코어 의존성 미설치" in msg
+
+    # 코어 전용 .venv 가 있으면 준비된 것으로 본다(uv 로 따로 도는 경우).
+    (core / ".venv").mkdir()
+    ok2, msg2 = preflight.core_deps_ready(tmp_path)
+    assert ok2 is True and ".venv" in msg2

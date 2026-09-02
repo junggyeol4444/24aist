@@ -9,11 +9,16 @@ echo ============================================
 echo [1] 방송 코어를 새 창에서 시작...
 start "Open-LLM-VTuber Core" cmd /c "%~dp0코어실행.bat"
 
-echo [2] 코어가 뜰 때까지 20초 대기...
-timeout /t 20 >nul
+echo [2] 코어가 뜰 때까지 대기(모델 로딩 때문에 몇 분 걸리기도 합니다)...
+call ".venv\Scripts\activate.bat"
+aist --config config.yaml --persona persona.yaml wait-core --timeout 300
+if errorlevel 1 (
+  echo.
+  echo 코어가 안 떴습니다. 새로 열린 코어 창의 오류를 확인하세요.
+  pause & exit /b 1
+)
 
 echo [3] AI 방송인 자동 운영 시작...
-call ".venv\Scripts\activate.bat"
 aist --config config.yaml --persona persona.yaml run
 
 echo.

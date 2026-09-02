@@ -12,6 +12,10 @@ from .base import ChatSource
 def make_single_source(platform: str, cfg: Config) -> ChatSource:
     s = cfg.secrets
     c = cfg.chat
+    # 리허설: 플랫폼·키 없이 방송 루프를 돌려보는 용도(aist rehearse).
+    if platform == "rehearsal":
+        from .rehearsal import RehearsalChat
+        return RehearsalChat()
     if platform == "twitch":
         from .twitch import TwitchChat
         return TwitchChat(
