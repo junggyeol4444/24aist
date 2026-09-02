@@ -123,3 +123,34 @@ def test_rehearse_disables_stream_and_announce(monkeypatch, tmp_path):
     assert cfg.announce.discord.enabled is False
     assert cfg.announce.naver_cafe.enabled is False
     assert cfg.platform == "rehearsal"
+
+
+def test_rehearsal_platform_passes_validation(tmp_path):
+    """factory 가 받는 플랫폼을 설정 검증이 거부하면 안 된다.
+
+    cmd_rehearse 는 로드 뒤에 platform 을 바꾸므로 이 불일치가 가려져
+    있었다. config.yaml 에 직접 적으면 ConfigError 로 죽었다.
+    """
+    import textwrap
+    from aist.config import load_config
+
+    p = tmp_path / "config.yaml"
+    p.write_text(textwrap.dedent("""
+        platform: rehearsal
+    """), encoding="utf-8")
+    cfg = load_config(str(p))
+    assert cfg.platform == "rehearsal"
+    assert cfg.active_platforms() == ["rehearsal"]
+
+
+def test_unknown_platform_still_rejected(tmp_path):
+    import textwrap
+    import pytest as _pytest
+    from aist.config import ConfigError, load_config
+
+    p = tmp_path / "config.yaml"
+    p.write_text(textwrap.dedent("""
+        platform: 없는플랫폼
+    """), encoding="utf-8")
+    with _pytest.raises(ConfigError):
+        load_config(str(p))
