@@ -608,7 +608,29 @@ def build_parser() -> argparse.ArgumentParser:
     return p
 
 
+def _fix_output_encoding() -> None:
+    """출력이 콘솔이 아닐 때 한글/기호에서 죽지 않게 한다.
+
+    윈도우에서 stdout 이 콘솔이면 파이썬이 유니코드 API 로 쓰지만,
+    파일이나 파이프로 리다이렉트되면 로케일 인코딩(한국어 윈도우는
+    cp949)을 쓴다. 그런데 우리가 안내문에 쓰는 em dash 는 cp949 에 없다:
+
+        UnicodeEncodeError: 'cp949' codec can't encode character '\u2014'
+
+    무인 운영은 콘솔 없이 도는 자리라 정확히 이 조건이다. 배치들이 이미
+    chcp 65001 로 UTF-8 을 쓰므로 여기서도 UTF-8 로 맞추고, 그래도 못 쓰는
+    문자가 있으면 죽는 대신 대체한다.
+    """
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(encoding="utf-8", errors="replace")
+        except (AttributeError, ValueError, OSError):
+            # 테스트의 캡처 스트림 등 reconfigure 를 지원하지 않는 경우.
+            pass
+
+
 def main(argv=None) -> int:
+    _fix_output_encoding()
     argv = argv if argv is not None else sys.argv[1:]
     parser = build_parser()
     args = parser.parse_args(argv)
