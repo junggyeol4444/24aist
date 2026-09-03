@@ -207,3 +207,26 @@ def test_bat_declares_utf8_codepage(name):
     """한글을 출력하려면 chcp 65001 이 있어야 한다."""
     text = (WINDOWS_DIR / name).read_bytes().decode("utf-8")
     assert "chcp 65001" in text, f"windows/{name} 에 chcp 65001 이 없다"
+
+
+def test_frontend_fetch_has_fallback_without_curl_and_tar():
+    """curl 과 tar 는 윈도우 10 1803 이상에만 있다.
+
+    그 이하(윈도우 7/8.1, 초기 10)에서는 둘 다 없어서 웹UI 를 아예
+    못 받았다. PowerShell 은 윈도우 7 부터 있으니 그걸로 받을 길을
+    남겨둔다. PowerShell 의 Expand-Archive 는 zip 만 풀 수 있어서
+    tar.gz 가 아니라 zip 주소를 쓴다.
+    """
+    text = _text("프론트엔드받기.bat")
+    assert "powershell" in text.lower(), "curl/tar 가 없을 때의 대안이 없다"
+    assert "Invoke-WebRequest" in text, "PowerShell 다운로드가 없다"
+    assert "Expand-Archive" in text, "PowerShell 압축 해제가 없다"
+    assert ".zip" in text, "Expand-Archive 는 zip 만 푼다 — zip 주소가 필요하다"
+
+
+def test_frontend_fetch_still_prefers_curl():
+    """빠른 경로(curl+tar)는 남아 있어야 한다. PowerShell 은 느리다."""
+    text = _text("프론트엔드받기.bat")
+    assert "where curl" in text and "where tar" in text
+    assert text.index("where curl") < text.lower().index("invoke-webrequest"), \
+        "PowerShell 을 먼저 시도한다"
