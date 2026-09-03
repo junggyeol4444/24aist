@@ -117,3 +117,48 @@ def test_windows_installer_prepares_core():
     """설치.bat 이 코어 준비까지 해야 한다(리눅스 run.sh setup 과 동등)."""
     text = (WINDOWS_DIR / "설치.bat").read_bytes().decode("utf-8")
     assert "코어준비.bat" in text, "설치.bat 이 코어를 준비하지 않는다"
+
+
+# --- 무인 운영에서만 드러나는 것들 ------------------------------------
+# 작업 스케줄러로 도는 무인 상태에는 사람도, 콘솔 입력도 없다.
+# 사람이 보는 창에서는 멀쩡한 명령이 거기서는 조용히 무너진다.
+
+def _text(name: str) -> str:
+    return (WINDOWS_DIR / name).read_bytes().decode("utf-8")
+
+
+def test_unattended_delay_does_not_depend_on_timeout_alone():
+    """timeout 은 stdin 이 리다이렉트되면 즉시 빠진다.
+
+        ERROR: Input redirection is not supported, exiting the process immediately.
+
+    무인 상태가 정확히 그 조건이다. timeout 만 믿으면 재시작 대기가
+    통째로 사라지고 루프가 전속력으로 돈다. 폴백이 있어야 한다.
+    """
+    text = _text("무인운영.bat")
+    assert ":sleep" in text, "대기 서브루틴이 없다"
+    assert "ping" in text, "timeout 이 실패했을 때 쓸 폴백이 없다"
+
+
+def test_unattended_launches_core_without_pause():
+    """무인 상태에서 코어 창이 pause 로 서 있으면 재시작마다 창이 쌓인다."""
+    launch = [ln for ln in _text("무인운영.bat").splitlines()
+              if "코어실행.bat" in ln and ln.strip().startswith("start")]
+    assert launch, "코어를 띄우는 줄이 없다"
+    assert all("nopause" in ln for ln in launch), \
+        f"코어를 nopause 없이 띄운다: {launch}"
+
+
+def test_core_launcher_guards_every_pause():
+    """코어실행.bat 의 pause 는 전부 NOPAUSE 를 확인해야 한다.
+
+    가드 분기(웹UI 없음)의 pause 를 빠뜨리면 거기서 영영 멈춘다 —
+    실제로 처음엔 마지막 pause 만 고쳐서 이 경로가 남아 있었다.
+    """
+    for line in _text("코어실행.bat").splitlines():
+        stripped = line.strip()
+        if "pause" not in stripped.lower():
+            continue
+        if stripped.startswith("REM") or "nopause" in stripped.lower():
+            continue
+        assert "NOPAUSE" in stripped, f"무방비 pause: {stripped!r}"

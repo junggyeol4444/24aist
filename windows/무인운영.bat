@@ -36,7 +36,7 @@ REM 코어가 이미 떠 있으면 또 띄우지 않는다.
 aist --config config.yaml --persona persona.yaml wait-core --timeout 5 >nul 2>nul
 if errorlevel 1 (
   echo   방송 코어 시작...
-  start "Open-LLM-VTuber Core" cmd /c "%~dp0코어실행.bat"
+  start "Open-LLM-VTuber Core" cmd /c "%~dp0코어실행.bat" nopause
 ) else (
   echo   방송 코어 이미 떠 있음
 )
@@ -45,7 +45,7 @@ echo   코어 준비 대기...
 aist --config config.yaml --persona persona.yaml wait-core --timeout 600
 if errorlevel 1 (
   echo   [경고] 코어가 안 떴습니다. %RESTART_WAIT%초 뒤 다시 시도합니다.
-  timeout /t %RESTART_WAIT% /nobreak >nul
+  call :sleep %RESTART_WAIT%
   goto loop
 )
 
@@ -54,5 +54,20 @@ aist --config config.yaml --persona persona.yaml run
 
 echo.
 echo ==== [%date% %time%] 운영이 멈췄습니다. %RESTART_WAIT%초 뒤 재시작 ====
-timeout /t %RESTART_WAIT% /nobreak >nul
+call :sleep %RESTART_WAIT%
 goto loop
+
+REM --------------------------------------------------------------
+REM  %1 초 대기.
+REM  timeout 은 stdin 이 리다이렉트돼 있으면
+REM      ERROR: Input redirection is not supported
+REM  로 즉시 빠져나온다. 작업 스케줄러로 도는 무인 상태가 바로 그 조건이라
+REM  대기가 통째로 사라지고 재시작 루프가 전속력으로 돈다.
+REM  그래서 timeout 을 먼저 시도하되, 실패하면 ping 으로 잰다(어디서나 된다).
+REM --------------------------------------------------------------
+:sleep
+timeout /t %~1 /nobreak >nul 2>nul
+if not errorlevel 1 exit /b 0
+set /a _PINGS=%~1+1
+ping -n %_PINGS% 127.0.0.1 >nul 2>nul
+exit /b 0
