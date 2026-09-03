@@ -140,6 +140,7 @@ def cmd_check(args) -> int:
     fe_ok, fe_msg = preflight.core_frontend_ready()
     conf_ok, conf_msg = preflight.core_conf_ready()
     deps_ok, deps_msg = preflight.core_deps_ready()
+    py_ok, py_msg = preflight.core_python_ok()
     blockers = [n for n in miss if n.blocking]
 
     print("\n  실행 준비 상태:")
@@ -152,9 +153,10 @@ def cmd_check(args) -> int:
     print(f"    코어 웹UI      : {'OK' if fe_ok else '[X] ' + fe_msg}")
     print(f"    코어 conf.yaml : {'OK' if conf_ok else '[X] ' + conf_msg}")
     print(f"    코어 의존성    : {'OK (' + deps_msg + ')' if deps_ok else '[X] ' + deps_msg}")
+    print(f"    파이썬 버전    : {'OK ' + py_msg if py_ok else '[X] ' + py_msg}")
 
     print()
-    if blockers or not fe_ok or not conf_ok or not deps_ok:
+    if blockers or not fe_ok or not conf_ok or not deps_ok or not py_ok:
         print("지금 상태로는 방송이 안 됩니다. 아래를 먼저 해결하세요:")
         if blockers:
             print(f"  - 패키지 설치: {preflight.install_hint(miss)}")
@@ -163,6 +165,9 @@ def cmd_check(args) -> int:
         if not conf_ok or not deps_ok:
             what = "설정" if conf_ok else "설정·의존성"
             print(f"  - 코어 {what} 준비: {preflight.hint(*preflight.CMD_CORE_SETUP)}")
+        if not py_ok:
+            print("  - 파이썬 버전 맞추기: 위 안내대로 다시 설치 후 .venv 를 지우고"
+                  f" {preflight.hint(*preflight.CMD_SETUP_ALL)}")
         print(f"  ( 한 번에: {preflight.hint(*preflight.CMD_SETUP_ALL)} )")
         return 1
     if miss:
@@ -246,6 +251,10 @@ def cmd_doctor(args) -> int:
     if not deps_ok:
         ok = False
         print(f"  [X] 코어 의존성: {deps_msg}\n")
+    py_ok, py_msg = preflight.core_python_ok()
+    if not py_ok:
+        ok = False
+        print(f"  [X] 파이썬 버전: {py_msg}\n")
 
     # 1) 코어 WebSocket (점검은 빠르게 1회만 시도)
     cfg.vtuber.connect_timeout_sec = min(cfg.vtuber.connect_timeout_sec, 3)

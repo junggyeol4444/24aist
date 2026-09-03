@@ -126,3 +126,22 @@ def test_core_deps_reported_when_missing(tmp_path):
     (core / ".venv").mkdir()
     ok2, msg2 = preflight.core_deps_ready(tmp_path)
     assert ok2 is True and ".venv" in msg2
+
+
+def test_core_python_range_is_checked(monkeypatch):
+    """코어가 지원하지 않는 파이썬이면 '준비됨'이라고 하면 안 된다."""
+    import types
+    for ver, expect_ok in [((3, 12), True), ((3, 11), True),
+                           ((3, 13), False), ((3, 14), False), ((3, 9), False)]:
+        monkeypatch.setattr(preflight, "sys",
+                            types.SimpleNamespace(version_info=ver))
+        ok, msg = preflight.core_python_ok()
+        assert ok is expect_ok, f"{ver}: {msg}"
+        if not ok:
+            assert "코어" in msg
+
+
+def test_core_python_ok_when_core_absent(monkeypatch, tmp_path):
+    """코어 pyproject 가 없으면 막지 않는다(판단 근거가 없다)."""
+    ok, msg = preflight.core_python_ok(tmp_path)
+    assert ok is True

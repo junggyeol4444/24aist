@@ -230,3 +230,16 @@ def test_frontend_fetch_still_prefers_curl():
     assert "where curl" in text and "where tar" in text
     assert text.index("where curl") < text.lower().index("invoke-webrequest"), \
         "PowerShell 을 먼저 시도한다"
+
+
+def test_installer_checks_python_version():
+    """코어는 파이썬 3.10~3.12 만 지원한다(Open-LLM-VTuber/pyproject.toml).
+
+    python.org 에서 '최신'을 받으면 그 범위 밖이다. aist 는 >=3.10 이라
+    깔리고, 코어 설치만 실패한다 — 왜 실패했는지 알기 어려운 자리라
+    설치 첫 단계에서 막아야 한다.
+    """
+    text = _text("설치.bat")
+    assert "PYMIN" in text, "파이썬 버전을 파싱하지 않는다"
+    assert "GEQ 13" in text, "3.13 이상을 막지 않는다"
+    assert "LSS 10" in text, "3.10 미만을 막지 않는다"
