@@ -186,3 +186,24 @@ def test_autostart_has_no_stdin_prompt():
         if stripped.startswith("REM"):
             continue
         assert not stripped.lower().startswith("choice "), f"입력을 기다린다: {stripped!r}"
+
+
+@pytest.mark.parametrize("name", [p.name for p in WINDOWS_DIR.glob("*.bat")])
+def test_bat_has_no_utf8_bom(name):
+    """UTF-8 BOM 이 붙으면 cmd 가 첫 줄을 못 읽는다.
+
+    BOM 이 '@echo off' 앞에 들어가면 cmd 는 그 줄을 명령으로 못 알아보고
+    "is not recognized as an internal or external command" 로 죽는다.
+    한글이 들어간 배치라 편집기가 BOM 을 붙이기 쉽다.
+    """
+    raw = (WINDOWS_DIR / name).read_bytes()
+    assert not raw.startswith(b"\xef\xbb\xbf"), f"windows/{name} 에 UTF-8 BOM 이 있다"
+    assert raw.lstrip().lower().startswith(b"@echo off"), \
+        f"windows/{name} 첫 줄이 @echo off 가 아니다"
+
+
+@pytest.mark.parametrize("name", [p.name for p in WINDOWS_DIR.glob("*.bat")])
+def test_bat_declares_utf8_codepage(name):
+    """한글을 출력하려면 chcp 65001 이 있어야 한다."""
+    text = (WINDOWS_DIR / name).read_bytes().decode("utf-8")
+    assert "chcp 65001" in text, f"windows/{name} 에 chcp 65001 이 없다"
