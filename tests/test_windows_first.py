@@ -162,3 +162,27 @@ def test_core_launcher_guards_every_pause():
         if stripped.startswith("REM") or "nopause" in stripped.lower():
             continue
         assert "NOPAUSE" in stripped, f"무방비 pause: {stripped!r}"
+
+
+def test_autostart_does_not_require_admin():
+    """/rl highest 는 관리자 권한이 있어야 등록된다.
+
+    코어도 aist 도 승격이 필요 없는데 이걸 붙이면 일반 사용자는
+    등록 자체가 거부된다.
+    """
+    cmds = [ln.strip() for ln in _text("자동시작등록.bat").splitlines()
+            if not ln.strip().startswith("REM")]
+    create = [ln for ln in cmds if ln.startswith("schtasks /create")]
+    assert create, "등록 명령이 없다"
+    for ln in create:
+        assert "/rl highest" not in ln, f"불필요하게 관리자 권한을 요구한다: {ln!r}"
+        assert "/f" in ln, f"덮어쓰기 플래그가 없다: {ln!r}"
+
+
+def test_autostart_has_no_stdin_prompt():
+    """choice 는 콘솔 입력이 필요하다. /f 가 이미 덮어쓰므로 물을 이유가 없다."""
+    for line in _text("자동시작등록.bat").splitlines():
+        stripped = line.strip()
+        if stripped.startswith("REM"):
+            continue
+        assert not stripped.lower().startswith("choice "), f"입력을 기다린다: {stripped!r}"
