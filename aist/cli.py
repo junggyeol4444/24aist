@@ -159,14 +159,11 @@ def cmd_check(args) -> int:
         if blockers:
             print(f"  - 패키지 설치: {preflight.install_hint(miss)}")
         if not fe_ok:
-            print("  - 코어 웹UI 받기: ./scripts/fetch_frontend.sh"
-                  "  (윈도우: windows\\프론트엔드받기.bat)")
-        if not conf_ok:
-            print("  - 코어 설정 만들기: bash scripts/setup_openllm_vtuber.sh")
-        if not deps_ok:
-            print("  - 코어 의존성 설치: cd Open-LLM-VTuber && uv sync"
-                  "  (uv 없으면 pip install -r requirements.txt)")
-        print("  ( 한 번에: ./run.sh setup  /  윈도우: windows\\설치.bat )")
+            print(f"  - 코어 웹UI 받기: {preflight.hint(*preflight.CMD_FRONTEND)}")
+        if not conf_ok or not deps_ok:
+            what = "설정" if conf_ok else "설정·의존성"
+            print(f"  - 코어 {what} 준비: {preflight.hint(*preflight.CMD_CORE_SETUP)}")
+        print(f"  ( 한 번에: {preflight.hint(*preflight.CMD_SETUP_ALL)} )")
         return 1
     if miss:
         print("방송은 가능하지만 일부 기능이 꺼진 채 돕니다([!] 항목).")
