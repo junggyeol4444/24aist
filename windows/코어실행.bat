@@ -10,16 +10,22 @@ if not exist "conf.yaml" (
   )
 )
 if not exist "frontend\index.html" (
-  echo [안내] 프론트엔드(웹UI)가 없습니다. 저장소 루트에서
-  echo        scripts\fetch_frontend.sh 로 먼저 받으세요.
+  echo [안내] 웹UI(화면)가 없습니다. windows\코어준비.bat 을 먼저 실행하세요.
+  echo        ^(웹UI + 코어 의존성 + conf.yaml 을 한 번에 준비합니다^)
+  pause & exit /b 1
 )
 
 where uv >nul 2>nul
 if %errorlevel%==0 (
   uv run run_server.py
 ) else (
-  echo uv 가 없어 python 으로 실행합니다. 의존성 미설치면 실패할 수 있어요.
-  echo   ( 권장: https://docs.astral.sh/uv/ 설치 후 uv sync )
+  echo uv 가 없어 python 으로 실행합니다.
+  if exist "..\.venv\Scripts\activate.bat" call "..\.venv\Scripts\activate.bat"
   python run_server.py
+  if errorlevel 1 (
+    echo.
+    echo [오류] 코어가 뜨지 않았습니다. 의존성이 안 깔렸을 수 있습니다.
+    echo        windows\코어준비.bat 을 실행한 뒤 다시 시도하세요.
+  )
 )
 pause

@@ -8,9 +8,27 @@ obsws-python 이 없어서 방송이 시작 즉시 중단되는 상태를 '준�
 네트워크 없이 동작한다. import 가능 여부만 보고, 실제 연결은 `doctor` 몫.
 """
 
+import os
 from dataclasses import dataclass
 from importlib import util as _importlib_util
 from pathlib import Path
+
+
+# 이 프로젝트의 주 사용 환경은 윈도우다(README 도 윈도우가 먼저). 그래서
+# 안내 문구는 윈도우 기준으로 내보내고, 리눅스/맥이면 셸 명령으로 바꾼다.
+# 윈도우 사용자에게 `bash ...` 나 `./x.sh` 를 보여주면 그대로 막힌다.
+IS_WINDOWS = os.name == "nt"
+
+
+def hint(win: str, posix: str) -> str:
+    """지금 OS 에서 실제로 칠 수 있는 명령을 돌려준다."""
+    return win if IS_WINDOWS else posix
+
+
+# 각 준비 항목을 해결하는 명령 (윈도우 / 리눅스·맥)
+CMD_SETUP_ALL = (r"windows\설치.bat 더블클릭", "./run.sh setup")
+CMD_FRONTEND = (r"windows\프론트엔드받기.bat 더블클릭", "./scripts/fetch_frontend.sh")
+CMD_CORE_SETUP = (r"windows\코어준비.bat 더블클릭", "bash scripts/setup_openllm_vtuber.sh")
 
 
 @dataclass
@@ -122,9 +140,8 @@ def core_frontend_ready(root: Path | None = None) -> tuple[bool, str]:
         return False, "Open-LLM-VTuber/ 디렉터리가 없습니다"
     if (core / "frontend" / "index.html").is_file():
         return True, "받아짐"
-    return False, ("프론트엔드(웹UI) 미설치 — scripts/fetch_frontend.sh "
-                   "(윈도우: windows\\프론트엔드받기.bat). 다운로드가 막히면 "
-                   "스크립트가 손으로 받는 방법을 알려줍니다")
+    return False, ("프론트엔드(웹UI) 미설치 — " + hint(*CMD_FRONTEND) +
+                   ". 다운로드가 막히면 손으로 받는 방법을 알려줍니다")
 
 
 def core_conf_ready(root: Path | None = None) -> tuple[bool, str]:
@@ -140,8 +157,8 @@ def core_conf_ready(root: Path | None = None) -> tuple[bool, str]:
     if (core / "conf.yaml").is_file():
         return True, "있음"
     if (core / "conf.korean.yaml").is_file():
-        return False, ("conf.yaml 없음 — bash scripts/setup_openllm_vtuber.sh "
-                       "(또는 conf.korean.yaml 을 conf.yaml 로 복사)")
+        return False, ("conf.yaml 없음 — " + hint(*CMD_CORE_SETUP) +
+                       " (또는 conf.korean.yaml 을 conf.yaml 로 복사)")
     return False, "conf.yaml 없음 (conf.korean.yaml 도 없음 — 저장소가 온전한지 확인)"
 
 
@@ -167,6 +184,5 @@ def core_deps_ready(root: Path | None = None) -> tuple[bool, str]:
                        if Need("", m, m, "", False).installed is False]
     if not missing_markers:
         return True, "현재 환경에 설치됨"
-    return False, (f"코어 의존성 미설치({', '.join(missing_markers)} 없음) — "
-                   "bash scripts/setup_openllm_vtuber.sh "
-                   "(또는 cd Open-LLM-VTuber && uv sync)")
+    return False, (f"코어 의존성 미설치({', '.join(missing_markers)} 없음) — " +
+                   hint(*CMD_CORE_SETUP))

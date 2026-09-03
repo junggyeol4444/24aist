@@ -37,21 +37,9 @@ if not exist "config.yaml"  copy "config\config.example.yaml"  "config.yaml"  >n
 if not exist "persona.yaml" copy "config\persona.example.yaml" "persona.yaml" >nul
 if not exist ".env"         copy ".env.example"                 ".env"         >nul
 
-echo [4/5] 코어 웹UI(프론트엔드) 확인...
-if not exist "Open-LLM-VTuber\frontend\index.html" (
-  echo     없어서 받습니다. 잠시만...
-  call "windows\프론트엔드받기.bat" <nul
-) else (
-  echo     이미 받아져 있음
-)
-
-REM 코어는 conf.yaml 을 바로 읽는다 — 없으면 코어가 뜨지 않는다.
-if not exist "Open-LLM-VTuber\conf.yaml" (
-  if exist "Open-LLM-VTuber\conf.korean.yaml" (
-    copy "Open-LLM-VTuber\conf.korean.yaml" "Open-LLM-VTuber\conf.yaml" >nul
-    echo     코어 설정 conf.yaml 생성(한국어/페르소나 적용)
-  )
-)
+echo [4/5] 방송 코어 준비(웹UI + 의존성 + conf.yaml)...
+echo     시간이 좀 걸립니다. 새 창이 뜨면 끝날 때까지 두세요.
+call "windows\코어준비.bat" <nul
 
 echo [5/5] 설정 점검...
 echo.
