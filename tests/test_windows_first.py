@@ -96,6 +96,22 @@ def test_windows_has_unattended_option():
     text = reg.read_bytes().decode("utf-8")
     assert "schtasks" in text, "작업 스케줄러에 등록하지 않는다"
 
+    # 등록 대상은 재시작 루프가 있는 무인운영.bat 이어야 한다.
+    # 전체실행.bat 은 pause 로 끝나서 무인 상태로는 못 쓴다.
+    runner = WINDOWS_DIR / "무인운영.bat"
+    assert runner.is_file(), "무인운영.bat 이 없다"
+    assert "무인운영.bat" in text, "등록 대상이 무인운영.bat 이 아니다"
+
+
+def test_unattended_runner_restarts_and_never_pauses():
+    """systemd Restart=always 대등 — 죽으면 다시 띄우고, 멈춰 서지 않는다."""
+    text = (WINDOWS_DIR / "무인운영.bat").read_bytes().decode("utf-8")
+    assert "goto loop" in text, "재시작 루프가 없다"
+    for line in text.splitlines():
+        stripped = line.strip().lower()
+        # `pause` 는 사람 입력을 기다린다 — 무인 상태면 영원히 멈춘다.
+        assert not stripped.startswith("pause"), "무인운영.bat 에 pause 가 있다"
+
 
 def test_windows_installer_prepares_core():
     """설치.bat 이 코어 준비까지 해야 한다(리눅스 run.sh setup 과 동등)."""

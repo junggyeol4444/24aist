@@ -146,7 +146,8 @@ aist run                    # 스케줄러로 완전 자동 운영
 | 게임(8단계) | `aist/game/` + `game/minecraft/` | 마인크래프트(mineflayer 사이드카) |
 | 지휘 | `aist/orchestrator.py` | 하루 동선 전체를 묶는 메인 컨트롤러 |
 | CLI | `aist/cli.py` | check / plan / doctor / report / build-persona / run ... |
-| 배포(7단계) | `deploy/` | systemd 유닛 + install.sh (자동 재시작) |
+| 배포(7단계) — 윈도우 | `windows/` | 작업 스케줄러 등록(`자동시작등록.bat`) + 재시작 루프(`무인운영.bat`) |
+| 배포(7단계) — 리눅스 | `deploy/` | systemd 유닛 + install.sh (자동 재시작) |
 
 ---
 

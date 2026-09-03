@@ -10,7 +10,7 @@ REM  컴퓨터에 로그인하면 코어 + AI 방송인이 자동으로 뜬다.
 REM ============================================================
 
 set "TASKNAME=24aist"
-set "RUNNER=%~dp0전체실행.bat"
+set "RUNNER=%~dp0무인운영.bat"
 
 if not exist ".venv\Scripts\activate.bat" (
   echo 먼저 설치.bat 를 실행하세요.
@@ -28,6 +28,9 @@ echo   실행할 것 : %RUNNER%
 echo   시점      : 이 컴퓨터에 로그인할 때마다
 echo.
 echo   ^(끄려면 자동시작해제.bat 을 실행하세요^)
+echo.
+echo   무인운영.bat 은 코어나 방송인이 죽으면 10초 뒤 다시 띄웁니다
+echo   ^(리눅스 systemd 의 Restart=always 에 해당^).
 echo.
 
 schtasks /query /tn "%TASKNAME%" >nul 2>nul

@@ -9,9 +9,18 @@
 방송 코어는 `Open-LLM-VTuber/` 에 vendoring 되어 있습니다(개조 대상). 받을
 필요 없이 셋업만 하면 됩니다.
 
+**윈도우**: `windows\코어준비.bat` 더블클릭 (웹UI + 의존성 + `conf.yaml`).
+`설치.bat` 이 자동으로 부르므로 보통 따로 할 필요는 없습니다.
+
+**리눅스/맥**:
+
 ```bash
 bash scripts/setup_openllm_vtuber.sh    # 프론트엔드 받기 + uv sync + conf 적용
-# 페르소나를 바꾸면 재주입:
+```
+
+페르소나를 바꾸면 재주입 (공통):
+
+```bash
 aist build-persona --conf Open-LLM-VTuber/conf.yaml --live2d <모델명>
 ```
 
@@ -129,7 +138,22 @@ aist broadcast-now          # 코어·OBS·채팅 실제 연결 (비공개 테�
 
 ## 5. 24시간 서버화 + 자동 재시작 (7단계)
 
-실파일이 준비되어 있다 — 리눅스에서 한 줄로 설치:
+### 윈도우
+
+`windows\자동시작등록.bat` 더블클릭 — 윈도우 작업 스케줄러에 등록해서
+**로그인할 때마다** 자동으로 켜집니다. 해제는 `자동시작해제.bat`.
+
+등록되는 건 `windows\무인운영.bat` 이고, 코어나 방송인이 죽으면 10초 뒤
+다시 띄웁니다(systemd 의 `Restart=always` 에 해당). 로그는 회전 파일
+`data\logs\aist.log`.
+
+> 컴퓨터가 꺼져 있거나 절전이면 방송도 안 됩니다. **설정 - 시스템 - 전원**
+> 에서 절전을 꺼두세요. `schtasks` 등록이 거부되면 등록 배치를 오른쪽 클릭 -
+> "관리자 권한으로 실행".
+
+### 리눅스
+
+실파일이 준비되어 있다 — 한 줄로 설치:
 
 ```bash
 bash deploy/install.sh                    # aist 를 systemd 서비스로
