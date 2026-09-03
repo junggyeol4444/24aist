@@ -140,6 +140,7 @@ def cmd_check(args) -> int:
     fe_ok, fe_msg = preflight.core_frontend_ready()
     conf_ok, conf_msg = preflight.core_conf_ready()
     deps_ok, deps_msg = preflight.core_deps_ready()
+    py_ok, py_msg = preflight.core_python_ok()
     blockers = [n for n in miss if n.blocking]
 
     print("\n  실행 준비 상태:")
@@ -152,9 +153,10 @@ def cmd_check(args) -> int:
     print(f"    코어 웹UI      : {'OK' if fe_ok else '[X] ' + fe_msg}")
     print(f"    코어 conf.yaml : {'OK' if conf_ok else '[X] ' + conf_msg}")
     print(f"    코어 의존성    : {'OK (' + deps_msg + ')' if deps_ok else '[X] ' + deps_msg}")
+    print(f"    파이썬 버전    : {'OK ' + py_msg if py_ok else '[X] ' + py_msg}")
 
     print()
-    if blockers or not fe_ok or not conf_ok or not deps_ok:
+    if blockers or not fe_ok or not conf_ok or not deps_ok or not py_ok:
         print("지금 상태로는 방송이 안 됩니다. 아래를 먼저 해결하세요:")
         if blockers:
             print(f"  - 패키지 설치: {preflight.install_hint(miss)}")
@@ -163,6 +165,9 @@ def cmd_check(args) -> int:
         if not conf_ok or not deps_ok:
             what = "설정" if conf_ok else "설정·의존성"
             print(f"  - 코어 {what} 준비: {preflight.hint(*preflight.CMD_CORE_SETUP)}")
+        if not py_ok:
+            print("  - 파이썬 버전 맞추기: 위 안내대로 다시 설치 후 .venv 를 지우고"
+                  f" {preflight.hint(*preflight.CMD_SETUP_ALL)}")
         print(f"  ( 한 번에: {preflight.hint(*preflight.CMD_SETUP_ALL)} )")
         return 1
     if miss:
@@ -246,6 +251,10 @@ def cmd_doctor(args) -> int:
     if not deps_ok:
         ok = False
         print(f"  [X] 코어 의존성: {deps_msg}\n")
+    py_ok, py_msg = preflight.core_python_ok()
+    if not py_ok:
+        ok = False
+        print(f"  [X] 파이썬 버전: {py_msg}\n")
 
     # 1) 코어 WebSocket (점검은 빠르게 1회만 시도)
     cfg.vtuber.connect_timeout_sec = min(cfg.vtuber.connect_timeout_sec, 3)
@@ -599,7 +608,29 @@ def build_parser() -> argparse.ArgumentParser:
     return p
 
 
+def _fix_output_encoding() -> None:
+    """출력이 콘솔이 아닐 때 한글/기호에서 죽지 않게 한다.
+
+    윈도우에서 stdout 이 콘솔이면 파이썬이 유니코드 API 로 쓰지만,
+    파일이나 파이프로 리다이렉트되면 로케일 인코딩(한국어 윈도우는
+    cp949)을 쓴다. 그런데 우리가 안내문에 쓰는 em dash 는 cp949 에 없다:
+
+        UnicodeEncodeError: 'cp949' codec can't encode character '\u2014'
+
+    무인 운영은 콘솔 없이 도는 자리라 정확히 이 조건이다. 배치들이 이미
+    chcp 65001 로 UTF-8 을 쓰므로 여기서도 UTF-8 로 맞추고, 그래도 못 쓰는
+    문자가 있으면 죽는 대신 대체한다.
+    """
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(encoding="utf-8", errors="replace")
+        except (AttributeError, ValueError, OSError):
+            # 테스트의 캡처 스트림 등 reconfigure 를 지원하지 않는 경우.
+            pass
+
+
 def main(argv=None) -> int:
+    _fix_output_encoding()
     argv = argv if argv is not None else sys.argv[1:]
     parser = build_parser()
     args = parser.parse_args(argv)

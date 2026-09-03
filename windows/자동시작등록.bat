@@ -33,19 +33,21 @@ echo   무인운영.bat 은 코어나 방송인이 죽으면 10초 뒤 다시 �
 echo   ^(리눅스 systemd 의 Restart=always 에 해당^).
 echo.
 
+REM 이미 등록돼 있어도 /f 가 덮어쓴다. 물어보지 않는다 —
+REM choice 는 콘솔 입력이 필요해서, 입력이 없는 상황에서는 못 쓴다.
 schtasks /query /tn "%TASKNAME%" >nul 2>nul
-if %errorlevel%==0 (
-  echo 이미 등록돼 있습니다. 다시 등록할까요?
-  choice /c YN /m "덮어쓰기"
-  if errorlevel 2 ( echo 그대로 둡니다. & pause & exit /b 0 )
-  schtasks /delete /tn "%TASKNAME%" /f >nul
-)
+if %errorlevel%==0 echo 이미 등록돼 있습니다. 최신 설정으로 다시 등록합니다.
 
-schtasks /create /tn "%TASKNAME%" /tr "\"%RUNNER%\"" /sc onlogon /rl highest /f
+REM /rl highest 는 쓰지 않는다. 관리자 권한이 있어야 등록되는데
+REM 방송 코어도 aist 도 승격이 필요 없다. 일반 사용자로 등록되게 둔다.
+schtasks /create /tn "%TASKNAME%" /tr "\"%RUNNER%\"" /sc onlogon /f
 if errorlevel 1 (
   echo.
   echo [오류] 등록 실패.
   echo        이 파일을 마우스 오른쪽 - "관리자 권한으로 실행" 으로 다시 해보세요.
+  echo        회사 PC 라면 정책으로 작업 등록이 막혀 있을 수 있습니다.
+  echo        그럴 땐 시작프로그램 폴더에 무인운영.bat 바로가기를 넣으세요:
+  echo          Win+R - shell:startup - 여기에 바로가기 붙여넣기
   pause & exit /b 1
 )
 

@@ -9,6 +9,8 @@ obsws-python 이 없어서 방송이 시작 즉시 중단되는 상태를 '준�
 """
 
 import os
+import re
+import sys
 from dataclasses import dataclass
 from importlib import util as _importlib_util
 from pathlib import Path
@@ -186,3 +188,35 @@ def core_deps_ready(root: Path | None = None) -> tuple[bool, str]:
         return True, "현재 환경에 설치됨"
     return False, (f"코어 의존성 미설치({', '.join(missing_markers)} 없음) — " +
                    hint(*CMD_CORE_SETUP))
+
+
+def core_python_ok(root: Path | None = None) -> tuple[bool, str]:
+    """지금 파이썬이 코어가 지원하는 범위인지.
+
+    코어 pyproject 는 requires-python = ">=3.10,<3.13" 이다. python.org 에서
+    '최신'을 받으면 그 범위 밖이라, aist 는 깔리는데(우리는 >=3.10) 코어
+    설치만 실패한다 — 왜 실패하는지 알기 어려운 자리다.
+    """
+    root = root or repo_root()
+    pyproject = root / "Open-LLM-VTuber" / "pyproject.toml"
+    cur = tuple(sys.version_info)[:2]
+    now = f"{cur[0]}.{cur[1]}"
+    if not pyproject.is_file():
+        return True, f"확인 못 함(코어 pyproject 없음) — 지금 {now}"
+
+    text = pyproject.read_text(encoding="utf-8", errors="replace")
+    m = re.search(r'requires-python\s*=\s*["\']([^"\']+)["\']', text)
+    if not m:
+        return True, f"코어가 파이썬 범위를 명시하지 않음 — 지금 {now}"
+    spec = m.group(1)
+
+    lo = re.search(r'>=\s*(\d+)\.(\d+)', spec)
+    hi = re.search(r'<\s*(\d+)\.(\d+)', spec)
+    if lo and cur < (int(lo.group(1)), int(lo.group(2))):
+        return False, f"파이썬 {now} 은 너무 낮습니다 — 코어 요구: {spec}"
+    if hi and cur >= (int(hi.group(1)), int(hi.group(2))):
+        newest = f"{hi.group(1)}.{int(hi.group(2)) - 1}"
+        return False, (f"파이썬 {now} 은 코어가 지원하지 않습니다(코어 요구: {spec}). "
+                       f"파이썬 {newest} 로 설치하세요 — aist 는 되는데 코어만 "
+                       f"설치에 실패합니다")
+    return True, f"{now} (코어 요구: {spec})"

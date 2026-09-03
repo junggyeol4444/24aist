@@ -117,3 +117,129 @@ def test_windows_installer_prepares_core():
     """설치.bat 이 코어 준비까지 해야 한다(리눅스 run.sh setup 과 동등)."""
     text = (WINDOWS_DIR / "설치.bat").read_bytes().decode("utf-8")
     assert "코어준비.bat" in text, "설치.bat 이 코어를 준비하지 않는다"
+
+
+# --- 무인 운영에서만 드러나는 것들 ------------------------------------
+# 작업 스케줄러로 도는 무인 상태에는 사람도, 콘솔 입력도 없다.
+# 사람이 보는 창에서는 멀쩡한 명령이 거기서는 조용히 무너진다.
+
+def _text(name: str) -> str:
+    return (WINDOWS_DIR / name).read_bytes().decode("utf-8")
+
+
+def test_unattended_delay_does_not_depend_on_timeout_alone():
+    """timeout 은 stdin 이 리다이렉트되면 즉시 빠진다.
+
+        ERROR: Input redirection is not supported, exiting the process immediately.
+
+    무인 상태가 정확히 그 조건이다. timeout 만 믿으면 재시작 대기가
+    통째로 사라지고 루프가 전속력으로 돈다. 폴백이 있어야 한다.
+    """
+    text = _text("무인운영.bat")
+    assert ":sleep" in text, "대기 서브루틴이 없다"
+    assert "ping" in text, "timeout 이 실패했을 때 쓸 폴백이 없다"
+
+
+def test_unattended_launches_core_without_pause():
+    """무인 상태에서 코어 창이 pause 로 서 있으면 재시작마다 창이 쌓인다."""
+    launch = [ln for ln in _text("무인운영.bat").splitlines()
+              if "코어실행.bat" in ln and ln.strip().startswith("start")]
+    assert launch, "코어를 띄우는 줄이 없다"
+    assert all("nopause" in ln for ln in launch), \
+        f"코어를 nopause 없이 띄운다: {launch}"
+
+
+def test_core_launcher_guards_every_pause():
+    """코어실행.bat 의 pause 는 전부 NOPAUSE 를 확인해야 한다.
+
+    가드 분기(웹UI 없음)의 pause 를 빠뜨리면 거기서 영영 멈춘다 —
+    실제로 처음엔 마지막 pause 만 고쳐서 이 경로가 남아 있었다.
+    """
+    for line in _text("코어실행.bat").splitlines():
+        stripped = line.strip()
+        if "pause" not in stripped.lower():
+            continue
+        if stripped.startswith("REM") or "nopause" in stripped.lower():
+            continue
+        assert "NOPAUSE" in stripped, f"무방비 pause: {stripped!r}"
+
+
+def test_autostart_does_not_require_admin():
+    """/rl highest 는 관리자 권한이 있어야 등록된다.
+
+    코어도 aist 도 승격이 필요 없는데 이걸 붙이면 일반 사용자는
+    등록 자체가 거부된다.
+    """
+    cmds = [ln.strip() for ln in _text("자동시작등록.bat").splitlines()
+            if not ln.strip().startswith("REM")]
+    create = [ln for ln in cmds if ln.startswith("schtasks /create")]
+    assert create, "등록 명령이 없다"
+    for ln in create:
+        assert "/rl highest" not in ln, f"불필요하게 관리자 권한을 요구한다: {ln!r}"
+        assert "/f" in ln, f"덮어쓰기 플래그가 없다: {ln!r}"
+
+
+def test_autostart_has_no_stdin_prompt():
+    """choice 는 콘솔 입력이 필요하다. /f 가 이미 덮어쓰므로 물을 이유가 없다."""
+    for line in _text("자동시작등록.bat").splitlines():
+        stripped = line.strip()
+        if stripped.startswith("REM"):
+            continue
+        assert not stripped.lower().startswith("choice "), f"입력을 기다린다: {stripped!r}"
+
+
+@pytest.mark.parametrize("name", [p.name for p in WINDOWS_DIR.glob("*.bat")])
+def test_bat_has_no_utf8_bom(name):
+    """UTF-8 BOM 이 붙으면 cmd 가 첫 줄을 못 읽는다.
+
+    BOM 이 '@echo off' 앞에 들어가면 cmd 는 그 줄을 명령으로 못 알아보고
+    "is not recognized as an internal or external command" 로 죽는다.
+    한글이 들어간 배치라 편집기가 BOM 을 붙이기 쉽다.
+    """
+    raw = (WINDOWS_DIR / name).read_bytes()
+    assert not raw.startswith(b"\xef\xbb\xbf"), f"windows/{name} 에 UTF-8 BOM 이 있다"
+    assert raw.lstrip().lower().startswith(b"@echo off"), \
+        f"windows/{name} 첫 줄이 @echo off 가 아니다"
+
+
+@pytest.mark.parametrize("name", [p.name for p in WINDOWS_DIR.glob("*.bat")])
+def test_bat_declares_utf8_codepage(name):
+    """한글을 출력하려면 chcp 65001 이 있어야 한다."""
+    text = (WINDOWS_DIR / name).read_bytes().decode("utf-8")
+    assert "chcp 65001" in text, f"windows/{name} 에 chcp 65001 이 없다"
+
+
+def test_frontend_fetch_has_fallback_without_curl_and_tar():
+    """curl 과 tar 는 윈도우 10 1803 이상에만 있다.
+
+    그 이하(윈도우 7/8.1, 초기 10)에서는 둘 다 없어서 웹UI 를 아예
+    못 받았다. PowerShell 은 윈도우 7 부터 있으니 그걸로 받을 길을
+    남겨둔다. PowerShell 의 Expand-Archive 는 zip 만 풀 수 있어서
+    tar.gz 가 아니라 zip 주소를 쓴다.
+    """
+    text = _text("프론트엔드받기.bat")
+    assert "powershell" in text.lower(), "curl/tar 가 없을 때의 대안이 없다"
+    assert "Invoke-WebRequest" in text, "PowerShell 다운로드가 없다"
+    assert "Expand-Archive" in text, "PowerShell 압축 해제가 없다"
+    assert ".zip" in text, "Expand-Archive 는 zip 만 푼다 — zip 주소가 필요하다"
+
+
+def test_frontend_fetch_still_prefers_curl():
+    """빠른 경로(curl+tar)는 남아 있어야 한다. PowerShell 은 느리다."""
+    text = _text("프론트엔드받기.bat")
+    assert "where curl" in text and "where tar" in text
+    assert text.index("where curl") < text.lower().index("invoke-webrequest"), \
+        "PowerShell 을 먼저 시도한다"
+
+
+def test_installer_checks_python_version():
+    """코어는 파이썬 3.10~3.12 만 지원한다(Open-LLM-VTuber/pyproject.toml).
+
+    python.org 에서 '최신'을 받으면 그 범위 밖이다. aist 는 >=3.10 이라
+    깔리고, 코어 설치만 실패한다 — 왜 실패했는지 알기 어려운 자리라
+    설치 첫 단계에서 막아야 한다.
+    """
+    text = _text("설치.bat")
+    assert "PYMIN" in text, "파이썬 버전을 파싱하지 않는다"
+    assert "GEQ 13" in text, "3.13 이상을 막지 않는다"
+    assert "LSS 10" in text, "3.10 미만을 막지 않는다"

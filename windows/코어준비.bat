@@ -34,6 +34,7 @@ if %errorlevel%==0 (
   if errorlevel 1 echo     [경고] uv sync 실패 — 아래 pip 방식으로 다시 시도해보세요.
 ) else (
   echo     uv 가 없습니다. pip 으로 설치합니다.
+  echo     ^(torch/CUDA 까지 130여 개, 수 GB 를 받습니다. 오래 걸립니다^)
   echo     ^(권장: https://docs.astral.sh/uv/ 설치 후 이 파일을 다시 실행^)
   if exist "..\.venv\Scripts\activate.bat" call "..\.venv\Scripts\activate.bat"
   python -m pip install -U pip >nul

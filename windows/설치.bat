@@ -13,10 +13,33 @@ set "PY=py"
 where py >nul 2>nul || set "PY=python"
 %PY% --version >nul 2>nul
 if errorlevel 1 (
-  echo [오류] 파이썬이 없습니다. https://www.python.org 에서 3.10 이상 설치 후
+  echo [오류] 파이썬이 없습니다. https://www.python.org 에서 3.12 를 설치하고
   echo        설치 시 "Add Python to PATH" 를 체크하세요.
   pause & exit /b 1
 )
+
+REM 방송 코어는 파이썬 3.10~3.12 만 지원한다(Open-LLM-VTuber/pyproject.toml).
+REM python.org 에서 '최신'을 받으면 그 범위 밖이라, aist 는 깔리는데
+REM 코어만 설치에 실패한다 — 왜 실패했는지 알기 어려운 자리라 먼저 막는다.
+for /f "tokens=2 delims= " %%V in ('%PY% --version 2^>^&1') do set "PYVER=%%V"
+for /f "tokens=1,2 delims=." %%A in ("%PYVER%") do (
+  set "PYMAJ=%%A"
+  set "PYMIN=%%B"
+)
+if not "%PYMAJ%"=="3" goto badpy
+if %PYMIN% LSS 10 goto badpy
+if %PYMIN% GEQ 13 goto badpy
+echo     파이썬 %PYVER% 확인
+goto pyok
+
+:badpy
+echo [오류] 파이썬 %PYVER% 는 방송 코어가 지원하지 않습니다.
+echo        코어는 3.10 ~ 3.12 만 됩니다. 3.12 를 설치하세요:
+echo          https://www.python.org/downloads/release/python-3120/
+echo        ^(설치 시 "Add Python to PATH" 체크. 이미 있는 .venv 폴더는 지우고 다시 실행^)
+pause & exit /b 1
+
+:pyok
 
 REM 가상환경 생성
 if not exist ".venv\Scripts\activate.bat" (
