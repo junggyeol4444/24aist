@@ -46,8 +46,9 @@ class Persona:
                 f"페르소나 파일이 없습니다: {p}\n"
                 f"config/persona.example.yaml 을 복사해서 만드세요."
             )
-        with p.open("r", encoding="utf-8") as fh:
-            return cls.from_dict(yaml.safe_load(fh) or {})
+        # 메모장이 만든 인코딩(BOM/UTF-16/CP949)도 읽는다 — config.py 참고.
+        from .config import read_text_lenient
+        return cls.from_dict(yaml.safe_load(read_text_lenient(p)) or {})
 
     def render_system_prompt(self) -> str:
         """LLM 시스템 프롬프트(= Open-LLM-VTuber persona_prompt) 텍스트.

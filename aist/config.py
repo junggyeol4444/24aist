@@ -433,6 +433,43 @@ class ConfigError(Exception):
     pass
 
 
+# 운영자가 설정 파일을 메모장으로 편집한다(README 안내). 메모장은 저장할 때
+# UTF-8(BOM) / 유니코드(UTF-16) / ANSI(한국어 윈도우면 CP949) 를 고를 수 있고,
+# 그중 UTF-8 이 아니면 파이썬이 UnicodeDecodeError 로 죽는다. 에러 메시지가
+#   'utf-8' codec can't decode byte 0xb9 in position 81
+# 이라 운영자는 손쓸 방법이 없다. 그래서 흔한 인코딩을 순서대로 시도한다.
+_UTF16_BOMS = (b"\xff\xfe", b"\xfe\xff")
+
+
+def read_text_lenient(path: Union[str, Path]) -> str:
+    """설정/환경 파일을 관대하게 읽는다(메모장이 만든 인코딩들 지원).
+
+    순서가 중요하다:
+      1) utf-8-sig — BOM 있는 UTF-8 과 없는 UTF-8 을 모두 처리
+      2) UTF-16 — 단, **BOM 이 있을 때만**. UTF-16 은 길이가 짝수이기만 하면
+         아무 바이트나 '성공'시켜서 쓰레기 문자열을 만든다. 메모장은 유니코드로
+         저장할 때 항상 BOM 을 붙이므로 BOM 을 신호로 쓴다.
+      3) cp949 — 한국어 윈도우 메모장의 'ANSI'
+    전부 실패하면 사람이 읽는 한국어 안내로 바꿔 올린다.
+    """
+    p = Path(path)
+    raw = p.read_bytes()
+    candidates = ["utf-8-sig"]
+    if raw[:2] in _UTF16_BOMS:
+        candidates.append("utf-16")
+    candidates.append("cp949")
+    for enc in candidates:
+        try:
+            return raw.decode(enc)
+        except (UnicodeDecodeError, LookupError):
+            continue
+    raise ConfigError(
+        f"{p} 의 글자 인코딩을 알 수 없습니다.\n"
+        f"메모장에서 파일을 열고 [다른 이름으로 저장] → 인코딩을 'UTF-8' 로 "
+        f"골라 다시 저장하세요. ('ANSI' 나 '유니코드' 로 저장하면 안 됩니다)"
+    )
+
+
 def load_config(path: Union[str, Path]) -> Config:
     """config.yaml 을 읽어 Config 로 만든다. 비밀은 .env(환경변수)에서 채운다."""
     p = Path(path)
@@ -441,8 +478,7 @@ def load_config(path: Union[str, Path]) -> Config:
             f"설정 파일이 없습니다: {p}\n"
             f"config/config.example.yaml 을 복사해서 config.yaml 을 만드세요."
         )
-    with p.open("r", encoding="utf-8") as fh:
-        raw = yaml.safe_load(fh) or {}
+    raw = yaml.safe_load(read_text_lenient(p)) or {}
     if not isinstance(raw, dict):
         raise ConfigError("config.yaml 최상위는 매핑(dict)이어야 합니다.")
 

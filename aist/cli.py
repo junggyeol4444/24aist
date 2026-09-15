@@ -26,7 +26,16 @@ def _load_dotenv(path: str = ".env") -> None:
     p = Path(path)
     if not p.exists():
         return
-    for line in p.read_text(encoding="utf-8").splitlines():
+    # 메모장으로 편집하는 파일이라 인코딩이 제각각이다. BOM 이 붙으면 첫 줄의
+    # 키 이름이 '\ufeffOPENAI_API_KEY' 가 되어 그 키만 조용히 사라진다 —
+    # "키를 넣었는데 비어있음으로 나온다"는 추적 불가능한 증상이 된다.
+    from .config import ConfigError, read_text_lenient
+    try:
+        text = read_text_lenient(p)
+    except ConfigError as e:
+        print(f"[경고] {e}")
+        return
+    for line in text.splitlines():
         line = line.strip()
         if not line or line.startswith("#") or "=" not in line:
             continue
@@ -163,6 +172,12 @@ def cmd_check(args) -> int:
     py_ok, py_msg = preflight.core_python_ok()
     blockers = [n for n in miss if n.blocking]
 
+    problems = preflight.config_problems(cfg)
+    if problems:
+        print("\n  설정값 문제 (패키지가 다 깔려 있어도 방송이 이상하게 돕니다):")
+        for msg in problems:
+            print(f"    [X] {msg}")
+
     print("\n  실행 준비 상태:")
     if not miss:
         print("    패키지         : 켜진 기능에 필요한 것 모두 설치됨")
@@ -176,8 +191,10 @@ def cmd_check(args) -> int:
     print(f"    파이썬 버전    : {'OK ' + py_msg if py_ok else '[X] ' + py_msg}")
 
     print()
-    if blockers or not fe_ok or not conf_ok or not deps_ok or not py_ok:
+    if blockers or not fe_ok or not conf_ok or not deps_ok or not py_ok or problems:
         print("지금 상태로는 방송이 안 됩니다. 아래를 먼저 해결하세요:")
+        if problems:
+            print("  - 위 '설정값 문제' 부터 고치세요 (config.yaml)")
         if blockers:
             print(f"  - 패키지 설치: {preflight.install_hint(miss)}")
         if not fe_ok:

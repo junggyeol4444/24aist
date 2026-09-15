@@ -115,13 +115,34 @@ class EndJudge:
         # 자연스러운 마무리 예고 단계(선택). 최소 시간 전에는 예고하지 않음.
         wd = self.cfg.wind_down
         if wd.enabled and wd.pre_notice_minutes_before_end > 0:
-            pre_at = effective_end - timedelta(minutes=wd.pre_notice_minutes_before_end)
-            if pre_at < self.min_end:
-                pre_at = self.min_end
-            if now >= pre_at:
+            if now >= self._pre_notice_at(effective_end):
                 return EndDecision(Phase.PRE_NOTICE, trigger, "마무리 예고 단계")
 
         return EndDecision(Phase.LIVE, "", "")
+
+    def _pre_notice_at(self, effective_end: datetime) -> datetime:
+        """마무리 예고를 띄울 시각.
+
+        기본은 종료 N분 전이고, 켜자마자 "슬슬 마무리할까" 하지 않도록
+        최소 방송 시간 전에는 예고하지 않는다.
+
+        그런데 최소 시간 보장이 종료를 뒤로 민 경우(방송 길이 == min_minutes),
+        예고 시각을 min_end 로 당기면 종료 시각과 같아져서 예고가 영영 안
+        나온다 — 예고 없이 갑자기 마무리 인사를 하고 끊긴다. 기획안 4-3 이
+        금지한 "뚝 끄기"가 그대로 일어난다.
+        그래서 자리가 없으면 방송 길이의 일부를 떼어 예고 자리를 만든다.
+        """
+        wd = self.cfg.wind_down
+        pre_at = effective_end - timedelta(minutes=wd.pre_notice_minutes_before_end)
+        if pre_at < self.min_end:
+            pre_at = self.min_end
+        if pre_at >= effective_end:
+            span = (effective_end - self.start).total_seconds()
+            gap = max(60.0, span * 0.2)          # 최소 1분, 보통 방송의 20%
+            pre_at = effective_end - timedelta(seconds=gap)
+            if pre_at < self.start:
+                pre_at = self.start
+        return pre_at
 
     def _detail(self, trigger: str) -> str:
         return {

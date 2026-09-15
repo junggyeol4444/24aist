@@ -220,3 +220,86 @@ def core_python_ok(root: Path | None = None) -> tuple[bool, str]:
                        f"파이썬 {newest} 로 설치하세요 — aist 는 되는데 코어만 "
                        f"설치에 실패합니다")
     return True, f"{now} (코어 요구: {spec})"
+
+
+# --------------------------------------------------------------------------- #
+# 설정값 자체의 오류 — "설정은 맞아 보이는데 정작 방송이 이상한" 부류.
+# 패키지가 다 깔려 있어도 여기서 걸리면 방송이 엉뚱하게 돈다.
+# --------------------------------------------------------------------------- #
+_WEEKDAY_KEYS = ("mon", "tue", "wed", "thu", "fri", "sat", "sun")
+
+
+def config_problems(cfg) -> list[str]:
+    """config.yaml 값 자체의 문제를 사람이 읽는 문장으로 돌려준다.
+
+    여기 걸리는 것들은 전부 조용히 잘못 도는 것들이라, 점검에서 잡아야 한다:
+      - 타임존 오타 → 조용히 UTC 로 떨어져 방송이 9시간 어긋난다
+      - 요일 키 오타(예: 한글 '월') → 그 요일이 조용히 휴방이 된다
+      - 시각 형식 오류 → 방송 시작 계산에서 터진다
+      - 전부 휴방 → 자동 운영을 켜도 영영 안 켜진다
+    """
+    out: list[str] = []
+    sch = cfg.scheduler
+
+    # 1) 타임존
+    try:
+        from zoneinfo import ZoneInfo
+        ZoneInfo(sch.timezone)
+    except Exception:
+        out.append(
+            f"타임존 '{sch.timezone}' 을 찾을 수 없습니다 → 시간이 UTC 로 계산되어 "
+            f"방송이 몇 시간씩 어긋납니다. 예: Asia/Seoul"
+        )
+
+    # 2) 요일 키
+    unknown = [k for k in sch.weekly if k not in _WEEKDAY_KEYS]
+    if unknown:
+        out.append(
+            f"스케줄 요일 키를 모르겠습니다: {', '.join(repr(k) for k in unknown)} → "
+            f"그 요일은 휴방으로 처리됩니다. 써야 할 키: {', '.join(_WEEKDAY_KEYS)}"
+        )
+
+    # 3) 시각 형식
+    from .scheduler import _parse_hhmm
+    for day, times in sch.weekly.items():
+        for t in (times or []):
+            try:
+                _parse_hhmm(t)
+            except ValueError as e:
+                out.append(f"스케줄 {day} 의 시각이 잘못됨: {e}")
+
+    # 4) 전부 휴방인데 자동 운영이 켜져 있음
+    if sch.enabled:
+        has_any = any(
+            (times or []) for k, times in sch.weekly.items() if k in _WEEKDAY_KEYS
+        )
+        if not has_any:
+            out.append(
+                "scheduler.enabled=true 인데 요일별 시작 시각이 하나도 없습니다 → "
+                "`aist run` 이 영영 방송을 켜지 않습니다."
+            )
+
+    # 5) 종료 판단 값이 앞뒤가 안 맞음
+    ej = cfg.end_judge
+    if ej.min_minutes > ej.max_minutes:
+        out.append(
+            f"end_judge.min_minutes({ej.min_minutes}) 가 max_minutes({ej.max_minutes}) "
+            f"보다 큽니다 → 최소 시간 보장이 이겨서 항상 {ej.min_minutes}분 방송이 됩니다."
+        )
+    if ej.scheduled_end_hhmm:
+        try:
+            _parse_hhmm(ej.scheduled_end_hhmm)
+        except ValueError as e:
+            out.append(f"end_judge.scheduled_end_hhmm 이 잘못됨: {e}")
+
+    # 6) 공지를 켰는데 올릴 곳이 없음
+    an = cfg.announce
+    if (an.on_start or an.on_end) and not (an.discord.enabled or an.naver_cafe.enabled):
+        out.append(
+            "공지를 켰는데(on_start/on_end) 디스코드·네이버 카페가 둘 다 꺼져 있습니다 "
+            "→ 공지가 아무 데도 안 올라갑니다."
+        )
+    if an.discord.enabled and not an.discord.channel_id:
+        out.append("디스코드 공지가 켜져 있는데 channel_id 가 0 입니다 → 게시 안 됩니다.")
+
+    return out
