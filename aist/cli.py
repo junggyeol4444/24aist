@@ -180,6 +180,12 @@ def cmd_check(args) -> int:
     py_ok, py_msg = preflight.core_python_ok()
     blockers = [n for n in miss if n.blocking]
 
+    if getattr(persona, "problems", None):
+        # 페르소나가 조용히 망가지면 캐릭터 자체가 달라진다.
+        print("\n  페르소나 파일 문제 (그대로 두면 캐릭터가 달라집니다):")
+        for note in persona.problems:
+            print(f"    [!] {note}")
+
     if cfg.unknown_keys:
         # 오타 난 키는 조용히 무시된다 — "설정을 바꿨는데 아무 일도 안 일어난다".
         print("\n  설정 파일에서 무시된 키 (이름이 틀렸습니다):")
