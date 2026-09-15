@@ -402,3 +402,53 @@ def test_autostart_tells_operator_how_to_fix_by_hand():
     """자동 설정이 실패하면 손으로 고치는 법을 알려줘야 한다."""
     t = _bat("자동시작등록.bat")
     assert "작업 스케줄러" in t and "속성" in t
+
+
+# =========================================================================
+# 무인운영 재시작 루프 — Wine 에서 실제로 돌려보다 다듬은 것들.
+#
+# 루프 자체는 돌지만, 설정이 잘못돼 켜자마자 죽으면 10초마다 같은 실패를
+# 영원히 반복했다. 사람이 안 보는 자리라 아무도 모른다.
+# =========================================================================
+def test_unattended_backs_off_on_repeated_fast_failure():
+    t = _bat("무인운영.bat")
+    assert "FAST_FAILS" in t, "빠른 실패를 세지 않으면 영원히 같은 간격으로 돈다"
+    assert "SLOW_WAIT" in t, "간격을 늘리는 값이 없다"
+
+
+def test_unattended_tells_operator_what_to_check_when_stuck():
+    """막혔을 때 화면에 뭘 봐야 하는지 남겨야 한다."""
+    t = _bat("무인운영.bat")
+    assert "점검.bat" in t
+    assert "aist.log" in t
+
+
+def test_unattended_does_not_parse_locale_dependent_time():
+    """%time% 을 잘라 쓰면 로캘에 따라 깨진다.
+
+    한국어 윈도우는 "오후 3:52:10", 12시간제면 "3:52:10 AM" 이라
+    %T:~0,2% 같은 자릿수 파싱이 엉뚱한 값을 만든다.
+    (Wine 에서 실제로 빈 값이 나오는 걸 확인하고 고쳤다)
+    """
+    t = _bat("무인운영.bat")
+    assert "%time:~" not in t and "%T:~" not in t, \
+        "시각을 자릿수로 자르면 로캘에 따라 깨진다"
+
+
+def test_unattended_survives_missing_powershell():
+    """시각을 못 재면 실패 횟수를 세지 않아야 한다.
+
+    잘못 세면 멀쩡히 도는 방송의 재시도 간격을 5분으로 늘려버린다.
+    """
+    t = _bat("무인운영.bat")
+    assert 'if "%START_SEC%"=="0" goto :skip_count' in t
+    assert ":skip_count" in t
+
+
+def test_unattended_still_has_no_pause():
+    """무인 자리에 pause 가 하나라도 있으면 창이 영영 서 있는다."""
+    t = _bat("무인운영.bat")
+    for line in t.split("\n"):
+        s = line.strip().lower()
+        assert not (s == "pause" or s.startswith("pause ")), \
+            f"무인운영.bat 에 pause 가 있습니다: {line}"
