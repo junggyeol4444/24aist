@@ -60,7 +60,7 @@ def test_rehearsal_needs_no_extra_package():
 
 
 def test_probe_describes_itself():
-    assert "리허설" in asyncio.run(RehearsalChat().probe())
+    assert "리허설" in str(asyncio.run(RehearsalChat().probe()))
 
 
 def _run_rehearse(monkeypatch, tmp_path, **overrides):

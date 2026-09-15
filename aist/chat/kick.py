@@ -16,7 +16,7 @@ import json
 import logging
 from typing import AsyncIterator, Optional
 
-from .base import ChatMessage, ChatSource
+from .base import ChatMessage, ChatSource, ProbeResult, probe_fail, probe_ok, probe_warn
 
 log = logging.getLogger("aist.chat.kick")
 
@@ -94,14 +94,14 @@ class KickChat(ChatSource):
                 log.warning("kick 연결 끊김: %s (재연결)", e)
                 await asyncio.sleep(3)
 
-    async def probe(self) -> str:
+    async def probe(self) -> ProbeResult:
         if self.chatroom_id:
-            return f"chatroom_id 직접 지정됨({self.chatroom_id})"
+            return probe_ok(f"chatroom_id 직접 지정됨({self.chatroom_id})")
         try:
             cid = await asyncio.to_thread(self._fetch_chatroom_id)
-            return f"채널 OK(chatroom {cid})"
+            return probe_ok(f"채널 OK(chatroom {cid})")
         except Exception as e:
-            return f"채널 조회 실패(Cloudflare 가능): {e}"
+            return probe_fail(f"채널 조회 실패(Cloudflare 가능): {e}")
 
     async def close(self) -> None:
         self._closed = True

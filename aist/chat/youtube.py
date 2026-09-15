@@ -14,7 +14,7 @@ import logging
 import re
 from typing import AsyncIterator, Optional
 
-from .base import ChatMessage, ChatSource
+from .base import ChatMessage, ChatSource, ProbeResult, probe_fail, probe_ok, probe_warn
 
 log = logging.getLogger("aist.chat.youtube")
 
@@ -109,14 +109,16 @@ class YouTubeChat(ChatSource):
                 if self.channel and not self._closed:
                     self.video_id = ""
 
-    async def probe(self) -> str:
+    async def probe(self) -> ProbeResult:
         if self.video_id:
-            return f"video_id 직접 지정됨({self.video_id})"
+            return probe_ok(f"video_id 직접 지정됨({self.video_id})")
         try:
             vid = await asyncio.to_thread(resolve_live_video_id, self.channel)
-            return f"라이브 발견(video {vid})" if vid else "라이브 아님(자동발견 대기)"
+            if vid:
+                return probe_ok(f"라이브 발견(video {vid})")
+            return probe_warn("라이브 아님(방송 전이면 정상 — 시작하면 자동발견)")
         except Exception as e:
-            return f"자동발견 실패: {e}"
+            return probe_fail(f"자동발견 실패: {e}")
 
     async def close(self) -> None:
         self._closed = True

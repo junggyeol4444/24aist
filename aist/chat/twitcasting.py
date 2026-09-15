@@ -14,7 +14,7 @@ import asyncio
 import logging
 from typing import AsyncIterator, Optional, Set
 
-from .base import ChatMessage, ChatSource
+from .base import ChatMessage, ChatSource, ProbeResult, probe_fail, probe_ok, probe_warn
 
 log = logging.getLogger("aist.chat.twitcasting")
 
@@ -91,12 +91,14 @@ class TwitcastingChat(ChatSource):
             first = False
             await asyncio.sleep(self.poll_interval)
 
-    async def probe(self) -> str:
+    async def probe(self) -> ProbeResult:
         try:
             mid = await asyncio.to_thread(self._current_movie_id)
-            return f"라이브 OK(movie {mid})" if mid else "라이브 아님(또는 토큰 확인)"
+            if mid:
+                return probe_ok(f"라이브 OK(movie {mid})")
+            return probe_warn("라이브 아님(방송 전이면 정상, 아니면 토큰 확인)")
         except Exception as e:
-            return f"조회 실패(토큰 확인): {e}"
+            return probe_fail(f"조회 실패(토큰 확인): {e}")
 
     async def close(self) -> None:
         self._closed = True

@@ -16,7 +16,7 @@ import json
 import logging
 from typing import AsyncIterator, Optional
 
-from .base import ChatMessage, ChatSource
+from .base import ChatMessage, ChatSource, ProbeResult, probe_fail, probe_ok, probe_warn
 
 log = logging.getLogger("aist.chat.chzzk")
 
@@ -141,12 +141,15 @@ class ChzzkChat(ChatSource):
                 log.warning("치지직 연결 끊김: %s (재연결)", e)
                 await asyncio.sleep(3)
 
-    async def probe(self) -> str:
+    async def probe(self) -> ProbeResult:
         try:
             cid, _ = await asyncio.to_thread(self._fetch_tokens)
-            return f"온에어(chatChannelId 확보: {cid[:8]}…)"
+            return probe_ok(f"온에어(chatChannelId 확보: {cid[:8]}…)")
         except Exception as e:
-            return f"방송중 아님/실패: {e}"
+            # 방송 전이면 정상이다. 다만 채널 ID 가 틀려도 같은 모양으로
+            # 실패하므로, 방송 중인데 이게 뜨면 ID 를 의심해야 한다.
+            return probe_warn(f"지금은 못 붙음(방송 전이면 정상, 방송 중이면 "
+                              f"channel_id 확인): {e}")
 
     async def close(self) -> None:
         self._closed = True

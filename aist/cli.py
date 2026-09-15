@@ -361,9 +361,18 @@ def cmd_doctor(args) -> int:
 
         try:
             status = _asyncio.run(_probe(src))
-            print(f"    [OK] {p:<11}: {status}")
+            # 예전에는 무조건 [OK] 로 찍었다. 그런데 각 플랫폼 probe 는
+            # 실패해도 예외 대신 설명 문자열을 돌려주기 때문에, 토큰이
+            # 틀려도 "[OK] ... 조회 실패" 라고 나오고 doctor 는 "모두 OK"
+            # 로 끝났다. 운영자가 방송 전 점검을 믿을 수 없게 된다.
+            level = getattr(status, "level", "ok")
+            tag = {"ok": "[OK]", "warn": "[!]"}.get(level, "[X]")
+            if level == "fail":
+                ok = False
+            print(f"    {tag} {p:<11}: {status}")
         except Exception as e:  # noqa: BLE001
-            print(f"    [?] {p:<11}: 점검 불가(라이브 아님/네트워크?) — {e}")
+            ok = False
+            print(f"    [X] {p:<11}: 점검 실패 — {e}")
 
     print("\n점검 끝.", "모두 OK." if ok else "위 항목을 확인하세요.")
     return 0 if ok else 1

@@ -16,7 +16,7 @@ import asyncio
 import logging
 from typing import AsyncIterator, List, Optional, Tuple
 
-from .base import ChatMessage, ChatSource
+from .base import ChatMessage, ChatSource, ProbeResult, probe_fail, probe_ok, probe_warn
 
 log = logging.getLogger("aist.chat.soop")
 
@@ -131,12 +131,13 @@ class SoopChat(ChatSource):
                 log.warning("SOOP 연결 끊김: %s (재연결)", e)
                 await asyncio.sleep(3)
 
-    async def probe(self) -> str:
+    async def probe(self) -> ProbeResult:
         try:
             ch = await asyncio.to_thread(self._fetch_live_info)
-            return f"온에어(CHATNO {ch.get('CHATNO')})"
+            return probe_ok(f"온에어(CHATNO {ch.get('CHATNO')})")
         except Exception as e:
-            return f"방송중 아님/실패: {e}"
+            return probe_warn(f"지금은 못 붙음(방송 전이면 정상, 방송 중이면 "
+                              f"bj_id 확인): {e}")
 
     async def close(self) -> None:
         self._closed = True
