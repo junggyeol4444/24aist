@@ -402,8 +402,8 @@ class Orchestrator:
         if not aborted and self.cfg.logging.auto_content:
             try:
                 from .content import generate_content_pack
-                generate_content_pack(
-                    self.persona, transcript_path,
+                await asyncio.to_thread(
+                    generate_content_pack, self.persona, transcript_path,
                     self.cfg.logging.content_dir, llm=self.llm,
                 )
             except Exception:
@@ -429,8 +429,11 @@ class Orchestrator:
             recent_note=self.memory.recent_summary() if kind == "start" else "",
             next_stream_hint=self._next_stream_hint() if kind == "end" else "",
         )
-        text = compose(self.persona, ctx, cfg, llm=self.llm, now=now,
-                       history_path=Path(self.cfg.memory.path) / "announce_history.json")
+        # LLM 공지는 네트워크 호출이다. 그냥 await 없이 부르면 이벤트 루프가
+        # 통째로 멈춰서 그동안 채팅도, 종료 판단도, 말 끝 신호도 안 돈다.
+        text = await asyncio.to_thread(
+            compose, self.persona, ctx, cfg, llm=self.llm, now=now,
+            history_path=Path(self.cfg.memory.path) / "announce_history.json")
         log.info("[공지/%s] %s", kind, text.replace("\n", " "))
 
         announcers = self._announcers()

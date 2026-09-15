@@ -33,6 +33,13 @@ class LLMClient:
             return True  # 로컬 서버. 죽어있으면 complete 실패 → composer 가 폴백
         return False  # dummy
 
+    def _timeout(self) -> float:
+        try:
+            t = float(getattr(self.cfg, "timeout_sec", 30.0) or 30.0)
+        except (TypeError, ValueError):
+            return 30.0
+        return t if t > 0 else 30.0
+
     def complete(self, system: str, user: str) -> str:
         """system+user 프롬프트로 한 번 호출하고 텍스트를 반환."""
         p = self.cfg.provider
@@ -53,7 +60,9 @@ class LLMClient:
             kwargs["api_key"] = self.secrets.openai_api_key
         if self.cfg.base_url:
             kwargs["base_url"] = self.cfg.base_url
-        client = OpenAI(**kwargs)
+        # 타임아웃을 안 주면 SDK 기본값(10분)이다. 공지 문구 한 줄을
+        # 기다리느라 방송 시작이 10분 밀리면 안 된다.
+        client = OpenAI(timeout=self._timeout(), max_retries=1, **kwargs)
         resp = client.chat.completions.create(
             model=self.cfg.model,
             temperature=self.cfg.temperature,
@@ -67,7 +76,8 @@ class LLMClient:
 
     def _anthropic(self, system: str, user: str) -> str:
         import anthropic  # 지연 import
-        client = anthropic.Anthropic(api_key=self.secrets.anthropic_api_key)
+        client = anthropic.Anthropic(api_key=self.secrets.anthropic_api_key,
+                                     timeout=self._timeout(), max_retries=1)
         resp = client.messages.create(
             model=self.cfg.model,
             max_tokens=self.cfg.max_tokens,
@@ -83,6 +93,7 @@ class LLMClient:
         client = OpenAI(
             base_url=self.cfg.base_url or "http://127.0.0.1:11434/v1",
             api_key="ollama",  # SDK 가 빈 키를 거부해서 더미 값
+            timeout=self._timeout(), max_retries=1,
         )
         resp = client.chat.completions.create(
             model=self.cfg.model,
@@ -99,5 +110,10 @@ class LLMClient:
         import google.generativeai as genai  # 지연 import
         genai.configure(api_key=self.secrets.gemini_api_key)
         model = genai.GenerativeModel(self.cfg.model, system_instruction=system)
-        resp = model.generate_content(user)
+        try:
+            resp = model.generate_content(
+                user, request_options={"timeout": self._timeout()})
+        except TypeError:
+            # request_options 를 모르는 예전 SDK — 타임아웃 없이라도 동작은 한다
+            resp = model.generate_content(user)
         return (resp.text or "").strip()

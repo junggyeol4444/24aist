@@ -268,6 +268,9 @@ class LlmConfig:
     base_url: str = ""        # OpenAI 호환 엔드포인트면 지정 (ollama 포함)
     temperature: float = 0.9
     max_tokens: int = 300
+    # 응답을 기다리는 최대 시간(초). SDK 기본값은 10분이라, 공지 한 줄 때문에
+    # 방송 시작이 10분 밀리거나 종료 절차가 멈출 수 있다.
+    timeout_sec: float = 30.0
 
 
 @dataclass
