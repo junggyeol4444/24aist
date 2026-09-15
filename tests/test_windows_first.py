@@ -452,3 +452,13 @@ def test_unattended_still_has_no_pause():
         s = line.strip().lower()
         assert not (s == "pause" or s.startswith("pause ")), \
             f"무인운영.bat 에 pause 가 있습니다: {line}"
+
+
+def test_exe_build_includes_timezone_data():
+    """윈도우에는 시간대 데이터가 없다.
+
+    tzdata 를 exe 에 안 넣으면 timezone 설정(Asia/Seoul)이 조용히 무시되고
+    PC 로컬 시간으로 돈다 — 예약 시각이 통째로 어긋난다.
+    """
+    text = _text("EXE만들기.bat")
+    assert "tzdata" in text, "exe 빌드에 tzdata 가 빠졌습니다"
