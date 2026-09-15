@@ -60,12 +60,43 @@ class ObsController:
                     last = e
             raise ObsError(f"OBS 자동 실행 후에도 연결 실패: {last}") from last
 
+    @staticmethod
+    def _split_command(cmd: str):
+        """실행 명령 문자열을 인자 목록으로 쪼갠다.
+
+        shlex 의 기본(POSIX) 모드는 윈도우 경로를 망가뜨린다:
+          "C:/Program Files/obs-studio/bin/64bit/obs64.exe --x"
+            → ['C:/Program', 'Files/obs-studio/bin/64bit/obs64.exe', '--x']
+          "C:\\Program Files\\obs-studio\\bin\\64bit\\obs64.exe --x"
+            → ['C:Program', 'Filesobs-studiobin64bitobs64.exe', '--x']
+        둘 다 실행이 실패한다. 첫 번째 형태는 config.example.yaml 에 예시로
+        적혀 있던 바로 그 문자열이다.
+
+        윈도우에서는 posix=False 로 쪼개고(역슬래시를 이스케이프로 안 먹음),
+        따옴표가 없는데 공백이 있는 경로는 전체를 한 덩어리로 본다.
+        """
+        import os
+        import shlex
+        if os.name != "nt":
+            return shlex.split(cmd)
+        lex = shlex.shlex(cmd, posix=False)
+        lex.whitespace_split = True
+        parts = [p.strip('"') for p in lex]
+        if not parts:
+            return parts
+        # 따옴표 없이 공백 있는 경로를 쓴 경우: 실행 파일 조각을 다시 붙인다.
+        # (.exe 로 끝나는 지점까지가 실행 파일)
+        if not parts[0].lower().endswith((".exe", ".bat", ".cmd", ".com")):
+            for i, part in enumerate(parts):
+                if part.lower().endswith((".exe", ".bat", ".cmd", ".com")):
+                    return [" ".join(parts[: i + 1])] + parts[i + 1:]
+        return parts
+
     def _launch_obs(self) -> bool:
         """OBS 프로그램을 직접 실행(백그라운드). 성공 여부만 반환."""
-        import shlex
         import subprocess
         try:
-            args = shlex.split(self.cfg.launch_command)
+            args = self._split_command(self.cfg.launch_command)
             subprocess.Popen(
                 args,
                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,

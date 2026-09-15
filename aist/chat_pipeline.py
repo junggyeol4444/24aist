@@ -24,7 +24,8 @@ from datetime import datetime, timezone
 from typing import Callable, List, Optional
 
 from .chat.base import ChatMessage, ChatSource
-from .config import BroadcastConfig
+from .config import BroadcastConfig, SafetyConfig
+from .safety import sanitize_incoming
 from .vtuber_bridge import VTuberBridge, format_chat_line
 
 log = logging.getLogger("aist.chat_pipeline")
@@ -38,10 +39,17 @@ class ChatPipeline:
         bridge: VTuberBridge,
         cfg: BroadcastConfig,
         on_message: Optional[Callable[[ChatMessage], None]] = None,
+        safety: Optional[SafetyConfig] = None,
+        on_send_error: Optional[Callable[[Exception], None]] = None,
     ):
         self.bridge = bridge
         self.cfg = cfg
         self.on_message = on_message
+        self.safety = safety or SafetyConfig()
+        # 코어로 못 보냈을 때 오케스트레이터에 알린다(재연결 판단용).
+        self.on_send_error = on_send_error
+        # 같은 전송 오류를 매 채팅마다 트레이스백으로 찍으면 로그가 폭발한다.
+        self._send_fail_streak = 0
         # 종료판단(채팅 저조/눈치 종료)에 쓰는 공유 상태. tz-aware UTC.
         self.last_chat_time: datetime = datetime.now(timezone.utc)
         self._last_chat_mono = time.monotonic()
@@ -145,16 +153,42 @@ class ChatPipeline:
         self._busy_since = time.monotonic()
         self._reset_idle_gap()   # 방금 말했으니 다음 혼잣말 공백을 새로 잡음
 
+    def _clean(self, msg: ChatMessage):
+        """코어에 넘기기 직전 소독 — 개행/제어문자 제거, 시스템 신호 흉내 무력화.
+
+        채팅을 버리지 않는다(다 반응). 모양만 한 줄 안에 가둔다.
+        이게 없으면 시청자가 개행으로 진짜 시스템 신호와 똑같은 줄을 만든다.
+        """
+        if not self.safety.sanitize_chat:
+            return msg.text, msg.author
+        return sanitize_incoming(msg.text, msg.author)
+
+    def _note_send_error(self, e: Exception, where: str):
+        """전송 실패 로그 — 같은 실패가 이어지면 트레이스백을 반복하지 않는다."""
+        self._send_fail_streak += 1
+        if self._send_fail_streak == 1:
+            log.exception("%s 실패", where)
+        elif self._send_fail_streak % 20 == 0:
+            log.error("%s 실패가 %d회째 이어지는 중: %s",
+                      where, self._send_fail_streak, e)
+        if self.on_send_error is not None:
+            try:
+                self.on_send_error(e)
+            except Exception:
+                log.debug("on_send_error 콜백 오류", exc_info=True)
+
     async def _send_single(self, msg: ChatMessage):
         if self.cfg.artificial_delay_sec > 0:
             # 기본 0. 운영자가 일부러 넣은 경우에만 작동.
             await asyncio.sleep(self.cfg.artificial_delay_sec)
         platform = msg.platform if self._include_platform else None
+        text, author = self._clean(msg)
         try:
-            await self.bridge.say_to_ai(msg.text, source=msg.author, platform=platform)
+            await self.bridge.say_to_ai(text, source=author, platform=platform)
+            self._send_fail_streak = 0
             self._mark_busy()
-        except Exception:
-            log.exception("채팅 전달 실패")
+        except Exception as e:
+            self._note_send_error(e, "채팅 전달")
 
     # 쌓인 채팅을 넘길 때의 귓속말 — 사람은 말 끝나고 채팅창을 '훑어보고'
     # 자연스럽게 반응하지, 쌓인 걸 하나하나 순서대로 전부 답하지 않는다.
@@ -167,18 +201,19 @@ class ChatPipeline:
         if len(batch) == 1:
             await self._send_single(batch[0])
             return
-        lines = [
-            format_chat_line(
-                m.text, m.author,
+        lines = []
+        for m in batch:
+            text, author = self._clean(m)
+            lines.append(format_chat_line(
+                text, author,
                 m.platform if self._include_platform else None,
-            )
-            for m in batch
-        ]
+            ))
         try:
             await self.bridge.say_to_ai(self._BATCH_WHISPER + "\n" + "\n".join(lines))
+            self._send_fail_streak = 0
             self._mark_busy()
-        except Exception:
-            log.exception("채팅 묶음 전달 실패")
+        except Exception as e:
+            self._note_send_error(e, "채팅 묶음 전달")
 
     def _reset_idle_gap(self):
         """다음 혼잣말까지의 공백을 idle_gap_min~max 사이로 새로 잡는다.

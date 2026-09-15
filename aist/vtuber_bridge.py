@@ -77,6 +77,32 @@ class VTuberBridge:
                     await asyncio.sleep(wait)
         raise last_err
 
+    async def reconnect_once(self) -> bool:
+        """방송 중 끊긴 연결을 한 번 다시 붙여본다. 성공 여부만 돌려준다.
+
+        방송 중에는 예외를 올리지 않는다 — 실패해도 판단은 호출자가 한다.
+        """
+        try:
+            import websockets
+            old, self._ws = self._ws, None
+            if old is not None:
+                try:
+                    await old.close()
+                except Exception:  # noqa: BLE001 - 이미 끊긴 소켓
+                    pass
+            self._ws = await asyncio.wait_for(
+                websockets.connect(self.cfg.ws_url, max_size=None),
+                timeout=self.cfg.connect_timeout_sec,
+            )
+            log.info("코어 재연결 성공 (%s)", self.cfg.ws_url)
+            return True
+        except Exception as e:  # noqa: BLE001 - 사유 다양
+            log.warning("코어 재연결 실패: %s", e)
+            return False
+
+    def is_connected(self) -> bool:
+        return self._ws is not None
+
     async def _send(self, payload: dict):
         if self._ws is None:
             raise RuntimeError("VTuber 코어에 먼저 connect() 해야 합니다.")

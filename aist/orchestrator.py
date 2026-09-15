@@ -32,6 +32,7 @@ from .memory import Memory
 from .obs_control import ObsController, ObsError
 from .persona import Persona
 from .report import generate_report
+from .safety import StopFlag, check_output
 from .scheduler import Scheduler
 from .transcript import Transcript
 from .vtuber_bridge import VTuberBridge
@@ -69,9 +70,21 @@ class Orchestrator:
         self.memory = Memory(cfg.memory)
         self.llm = LLMClient(cfg.llm, cfg.secrets)
         self._stop = asyncio.Event()
+        self.stop_flag = StopFlag(cfg.safety.stop_flag_path)
+        # 방송 한 사이클 안에서만 쓰는 상태
+        self._core_lost = False
 
     def request_stop(self):
         self._stop.set()
+
+    def _check_stop_flag(self) -> bool:
+        """`aist stop` 이 남긴 중단 스위치를 확인한다(무인 상태의 킬스위치)."""
+        if not self.stop_flag.raised():
+            return False
+        log.warning("중단 스위치 감지(%s): %s — 방송을 내립니다.",
+                    self.stop_flag.path, self.stop_flag.reason() or "사유 없음")
+        self.request_stop()
+        return True
 
     # ---------------------------------------------------------------- 자동
     async def run(self):
@@ -116,6 +129,13 @@ class Orchestrator:
 
     # ------------------------------------------------------------ 한 사이클
     async def _run_broadcast(self, skip_start_announce: bool = False):
+        """방송 한 사이클. 어떤 경로로 빠져나가든 뒷정리는 반드시 돈다.
+
+        뒷정리(_teardown)가 안 돌면 OBS 스트림이 켜진 채 남고 기록·기억이
+        유실된다. 실제로 Ctrl+C 를 눌러보니 그 상태가 됐다. 그래서 OBS 를
+        켜기 '전'부터 try/finally 로 감싼다 — 코어 연결을 기다리는 도중에
+        멈춰도(연결 대기는 수십 초가 될 수 있다) 스트림이 남지 않게.
+        """
         cfg = self.cfg
         start_dt = _now(cfg.scheduler.timezone)
         log.info("=== 방송 시작 (%s) ===", start_dt.isoformat())
@@ -126,6 +146,12 @@ class Orchestrator:
         chat_stop = asyncio.Event()
         pipeline_task: Optional[asyncio.Task] = None
         game_task: Optional[asyncio.Task] = None
+        drain_task: Optional[asyncio.Task] = None
+        aborted = False
+        self._core_lost = False
+        # 이전 방송이 남긴 중단 스위치가 있으면 지우고 시작한다(안 지우면
+        # 다음 방송이 켜지자마자 다시 꺼진다).
+        self.stop_flag.clear()
 
         # 트랜스크립트(사고발언 점검·다시보기 학습용). 실패해도 방송은 진행.
         transcript = None
@@ -137,97 +163,136 @@ class Orchestrator:
                 log.warning("트랜스크립트 시작 실패(기록 없이 진행): %s", e)
                 transcript = None
 
-        # 1) 시작 공지 (실패해도 방송은 진행). 사전 공지 했으면 중복 방지.
-        if not skip_start_announce:
-            await self._announce("start", start_dt)
-
-        # 2) OBS 시작
         try:
-            obs.connect()
-            obs.start_stream()
-        except ObsError as e:
-            log.error("OBS 시작 실패: %s (start_stream=false 면 정상)", e)
+            # 1) 시작 공지 (실패해도 방송은 진행). 사전 공지 했으면 중복 방지.
+            if not skip_start_announce:
+                await self._announce("start", start_dt)
 
-        # 3) 코어 연결 + 채팅 파이프라인
-        self.memory.start_session()
-        try:
-            await bridge.connect()
-        except Exception as e:
-            log.error("Open-LLM-VTuber 코어 연결 실패: %s — 이번 사이클 중단", e)
-            await self._teardown(obs, bridge, None, None, None, start_dt,
-                                 transcript=transcript, aborted=True)
-            return
+            # 2) OBS 시작
+            try:
+                obs.connect()
+                obs.start_stream()
+            except ObsError as e:
+                log.error("OBS 시작 실패: %s (start_stream=false 면 정상)", e)
 
-        def on_chat(msg):
-            self.memory.note_chat(msg)
-            if transcript is not None:
-                transcript.log_chat(msg)
+            # 3) 코어 연결 + 채팅 파이프라인
+            self.memory.start_session()
+            try:
+                await bridge.connect()
+            except asyncio.CancelledError:
+                raise
+            except Exception as e:
+                log.error("Open-LLM-VTuber 코어 연결 실패: %s — 이번 사이클 중단", e)
+                aborted = True
+                return
 
-        pipeline = ChatPipeline(bridge, cfg.broadcast, on_message=on_chat)
-
-        # 코어가 보내오는 메시지(자막·오디오·control 등)를 계속 읽는다.
-        # 안 읽으면 websockets 수신 버퍼가 무한정 쌓여 장시간 방송에서
-        # 메모리 누수/정지가 난다(24h 안정성의 핵심). 읽으면서:
-        #  - AI 실제 발화는 트랜스크립트에 (사고발언 점검)
-        #  - 말 시작/끝 신호는 파이프라인에 ('입 하나' 모델의 눈)
-        def on_core(data):
-            if transcript is not None:
-                transcript.on_core_message(data)
-            pipeline.on_core_message(data)
-
-        drain_task = asyncio.create_task(self._drain_core(bridge, on_core))
-
-        try:
-            source = make_chat_source(cfg)
-            pipeline_task = asyncio.create_task(pipeline.run(source, chat_stop))
-        except Exception as e:
-            log.error("채팅 소스 시작 실패: %s — 채팅 없이 진행", e)
-
-        # 게임(8단계, 선택): 사이드카 이벤트 → AI 반응. 채팅 소통은 그대로.
-        if cfg.game.enabled:
-            from .game import MinecraftFeed
-            def on_game_event(data):
-                self.memory.record_event("game", **data)
+            def on_chat(msg):
+                self.memory.note_chat(msg)
                 if transcript is not None:
-                    transcript.log_event("game", **data)
-            feed = MinecraftFeed(bridge, cfg.game, on_event=on_game_event)
-            game_task = asyncio.create_task(feed.run(chat_stop))
-            log.info("게임 연동 켜짐 (%s)", cfg.game.ws_url)
+                    transcript.log_chat(msg)
 
-        # 방송 오프닝(4-1): 켜지면 여는 인사로 문을 연다
-        if cfg.broadcast.opening_greeting:
-            await self._safe(bridge.say_to_ai(_CUE_OPENING))
+            def on_send_error(_e):
+                # 코어로 못 보냈다 = 연결이 끊겼을 가능성. 재연결 판단에 쓴다.
+                self._core_lost = True
 
-        # 4) 종료 판단 루프
-        ej = EndJudge(cfg.end_judge, start_dt)
-        log.info("예정 종료: %s (%s)", ej.planned_end.isoformat(), ej.planned_trigger)
-        pre_notified = False
-        while not self._stop.is_set():
-            now = _now(cfg.scheduler.timezone)
-            last_chat = pipeline.last_chat_time if pipeline else None
-            decision = ej.evaluate(now, last_chat)
-            if decision.phase is Phase.END:
-                log.info("종료 판단: %s", decision.detail)
-                # 눈치껏: 종료 시각이 와도 말 중간·밀린 채팅·방금 온 후원
-                # 중엔 안 끊고, 지금 하던 걸 끝낸 자연스러운 틈에 마무리로
-                # 넘어간다(채팅 소강을 기다리는 게 아님).
-                await self._wait_for_natural_break(pipeline, cfg.end_judge.wind_down)
-                break
-            if decision.phase is Phase.PRE_NOTICE and not pre_notified:
-                pre_notified = True
-                if cfg.end_judge.wind_down.enabled:
-                    log.info("마무리 예고 단계 진입")
-                    await self._safe(bridge.say_to_ai(_CUE_WIND_DOWN))
-            await self._sleep_or_stop(5)
+            pipeline = ChatPipeline(bridge, cfg.broadcast, on_message=on_chat,
+                                    safety=cfg.safety, on_send_error=on_send_error)
 
-        # 5) 마무리 인사 → (여운 두고) 종료
-        if cfg.end_judge.wind_down.enabled and cfg.end_judge.wind_down.closing_greeting:
-            await self._safe(bridge.say_to_ai(_CUE_CLOSING))
-            await self._sleep_or_stop(cfg.end_judge.wind_down.closing_wait_sec)
+            # 코어가 보내오는 메시지(자막·오디오·control 등)를 계속 읽는다.
+            # 안 읽으면 websockets 수신 버퍼가 무한정 쌓여 장시간 방송에서
+            # 메모리 누수/정지가 난다(24h 안정성의 핵심). 읽으면서:
+            #  - AI 실제 발화는 트랜스크립트에 (사고발언 점검 + 금지어 감시)
+            #  - 말 시작/끝 신호는 파이프라인에 ('입 하나' 모델의 눈)
+            def on_core(data):
+                if transcript is not None:
+                    transcript.on_core_message(data)
+                pipeline.on_core_message(data)
+                self._watch_output(data, bridge, transcript)
 
-        await self._teardown(obs, bridge, pipeline, pipeline_task, chat_stop,
-                             start_dt, drain_task=drain_task,
-                             transcript=transcript, game_task=game_task)
+            drain_task = asyncio.create_task(self._drain_core(bridge, on_core))
+
+            try:
+                source = make_chat_source(cfg)
+                pipeline_task = asyncio.create_task(pipeline.run(source, chat_stop))
+            except Exception as e:
+                log.error("채팅 소스 시작 실패: %s — 채팅 없이 진행", e)
+
+            # 게임(8단계, 선택): 사이드카 이벤트 → AI 반응. 채팅 소통은 그대로.
+            if cfg.game.enabled:
+                from .game import MinecraftFeed
+                def on_game_event(data):
+                    self.memory.record_event("game", **data)
+                    if transcript is not None:
+                        transcript.log_event("game", **data)
+                feed = MinecraftFeed(bridge, cfg.game, on_event=on_game_event)
+                game_task = asyncio.create_task(feed.run(chat_stop))
+                log.info("게임 연동 켜짐 (%s)", cfg.game.ws_url)
+
+            # 방송 오프닝(4-1): 켜지면 여는 인사로 문을 연다
+            if cfg.broadcast.opening_greeting:
+                await self._safe(bridge.say_to_ai(_CUE_OPENING))
+
+            # 4) 종료 판단 루프
+            ej = EndJudge(cfg.end_judge, start_dt)
+            log.info("예정 종료: %s (%s)", ej.planned_end.isoformat(), ej.planned_trigger)
+            pre_notified = False
+            core_gone = False
+            while not self._stop.is_set():
+                # 운영자 킬스위치(`aist stop`) — 사람이 자리에 없어도 끌 수 있다.
+                if self._check_stop_flag():
+                    break
+                # 코어가 죽었는지 확인하고, 살릴 수 있으면 살린다.
+                # 못 살리면 이번 방송을 내린다(끊긴 채 무음으로 계속 송출되는
+                # 것을 막는다. 프로세스가 끝나야 무인운영 재시작도 걸린다).
+                if self._core_lost:
+                    if await self._recover_core(bridge):
+                        self._core_lost = False
+                        # 끊긴 수신 루프를 새로 띄운다(안 띄우면 재연결해도
+                        # 말 시작/끝 신호를 못 받아 '입 하나' 모델이 멎는다).
+                        if drain_task is not None:
+                            drain_task.cancel()
+                            await asyncio.gather(drain_task, return_exceptions=True)
+                        drain_task = asyncio.create_task(self._drain_core(bridge, on_core))
+                    else:
+                        core_gone = True
+                        break
+                now = _now(cfg.scheduler.timezone)
+                last_chat = pipeline.last_chat_time if pipeline else None
+                decision = ej.evaluate(now, last_chat)
+                if decision.phase is Phase.END:
+                    log.info("종료 판단: %s", decision.detail)
+                    # 눈치껏: 종료 시각이 와도 말 중간·밀린 채팅·방금 온 후원
+                    # 중엔 안 끊고, 지금 하던 걸 끝낸 자연스러운 틈에 마무리로
+                    # 넘어간다(채팅 소강을 기다리는 게 아님).
+                    await self._wait_for_natural_break(pipeline, cfg.end_judge.wind_down)
+                    break
+                if decision.phase is Phase.PRE_NOTICE and not pre_notified:
+                    pre_notified = True
+                    if cfg.end_judge.wind_down.enabled:
+                        log.info("마무리 예고 단계 진입")
+                        await self._safe(bridge.say_to_ai(_CUE_WIND_DOWN))
+                await self._sleep_or_stop(5)
+
+            # 5) 마무리 인사 → (여운 두고) 종료
+            #
+            # 인사보다 먼저 채팅 유입을 끊는다. 안 그러면 "오늘 고마웠어요~"
+            # 하고 나서 새로 들어온 채팅에 계속 답하다가 뚝 끊긴다.
+            # 기획안 4-3: "뚝 끄지 말고 예고 → 마무리 인사 → 종료".
+            # 인사가 마지막이어야 한다.
+            if not core_gone:
+                chat_stop.set()
+                if (cfg.end_judge.wind_down.enabled
+                        and cfg.end_judge.wind_down.closing_greeting):
+                    log.info("채팅 유입 차단 → 마무리 인사")
+                    await self._safe(bridge.say_to_ai(_CUE_CLOSING))
+                    await self._sleep_or_stop(cfg.end_judge.wind_down.closing_wait_sec)
+        finally:
+            # Ctrl+C·예외·코어 유실 어느 경우에도 뒷정리는 반드시 돈다.
+            # shield 로 감싸 취소 중에도 끝까지 돌게 한다.
+            await asyncio.shield(self._teardown(
+                obs, bridge, pipeline, pipeline_task, chat_stop,
+                start_dt, drain_task=drain_task,
+                transcript=transcript, game_task=game_task, aborted=aborted))
 
     async def _teardown(self, obs, bridge, pipeline, pipeline_task, chat_stop,
                         start_dt, drain_task=None, transcript=None,
@@ -387,10 +452,72 @@ class Orchestrator:
 
         on_message 가 있으면 각 메시지를 넘긴다 — 트랜스크립트가 AI 실제
         발화(type=audio 의 display_text)를 여기서 잡아 기록한다.
+
+        이 루프가 끝났다는 건 코어와의 연결이 끊겼다는 뜻이다. 예전에는
+        debug 로그만 남기고 넘어갔는데, 그러면 방송인은 말을 못 하는데
+        스트림만 계속 나가는 상태가 된다. 그래서 끊김을 표시한다.
         """
         try:
             await bridge.recv_loop(on_message=on_message)
+            log.warning("코어 수신 루프가 끝났습니다 — 연결이 끊긴 것으로 봅니다.")
+            self._core_lost = True
         except asyncio.CancelledError:
             raise
-        except Exception as e:  # 연결 종료 등은 정상 흐름
-            log.debug("코어 수신 루프 종료: %s", e)
+        except Exception as e:  # noqa: BLE001 - 끊김 사유는 다양
+            log.warning("코어 연결 끊김: %s", e)
+            self._core_lost = True
+
+    async def _recover_core(self, bridge) -> bool:
+        """방송 중 끊긴 코어를 다시 붙인다. 살리면 True, 포기면 False.
+
+        살아나면 수신 루프도 다시 띄워야 하는데, 그건 호출부가 아니라
+        여기서 같이 처리하지 않는다 — 재연결 후에도 drain 이 필요하므로
+        _run_broadcast 가 만든 drain_task 를 대신할 새 태스크를 만든다.
+        """
+        vt = self.cfg.vtuber
+        if not vt.reconnect_during_broadcast:
+            log.error("코어 연결이 끊겼고 방송 중 재연결이 꺼져 있습니다 → 방송 종료")
+            return False
+        for i in range(1, max(1, vt.reconnect_max_attempts) + 1):
+            if self._stop.is_set():
+                return False
+            wait = vt.reconnect_backoff_sec * i
+            log.info("코어 재연결 시도 %d/%d (%.0f초 후)",
+                     i, vt.reconnect_max_attempts, wait)
+            await self._sleep_or_stop(wait)
+            if self._stop.is_set():
+                return False
+            if await bridge.reconnect_once():
+                return True
+        log.error("코어 재연결 %d회 모두 실패 → 이번 방송을 정상 종료합니다. "
+                  "(끊긴 채로 계속 송출하지 않습니다)", vt.reconnect_max_attempts)
+        return False
+
+    def _watch_output(self, data: dict, bridge, transcript) -> None:
+        """AI 가 실제로 말한 문장을 운영자가 정한 금지어와 대조한다.
+
+        기본값(빈 목록)에서는 아무 일도 하지 않는다 — 무엇이 문제인지는
+        운영자가 방송을 보고 정한다(기획안 3-3/3-5).
+        """
+        banned = self.cfg.safety.banned_words
+        if not banned or data.get("type") != "audio":
+            return
+        dt = data.get("display_text") or {}
+        text = dt.get("text") if isinstance(dt, dict) else ""
+        hit = check_output(text or "", banned)
+        if not hit:
+            return
+        log.error("금지어 감지(%r) — 발화를 끊습니다: %s", hit, (text or "")[:120])
+        if transcript is not None:
+            try:
+                transcript.log_event("banned_word", word=hit, text=text)
+            except Exception:
+                log.debug("금지어 기록 실패", exc_info=True)
+        # 지금 나가는 말을 즉시 끊는다.
+        try:
+            asyncio.get_running_loop().create_task(self._safe(bridge.interrupt()))
+        except RuntimeError:  # 루프 밖에서 불린 경우(테스트 등)
+            log.debug("끼어들기 예약 실패(이벤트 루프 없음)")
+        if self.cfg.safety.stop_broadcast_on_hit:
+            log.error("safety.stop_broadcast_on_hit=true → 방송을 내립니다.")
+            self.request_stop()

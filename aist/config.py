@@ -23,7 +23,15 @@ class VTuberConfig:
     """Open-LLM-VTuber 연결(두뇌+입+얼굴+귀)."""
     ws_url: str = "ws://127.0.0.1:12393/client-ws"
     connect_timeout_sec: float = 10.0
+    # 초기 연결 재시도(코어가 늦게 떠도 기다린다)
     reconnect: bool = True
+    # 방송 '중' 코어 연결이 끊겼을 때 다시 붙는다. 끄면 예전처럼 끊긴 채
+    # 계속 도는데, 그러면 아바타는 멈추고 스트림만 무음으로 나간다.
+    reconnect_during_broadcast: bool = True
+    # 방송 중 재연결을 몇 번까지 시도할지. 다 실패하면 이번 방송을 정상
+    # 종료 절차로 내린다(프로세스가 끝나야 무인운영 재시작이 걸린다).
+    reconnect_max_attempts: int = 5
+    reconnect_backoff_sec: float = 3.0
 
 
 @dataclass
@@ -257,6 +265,24 @@ class MemoryConfig:
 
 
 @dataclass
+class SafetyConfig:
+    """사고 방지 (기획안 8-2 '돌발 발언', 1-3 '사고 쳤을 때').
+
+    무엇이 문제인지는 운영자가 방송을 보고 정한다. 그래서 banned_words 의
+    기본값은 빈 목록이다 — 코드가 미리 금지어를 정하지 않는다(3-3/3-5).
+    """
+    # 시청자 채팅의 개행/제어문자 제거 + 시스템 신호 흉내 무력화.
+    # 이건 '행동 규칙'이 아니라 입력 경계라서 기본 켜둔다.
+    sanitize_chat: bool = True
+    # AI 가 실제로 말한 문장에 이 단어가 있으면 즉시 끼어들어 끊는다.
+    banned_words: List[str] = field(default_factory=list)
+    # 금지어가 걸렸을 때 방송 자체를 내릴지(true) 발화만 끊을지(false)
+    stop_broadcast_on_hit: bool = False
+    # 즉시 중단 스위치 파일. `aist stop` 이 만들고 방송 루프가 확인한다.
+    stop_flag_path: str = "data/STOP"
+
+
+@dataclass
 class LoggingConfig:
     level: str = "INFO"
     dir: str = "data/logs"
@@ -354,6 +380,7 @@ class Config:
     memory: MemoryConfig = field(default_factory=MemoryConfig)
     logging: LoggingConfig = field(default_factory=LoggingConfig)
     game: GameConfig = field(default_factory=GameConfig)
+    safety: SafetyConfig = field(default_factory=SafetyConfig)
     secrets: Secrets = field(default_factory=Secrets)
 
     def active_platforms(self) -> List[str]:

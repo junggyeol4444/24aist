@@ -42,6 +42,26 @@ def _setup_logging(level: str) -> None:
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
         datefmt="%H:%M:%S",
     )
+    _quiet_third_party()
+
+
+def _quiet_third_party() -> None:
+    """서드파티 라이브러리의 트레이스백을 화면에서 지운다.
+
+    OBS 가 안 켜져 있으면 obsws_python 이 자기 로거로 파이썬 트레이스백
+    14줄을 먼저 뿜는다. 바로 아래에 우리 한글 안내가 있는데도 그렇다.
+    이 프로그램의 대상 사용자는 코딩을 안 하는 운영자다 — 저 출력을 보면
+    크게 망가진 줄 안다. 사유는 우리 메시지로 이미 전달하므로 눌러둔다.
+    (원인 추적이 필요하면 --log DEBUG 로 다시 볼 수 있다.)
+    """
+    root_level = logging.getLogger().getEffectiveLevel()
+    if root_level <= logging.DEBUG:
+        return
+    for name in ("obsws_python", "obsws_python.baseclient",
+                 "websockets", "websockets.client", "websockets.server",
+                 "discord", "discord.client", "discord.gateway",
+                 "urllib3", "httpx", "httpcore", "openai", "anthropic"):
+        logging.getLogger(name).setLevel(logging.CRITICAL)
 
 
 def _find_default(candidates):
@@ -438,6 +458,62 @@ def _gate(cfg, force: bool) -> bool:
     return False
 
 
+async def _run_with_signals(orch, coro_name: str) -> None:
+    """Ctrl+C / 종료 신호를 받으면 '중단 요청'으로 바꿔 정상 종료를 태운다.
+
+    그냥 KeyboardInterrupt 가 올라가게 두면 방송 루프가 취소되면서 뒷정리
+    (OBS 스트림 내리기·기록 저장)가 통째로 건너뛰어진다. 실제로 확인한
+    문제다 — 스트림이 켜진 채 남는다. 그래서 신호를 잡아 request_stop()
+    으로 바꾸고, 방송이 스스로 마무리하게 한다.
+
+    윈도우는 add_signal_handler 가 없어서 signal.signal 로 대체한다.
+    """
+    import signal
+
+    loop = asyncio.get_running_loop()
+    task = asyncio.ensure_future(getattr(orch, coro_name)())
+    asked = {"n": 0}
+
+    def _ask_stop():
+        asked["n"] += 1
+        if asked["n"] == 1:
+            print("\n중단 요청 — 방송을 정상적으로 내리는 중입니다 "
+                  "(OBS 스트림 종료·기록 저장). 한 번 더 누르면 즉시 끕니다.")
+            orch.request_stop()
+        else:
+            print("\n즉시 중단합니다. OBS 스트림이 켜진 채 남을 수 있습니다.")
+            task.cancel()
+
+    installed = []
+    for signame in ("SIGINT", "SIGTERM", "SIGBREAK"):
+        sig = getattr(signal, signame, None)
+        if sig is None:
+            continue
+        try:
+            loop.add_signal_handler(sig, _ask_stop)
+            installed.append(("loop", sig))
+        except (NotImplementedError, RuntimeError, AttributeError, ValueError):
+            # 윈도우 / 메인 스레드가 아닐 때
+            try:
+                prev = signal.signal(sig, lambda *_a: _ask_stop())
+                installed.append(("signal", sig, prev))
+            except (ValueError, OSError):
+                pass
+    try:
+        await task
+    except asyncio.CancelledError:
+        pass
+    finally:
+        for entry in installed:
+            try:
+                if entry[0] == "loop":
+                    loop.remove_signal_handler(entry[1])
+                else:
+                    signal.signal(entry[1], entry[2])
+            except Exception:  # noqa: BLE001 - 정리 실패는 무시
+                pass
+
+
 def cmd_broadcast_now(args) -> int:
     from .orchestrator import Orchestrator
     cfg, persona = _load(args)
@@ -445,9 +521,31 @@ def cmd_broadcast_now(args) -> int:
         return 1
     orch = Orchestrator(cfg, persona)
     try:
-        asyncio.run(orch.run_one_now())
+        asyncio.run(_run_with_signals(orch, "run_one_now"))
     except KeyboardInterrupt:
         print("\n중단됨")
+    return 0
+
+
+def cmd_stop(args) -> int:
+    """지금 도는 방송에 중단을 요청한다(사고 시 킬스위치).
+
+    프로세스 간 통신 대신 파일 하나를 쓴다. 윈도우/리눅스 어디서나 같게
+    동작하고, 원격에서 파일만 만들 수 있어도 끌 수 있다.
+    """
+    from .config import load_config
+    from .safety import StopFlag
+    cfg = load_config(args.config)
+    flag = StopFlag(cfg.safety.stop_flag_path)
+    if getattr(args, "clear", False):
+        flag.clear()
+        print(f"중단 스위치를 해제했습니다: {flag.path}")
+        return 0
+    p = flag.raise_(args.reason or "운영자 중단 요청")
+    print(f"중단 스위치를 올렸습니다: {p}")
+    print("  도는 방송이 있으면 몇 초 안에 마무리 절차로 들어갑니다")
+    print("  (OBS 스트림 종료 · 기록 저장까지 하고 끝냅니다).")
+    print(f"  해제: aist stop --clear   (안 지우면 다음 방송 시작 시 자동으로 지워집니다)")
     return 0
 
 
@@ -534,7 +632,7 @@ def cmd_rehearse(args) -> int:
     print(f"  코어: {cfg.vtuber.ws_url} (먼저 띄워두세요)\n")
     orch = Orchestrator(cfg, persona)
     try:
-        asyncio.run(orch.run_one_now())
+        asyncio.run(_run_with_signals(orch, "run_one_now"))
     except KeyboardInterrupt:
         print("\n중단됨")
     print("\n리허설 끝. 위 흐름이 어색하면 persona.yaml / config.yaml 을 다듬으세요.")
@@ -548,7 +646,7 @@ def cmd_run(args) -> int:
         return 1
     orch = Orchestrator(cfg, persona)
     try:
-        asyncio.run(orch.run())
+        asyncio.run(_run_with_signals(orch, "run"))
     except KeyboardInterrupt:
         print("\n중단됨")
     return 0
@@ -605,6 +703,12 @@ def build_parser() -> argparse.ArgumentParser:
     p_run.add_argument("--force", action="store_true",
                        help="패키지가 빠져 있어도 강행(중간에 멈출 수 있음)")
     p_run.set_defaults(func=cmd_run)
+
+    p_stop = sub.add_parser(
+        "stop", help="지금 도는 방송을 정상 종료시킨다(사고 시 킬스위치)")
+    p_stop.add_argument("--reason", default="", help="중단 사유(기록용)")
+    p_stop.add_argument("--clear", action="store_true", help="중단 스위치 해제")
+    p_stop.set_defaults(func=cmd_stop)
     return p
 
 
