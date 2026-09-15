@@ -231,3 +231,50 @@ def test_now_warns_only_once_per_timezone(caplog):
             orch._now("Nowhere/Nothing")
     errors = [r for r in caplog.records if r.levelname == "ERROR"]
     assert len(errors) == 1, f"{len(errors)}번 찍혔습니다"
+
+
+# ---- "방송이 안 됩니다" 는 진짜 안 될 때만 ----
+def test_discord_channel_missing_does_not_block_broadcast():
+    """디스코드 채널 ID 가 비었다고 방송이 안 되는 건 아니다.
+
+    예시 설정 그대로면 discord.enabled=true / channel_id=0 이라, 점검이
+    "지금 상태로는 방송이 안 됩니다" 라고 단정했다 — 거짓말이다.
+    """
+    c = Config()
+    c.announce.discord.enabled = True
+    c.announce.discord.channel_id = 0
+    probs = [p for p in config_problems(c) if "channel_id" in p]
+    assert probs, "문제로 알리기는 해야 한다"
+    assert all(getattr(p, "blocking", True) is False for p in probs)
+
+
+def test_timezone_problem_still_blocks():
+    c = Config()
+    c.scheduler.timezone = "Asia/Seoull"
+    probs = [p for p in config_problems(c) if "타임존" in p]
+    assert probs and all(getattr(p, "blocking", True) for p in probs)
+
+
+def test_check_does_not_declare_failure_for_non_blocking_only(tmp_path, monkeypatch, capsys):
+    """막는 문제가 없으면 '방송이 안 됩니다' 가 나오면 안 된다."""
+    import argparse
+
+    import aist.cli as cli
+    import aist.preflight as pf
+    from aist.persona import Persona
+
+    c = Config()
+    c.announce.discord.enabled = True
+    c.announce.discord.channel_id = 0
+    monkeypatch.setattr(cli, "_load", lambda args: (c, Persona()))
+    monkeypatch.setattr(pf, "missing", lambda cfg: [])
+    monkeypatch.setattr(pf, "core_frontend_ready", lambda: (True, ""))
+    monkeypatch.setattr(pf, "core_conf_ready", lambda: (True, ""))
+    monkeypatch.setattr(pf, "core_deps_ready", lambda: (True, "ok"))
+    monkeypatch.setattr(pf, "core_python_ok", lambda: (True, "3.12"))
+
+    rc = cli.cmd_check(argparse.Namespace(config="x", persona="y"))
+    out = capsys.readouterr().out
+    assert "방송이 안 됩니다" not in out, out
+    assert "channel_id" in out          # 알리기는 한다
+    assert rc == 0

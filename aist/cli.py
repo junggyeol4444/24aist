@@ -112,7 +112,7 @@ def _load(args):
 
 # --------------------------------------------------------------- 커맨드들
 def cmd_check(args) -> int:
-    from .config import ConfigError
+    from .config import REHEARSAL_PLATFORM, ConfigError
     try:
         cfg, persona = _load(args)
     except (ConfigError, FileNotFoundError) as e:
@@ -152,6 +152,14 @@ def cmd_check(args) -> int:
         "twitcasting": ("user_id", c.twitcasting.user_id or s.twitcasting_user_id),
     }
     for p in actives:
+        if p not in ids:
+            # rehearsal 처럼 플랫폼 식별자가 없는 경우. 예전에는 여기서
+            # KeyError 트레이스백이 그대로 떴다 — 점검이 프로그램 오류로
+            # 끝나면 운영자는 뭘 고쳐야 할지 알 수 없다.
+            note = ("리허설용 가짜 채팅 — 실제 방송에는 쓰지 않습니다"
+                    if p == REHEARSAL_PLATFORM else "식별자 없음")
+            print(f"    {p:<11}: {note}")
+            continue
         key, val = ids[p]
         extra = ""
         if p == "twitcasting":
@@ -179,10 +187,11 @@ def cmd_check(args) -> int:
             print(f"    [!] {note}")
 
     problems = preflight.config_problems(cfg)
+    hard_problems = [m for m in problems if getattr(m, "blocking", True)]
     if problems:
         print("\n  설정값 문제 (패키지가 다 깔려 있어도 방송이 이상하게 돕니다):")
         for msg in problems:
-            print(f"    [X] {msg}")
+            print(f"    {'[X]' if getattr(msg, 'blocking', True) else '[!]'} {msg}")
 
     print("\n  실행 준비 상태:")
     if not miss:
@@ -197,9 +206,9 @@ def cmd_check(args) -> int:
     print(f"    파이썬 버전    : {'OK ' + py_msg if py_ok else '[X] ' + py_msg}")
 
     print()
-    if blockers or not fe_ok or not conf_ok or not deps_ok or not py_ok or problems:
+    if blockers or not fe_ok or not conf_ok or not deps_ok or not py_ok or hard_problems:
         print("지금 상태로는 방송이 안 됩니다. 아래를 먼저 해결하세요:")
-        if problems:
+        if hard_problems:
             print("  - 위 '설정값 문제' 부터 고치세요 (config.yaml)")
         if blockers:
             print(f"  - 패키지 설치: {preflight.install_hint(miss)}")
@@ -213,7 +222,7 @@ def cmd_check(args) -> int:
                   f" {preflight.hint(*preflight.CMD_SETUP_ALL)}")
         print(f"  ( 한 번에: {preflight.hint(*preflight.CMD_SETUP_ALL)} )")
         return 1
-    if miss:
+    if miss or len(problems) > len(hard_problems):
         print("방송은 가능하지만 일부 기능이 꺼진 채 돕니다([!] 항목).")
     print("점검 완료. (실제 연결 테스트는 doctor / broadcast-now 로)")
     return 0

@@ -229,6 +229,22 @@ def core_python_ok(root: Path | None = None) -> tuple[bool, str]:
 _WEEKDAY_KEYS = ("mon", "tue", "wed", "thu", "fri", "sat", "sun")
 
 
+class Problem(str):
+    """설정 문제 한 줄. 방송 자체를 막는지(blocking) 여부를 함께 담는다.
+
+    문자열 그대로 쓸 수 있어서(출력·검색) 기존 호출부는 그대로 동작한다.
+    구분이 필요한 이유: 디스코드 채널 ID 가 비었다고 "방송이 안 됩니다" 라고
+    하면 거짓말이다. 공지만 안 올라갈 뿐 방송은 된다.
+    """
+
+    blocking: bool = True
+
+    def __new__(cls, text: str, blocking: bool = True):
+        obj = super().__new__(cls, text)
+        obj.blocking = blocking
+        return obj
+
+
 def config_problems(cfg) -> list[str]:
     """config.yaml 값 자체의 문제를 사람이 읽는 문장으로 돌려준다.
 
@@ -299,10 +315,10 @@ def config_problems(cfg) -> list[str]:
     # 5) 종료 판단 값이 앞뒤가 안 맞음
     ej = cfg.end_judge
     if ej.min_minutes > ej.max_minutes:
-        out.append(
+        out.append(Problem(
             f"end_judge.min_minutes({ej.min_minutes}) 가 max_minutes({ej.max_minutes}) "
-            f"보다 큽니다 → 최소 시간 보장이 이겨서 항상 {ej.min_minutes}분 방송이 됩니다."
-        )
+            f"보다 큽니다 → 최소 시간 보장이 이겨서 항상 {ej.min_minutes}분 방송이 됩니다.",
+            blocking=False))
     if ej.scheduled_end_hhmm:
         try:
             _parse_hhmm(ej.scheduled_end_hhmm)
@@ -312,11 +328,13 @@ def config_problems(cfg) -> list[str]:
     # 6) 공지를 켰는데 올릴 곳이 없음
     an = cfg.announce
     if (an.on_start or an.on_end) and not (an.discord.enabled or an.naver_cafe.enabled):
-        out.append(
+        out.append(Problem(
             "공지를 켰는데(on_start/on_end) 디스코드·네이버 카페가 둘 다 꺼져 있습니다 "
-            "→ 공지가 아무 데도 안 올라갑니다."
-        )
+            "→ 공지가 아무 데도 안 올라갑니다.", blocking=False))
     if an.discord.enabled and not an.discord.channel_id:
-        out.append("디스코드 공지가 켜져 있는데 channel_id 가 0 입니다 → 게시 안 됩니다.")
+        out.append(Problem(
+            "디스코드 공지가 켜져 있는데 channel_id 가 0 입니다 → 게시 안 됩니다. "
+            "(공지만 안 나갈 뿐 방송은 됩니다. 안 쓸 거면 announce.discord.enabled=false)",
+            blocking=False))
 
     return out
