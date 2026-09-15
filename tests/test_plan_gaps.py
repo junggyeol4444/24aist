@@ -125,3 +125,40 @@ def test_pre_announce_default_on():
     """사람도 방송 전에 미리 알린다 — 사전 공지는 기본값(30분 전)."""
     from aist.config import AnnounceConfig
     assert AnnounceConfig().pre_announce_minutes == 30
+
+
+def test_plan_preview_pre_notice_matches_real_broadcast():
+    """`aist plan` 이 보여주는 '마무리 예고' 시각은 실제로 쓰는 값이어야 한다.
+
+    단순히 "종료 N분 전" 으로 계산하면 방송이 짧을 때 시작보다 이른 시각이
+    나왔다(min 0/max 2분 → 19:00 시작인데 예고 18:42).
+    """
+    from datetime import datetime, timedelta, timezone
+
+    from aist.config import EndJudgeConfig
+    from aist.end_judge import EndJudge, Phase
+
+    cfg = EndJudgeConfig(min_minutes=0, max_minutes=2, end_jitter_min=0)
+    start = datetime(2026, 9, 15, 19, 0, tzinfo=timezone.utc)
+    ej = EndJudge(cfg, start)
+
+    pre = ej.pre_notice_at()
+    assert pre >= start, f"예고 시각이 방송 시작보다 이릅니다: {pre} < {start}"
+    assert pre < ej.planned_end
+    # 미리보기 값과 실제 판단이 같은 시점을 가리킨다
+    assert ej.evaluate(pre).phase is Phase.PRE_NOTICE
+    assert ej.evaluate(pre - timedelta(seconds=1)).phase in (Phase.LIVE, Phase.PRE_NOTICE)
+
+
+def test_plan_preview_pre_notice_normal_config():
+    from datetime import datetime, timezone
+
+    from aist.config import EndJudgeConfig
+    from aist.end_judge import EndJudge
+
+    cfg = EndJudgeConfig(min_minutes=60, max_minutes=180, end_jitter_min=0)
+    start = datetime(2026, 9, 15, 19, 0, tzinfo=timezone.utc)
+    ej = EndJudge(cfg, start)
+    pre = ej.pre_notice_at()
+    # 보통 설정에서는 그대로 "종료 N분 전"
+    assert (ej.planned_end - pre).total_seconds() / 60 == cfg.wind_down.pre_notice_minutes_before_end

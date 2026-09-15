@@ -120,6 +120,10 @@ class EndJudge:
 
         return EndDecision(Phase.LIVE, "", "")
 
+    def pre_notice_at(self) -> datetime:
+        """예정대로 흘러갔을 때 마무리 예고가 나갈 시각(미리보기용)."""
+        return self._pre_notice_at(self.planned_end)
+
     def _pre_notice_at(self, effective_end: datetime) -> datetime:
         """마무리 예고를 띄울 시각.
 

@@ -245,8 +245,14 @@ def cmd_plan(args) -> int:
         print(f"  최소 보장   : {ej.min_end.strftime('%H:%M')} (min={cfg.end_judge.min_minutes}분)")
         wd = cfg.end_judge.wind_down
         if wd.enabled and wd.pre_notice_minutes_before_end > 0:
-            pre = ej.planned_end - timedelta(minutes=wd.pre_notice_minutes_before_end)
-            print(f"  마무리 예고 : {pre.strftime('%H:%M')}")
+            # 실제 방송이 쓰는 계산을 그대로 쓴다. 단순히 "종료 N분 전" 으로
+            # 적으면 방송이 짧을 때 시작보다 이른 시각이 찍힌다(min 0/max 2분
+            # 이면 19:00 시작인데 예고 18:42 로 나왔다).
+            pre = ej.pre_notice_at()
+            note = ""
+            if pre <= first_start:
+                note = "  ← 방송이 짧아 시작하자마자 마무리 예고 단계입니다"
+            print(f"  마무리 예고 : {pre.strftime('%H:%M')}{note}")
         print(f"  예정 종료   : {ej.planned_end.strftime('%H:%M')} (사유: {ej.planned_trigger})")
     return 0
 
