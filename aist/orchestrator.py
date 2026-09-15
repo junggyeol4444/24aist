@@ -121,6 +121,13 @@ class Orchestrator:
             # 방송 시작 전 공지(2-2②): 시작 X분 전에 미리 게시(선택).
             pre_announced = False
             lead_sec = self.cfg.announce.pre_announce_minutes * 60
+            if lead_sec > 0 and self.cfg.announce.on_start and wait <= lead_sec:
+                # 프로그램이 예고 시각을 지나 켜졌다(무인운영 재시작 등).
+                # 사전 공지는 못 하고 시작 시점에 공지한다 — 조용히 넘어가면
+                # 운영자는 "왜 미리 공지가 안 나갔지?" 만 남는다.
+                log.info("사전 공지 시각(%d분 전)이 이미 지났습니다 "
+                         "— 방송 시작 시점에 공지합니다.",
+                         self.cfg.announce.pre_announce_minutes)
             if lead_sec > 0 and self.cfg.announce.on_start and wait > lead_sec:
                 await self._sleep_or_stop(wait - lead_sec)
                 if self._stop.is_set():
@@ -445,12 +452,28 @@ class Orchestrator:
         return out
 
     def _next_stream_hint(self) -> str:
+        """종료 공지에 넣을 "다음엔 ~" 안내.
+
+        요일만 말하면 틀린 정보가 된다. 주 1회 화요일 방송이면 화요일에
+        끝내면서 "다음엔 화요일" 이라고 하는데, 시청자는 내일로 알아듣지만
+        실제로는 일주일 뒤다. 그래서 며칠 뒤인지에 따라 말을 바꾼다.
+        """
         now = _now(self.cfg.scheduler.timezone)
         nxt = self.scheduler.next_slot(now)
         if nxt is None:
             return ""
         days = ["월", "화", "수", "목", "금", "토", "일"]
-        return f"다음엔 {days[nxt.weekday()]}요일 {nxt.strftime('%H:%M')}에"
+        hhmm = nxt.strftime("%H:%M")
+        gap = (nxt.date() - now.date()).days
+        if gap <= 0:
+            return f"다음엔 오늘 {hhmm}에"
+        if gap == 1:
+            return f"다음엔 내일 {hhmm}에"
+        if gap < 7:
+            return f"다음엔 {days[nxt.weekday()]}요일 {hhmm}에"
+        if gap < 14:
+            return f"다음엔 다음 주 {days[nxt.weekday()]}요일 {hhmm}에"
+        return f"다음엔 {nxt.month}월 {nxt.day}일 {hhmm}에"
 
     async def _wait_for_natural_break(self, pipeline, wd):
         """눈치껏 종료: 지금 하던 말/반응이 끝난 '숨 고르는 틈'을 기다린다.

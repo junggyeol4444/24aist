@@ -70,7 +70,7 @@ class _Bridge:
     def __init__(self):
         self.said = []
 
-    async def say_to_ai(self, text, source=None, platform=None):
+    async def say_to_ai(self, text, source=None, platform=None, **kw):
         self.said.append((text, source, platform))
 
 

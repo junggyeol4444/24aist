@@ -79,7 +79,7 @@ def test_chat_stops_before_closing_greeting(tmp_path, monkeypatch):
 
     class FakeBridge:
         async def connect(self): return self
-        async def say_to_ai(self, text, source=None, platform=None):
+        async def say_to_ai(self, text, source=None, platform=None, **kw):
             if "마무리 인사" in text:
                 order.append(("closing_cue", None))
         async def close(self): pass

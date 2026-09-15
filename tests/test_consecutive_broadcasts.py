@@ -92,7 +92,7 @@ def test_three_cycles_leave_three_of_each(tmp_path, monkeypatch):
 
     class FakeBridge:
         async def connect(self): return self
-        async def say_to_ai(self, text, source=None, platform=None): pass
+        async def say_to_ai(self, text, source=None, platform=None, **kw): pass
         async def close(self): pass
         async def recv_loop(self, on_message=None): await asyncio.sleep(3600)
 

@@ -21,7 +21,7 @@ class FakeBridge:
         self.events.append("connect")
         return self
 
-    async def say_to_ai(self, text, source=None, platform=None):
+    async def say_to_ai(self, text, source=None, platform=None, **kw):
         self.events.append(("say", text))
 
     async def proactive_speak(self):

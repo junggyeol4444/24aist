@@ -31,17 +31,29 @@ _PLATFORM_KR = {
 
 
 def format_chat_line(text: str, source: Optional[str] = None,
-                     platform: Optional[str] = None) -> str:
+                     platform: Optional[str] = None,
+                     donation: Optional[str] = None) -> str:
     """채팅 한 줄을 자연스러운 형식으로. 로봇 태그([닉/twitch]) 금지.
 
-    - "neo: 안녕"                (기본)
-    - "neo (치지직): 안녕"       (동출 등 플랫폼 구분이 필요할 때만)
+    - "neo: 안녕"                        (기본)
+    - "neo (치지직): 안녕"               (동출 등 플랫폼 구분이 필요할 때만)
+    - "neo (10,000원 후원): 안녕"        (후원)
+    - "neo (치지직, 10,000원 후원): 안녕"
+
+    후원 표기가 없으면 AI 는 후원을 받은 줄 모른다. 기억과 리포트에는
+    남는데 정작 방송인만 모르는 상태가 된다 — 시청자가 돈을 냈는데
+    말 한마디 없이 지나간다. 기획안 4-3 의 "방금 온 후원 중엔 안 끊고"
+    도 AI 가 후원을 인지해야 성립한다.
     """
     if not source:
         return text
+    tags = []
     if platform:
-        kr = _PLATFORM_KR.get(platform, platform)
-        return f"{source} ({kr}): {text}"
+        tags.append(_PLATFORM_KR.get(platform, platform))
+    if donation is not None:
+        tags.append(f"{donation} 후원" if donation else "후원")
+    if tags:
+        return f"{source} ({', '.join(tags)}): {text}"
     return f"{source}: {text}"
 
 
@@ -110,7 +122,8 @@ class VTuberBridge:
             await self._ws.send(json.dumps(payload, ensure_ascii=False))
 
     async def say_to_ai(self, text: str, source: Optional[str] = None,
-                        platform: Optional[str] = None):
+                        platform: Optional[str] = None,
+                        donation: Optional[str] = None):
         """채팅/입력을 AI 에게 전달해 반응을 만들게 한다.
 
         source(닉네임)가 있으면 "닉: 내용" 자연 형식으로, platform 은
@@ -118,7 +131,7 @@ class VTuberBridge:
         AI 가 따라 읽어도 어색하지 않은 형식만 쓴다.
         """
         await self._send({"type": "text-input",
-                          "text": format_chat_line(text, source, platform)})
+                          "text": format_chat_line(text, source, platform, donation)})
 
     async def proactive_speak(self):
         """채팅이 정말 없을 때 혼잣말 트리거(능동 발화)."""

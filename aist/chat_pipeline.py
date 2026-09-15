@@ -182,14 +182,36 @@ class ChatPipeline:
             return msg.text, msg.author
         return sanitize_incoming(msg.text, msg.author)
 
+    @staticmethod
+    def _donation(msg: ChatMessage) -> Optional[str]:
+        """후원이면 금액 문자열을, 아니면 None 을 돌려준다.
+
+        금액은 플랫폼이 준 외부 문자열이라 채팅과 똑같이 소독한다.
+        """
+        if not msg.is_superchat:
+            return None
+        amount, _ = sanitize_incoming(msg.amount or "", "")
+        return amount
+
+    # 코드 버그를 연결 끊김으로 오인하면 안 된다. 오인하면 오케스트레이터가
+    # 재연결을 시도하고, 코어는 멀쩡하니 성공하고, 다음 채팅에서 또 같은
+    # 버그가 나서 무한 재연결 루프가 된다. 방송은 그동안 아무 말도 못 한다.
+    _BUG_ERRORS = (TypeError, AttributeError, NameError, ImportError)
+
     def _note_send_error(self, e: Exception, where: str):
         """전송 실패 로그 — 같은 실패가 이어지면 트레이스백을 반복하지 않는다."""
         self._send_fail_streak += 1
+        is_bug = isinstance(e, self._BUG_ERRORS)
         if self._send_fail_streak == 1:
-            log.exception("%s 실패", where)
+            if is_bug:
+                log.exception("%s 실패 — 연결 문제가 아니라 코드 문제로 보입니다", where)
+            else:
+                log.exception("%s 실패", where)
         elif self._send_fail_streak % 20 == 0:
             log.error("%s 실패가 %d회째 이어지는 중: %s",
                       where, self._send_fail_streak, e)
+        if is_bug:
+            return  # 재연결로 해결될 문제가 아니다
         if self.on_send_error is not None:
             try:
                 self.on_send_error(e)
@@ -203,7 +225,8 @@ class ChatPipeline:
         platform = msg.platform if self._include_platform else None
         text, author = self._clean(msg)
         try:
-            await self.bridge.say_to_ai(text, source=author, platform=platform)
+            await self.bridge.say_to_ai(text, source=author, platform=platform,
+                                        donation=self._donation(msg))
             self._send_fail_streak = 0
             self._mark_busy()
         except Exception as e:
@@ -226,6 +249,7 @@ class ChatPipeline:
             lines.append(format_chat_line(
                 text, author,
                 m.platform if self._include_platform else None,
+                self._donation(m),
             ))
         try:
             await self.bridge.say_to_ai(self._BATCH_WHISPER + "\n" + "\n".join(lines))
