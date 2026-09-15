@@ -293,9 +293,9 @@ def config_problems(cfg) -> list[str]:
         )
 
     # 3) 시각 형식
-    from .scheduler import _parse_hhmm
+    from .scheduler import _parse_hhmm, as_time_list
     for day, times in sch.weekly.items():
-        for t in (times or []):
+        for t in as_time_list(times):
             try:
                 _parse_hhmm(t)
             except ValueError as e:
