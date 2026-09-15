@@ -424,7 +424,8 @@ def cmd_report(args) -> int:
     if tdir.exists():
         files = sorted(tdir.glob("*.jsonl"))
         latest = files[-1] if files else None
-    path = generate_report(memory, cfg.logging.reports_dir, transcript_path=latest)
+    path = generate_report(memory, cfg.logging.reports_dir, transcript_path=latest,
+                           tz_name=cfg.scheduler.timezone)
     if path is None:
         print("기록된 방송 세션이 없습니다. (방송 후 다시 실행)")
         return 1

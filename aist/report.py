@@ -19,11 +19,30 @@ from .transcript import read_transcript
 log = logging.getLogger("aist.report")
 
 
+def _to_local(iso: str, tz_name: Optional[str]) -> str:
+    """기억에 UTC 로 저장된 ISO 시각을 운영자가 보는 타임존으로 바꾼다.
+
+    기억(memory)은 UTC 로 기록하는데 트랜스크립트·컨텐츠 팩의 파일명은
+    설정 타임존을 쓴다. 그대로 두면 같은 방송의 산출물 세 개가 서로 다른
+    시각을 갖는다(KST 면 9시간 차이). 운영자가 "어제 19시 방송 리포트" 를
+    찾을 때 못 찾고, 리포트 본문의 '시작' 시각도 틀리게 보인다.
+    """
+    if not iso or iso == "?" or not tz_name:
+        return iso
+    try:
+        from datetime import datetime
+        from zoneinfo import ZoneInfo
+        return datetime.fromisoformat(iso).astimezone(ZoneInfo(tz_name)).isoformat()
+    except Exception:  # noqa: BLE001 - tz 없음/형식 이상 → 원본 유지
+        return iso
+
+
 def generate_report(
     memory: Memory,
     out_dir: str,
     transcript_path: Optional[Path] = None,
     next_stream: str = "",
+    tz_name: Optional[str] = None,
 ) -> Optional[Path]:
     """직전 방송 세션의 리포트를 생성. 세션이 없으면 None."""
     if not memory._sessions:
@@ -31,8 +50,8 @@ def generate_report(
     s = memory._sessions[-1]
 
     lines: List[str] = []
-    start = s.get("start", "?")
-    end = s.get("end", "?")
+    start = _to_local(s.get("start", "?"), tz_name)
+    end = _to_local(s.get("end", "?"), tz_name)
     lines.append(f"# 방송 리포트 — {start[:16]}")
     lines.append("")
     lines.append(f"- 시작: {start}")

@@ -386,6 +386,7 @@ class Orchestrator:
                     self.memory, self.cfg.logging.reports_dir,
                     transcript_path=transcript_path,
                     next_stream=self._next_stream_hint(),
+                    tz_name=self.cfg.scheduler.timezone,
                 )
             except Exception:
                 log.exception("리포트 생성 실패(방송에는 영향 없음)")
