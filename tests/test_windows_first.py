@@ -297,3 +297,71 @@ def test_docs_warn_about_closing_window():
         text = path.read_text(encoding="utf-8")
         assert "중단.bat" in text, f"{path}: 중단.bat 안내 없음"
         assert "X 로 닫" in text, f"{path}: 창 닫기 경고 없음"
+
+
+# =========================================================================
+# cmd.exe 의 괄호 함정 — Wine 으로 설치.bat 을 처음부터 돌려보다 찾았다.
+#
+# if/for 의 ( ) 블록 안에서 echo 에 이스케이프 안 된 괄호를 쓰면, cmd 가
+# 그 ')' 를 블록의 끝으로 읽는다. 실제 cmd.exe 에서 재현한 결과:
+#
+#   echo [1/5] 가상환경(.venv) 생성...
+#     → [1/5] 가상환경
+#       '.venv'은(는) 내부 또는 외부 명령이 아닙니다.
+#       '생성...'은(는) 내부 또는 외부 명령이 아닙니다.
+#
+# 설치가 정상인데도 빨간 에러가 뜬다. 더 나쁜 건 코어실행.bat 의
+# "웹UI(화면)가 없습니다. 코어준비.bat 을 먼저 실행하세요" 였다 —
+# 정작 해야 할 안내가 에러 메시지 안에 파묻혀 운영자가 뭘 할지 모르게 된다.
+# =========================================================================
+def _unescaped_paren_echoes(path: Path):
+    """if/for 블록 안에서 이스케이프 안 된 괄호를 쓰는 echo 줄을 찾는다."""
+    import re
+    out = []
+    depth = 0
+    for lineno, line in enumerate(path.read_text(encoding="utf-8").split("\n"), 1):
+        s = line.strip()
+        if depth > 0 and s.lower().startswith("echo"):
+            body = s[4:].replace("^(", "").replace("^)", "")
+            if "(" in body or ")" in body:
+                out.append((lineno, s))
+        t = re.sub(r"\^.", "", s)
+        t = re.sub(r'"[^"]*"', "", t)
+        depth = max(depth + t.count("(") - t.count(")"), 0)
+    return out
+
+
+@pytest.mark.parametrize("name", [p.name for p in sorted(WINDOWS_DIR.glob("*.bat"))])
+def test_no_unescaped_parens_inside_blocks(name):
+    hits = _unescaped_paren_echoes(WINDOWS_DIR / name)
+    assert not hits, (
+        f"{name}: if/for 블록 안 echo 의 괄호를 ^( ^) 로 이스케이프해야 합니다. "
+        f"안 하면 cmd 가 블록을 거기서 끊고 뒷부분을 명령으로 실행합니다 → "
+        f"{hits}"
+    )
+
+
+def test_detector_catches_the_original_bug(tmp_path):
+    """검출기가 실제로 동작하는지 — 원래 버그 형태를 넣어 확인한다."""
+    bad = tmp_path / "bad.bat"
+    bad.write_text(
+        '@echo off\r\n'
+        'if not exist "X" (\r\n'
+        '  echo [1/5] 가상환경(.venv) 생성...\r\n'
+        ')\r\n', encoding="utf-8")
+    assert _unescaped_paren_echoes(bad)
+
+    good = tmp_path / "good.bat"
+    good.write_text(
+        '@echo off\r\n'
+        'if not exist "X" (\r\n'
+        '  echo [1/5] 가상환경^(.venv^) 생성...\r\n'
+        ')\r\n', encoding="utf-8")
+    assert not _unescaped_paren_echoes(good)
+
+
+def test_block_outside_echo_parens_are_fine(tmp_path):
+    """블록 밖 echo 의 괄호는 문제가 없다 — 과잉 검출하면 안 된다."""
+    p = tmp_path / "ok.bat"
+    p.write_text('@echo off\r\necho 이건 블록 밖이라 (괜찮다)\r\n', encoding="utf-8")
+    assert not _unescaped_paren_echoes(p)
