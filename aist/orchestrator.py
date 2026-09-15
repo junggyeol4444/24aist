@@ -73,6 +73,7 @@ class Orchestrator:
         self.stop_flag = StopFlag(cfg.safety.stop_flag_path)
         # 방송 한 사이클 안에서만 쓰는 상태
         self._core_lost = False
+        self._chat_source_dead = False
 
     def request_stop(self):
         self._stop.set()
@@ -149,6 +150,7 @@ class Orchestrator:
         drain_task: Optional[asyncio.Task] = None
         aborted = False
         self._core_lost = False
+        self._chat_source_dead = False
         # 이전 방송이 남긴 중단 스위치가 있으면 지우고 시작한다(안 지우면
         # 다음 방송이 켜지자마자 다시 꺼진다).
         self.stop_flag.clear()
@@ -195,8 +197,14 @@ class Orchestrator:
                 # 코어로 못 보냈다 = 연결이 끊겼을 가능성. 재연결 판단에 쓴다.
                 self._core_lost = True
 
+            def on_source_ended():
+                # 채팅이 '안 오는 것'과 소스가 '죽은 것'은 다르다.
+                # 전자는 정상(혼잣말로 끌고 감), 후자는 사고다.
+                self._chat_source_dead = True
+
             pipeline = ChatPipeline(bridge, cfg.broadcast, on_message=on_chat,
-                                    safety=cfg.safety, on_send_error=on_send_error)
+                                    safety=cfg.safety, on_send_error=on_send_error,
+                                    on_source_ended=on_source_ended)
 
             # 코어가 보내오는 메시지(자막·오디오·control 등)를 계속 읽는다.
             # 안 읽으면 websockets 수신 버퍼가 무한정 쌓여 장시간 방송에서
@@ -256,6 +264,15 @@ class Orchestrator:
                     else:
                         core_gone = True
                         break
+                # 채팅 소스가 죽었으면 다시 붙인다. 채팅 없는 방송은 이 기획의
+                # 핵심(1-2 "다 읽고 다 반응")이 통째로 빠진 상태다. 실패해도
+                # 방송은 계속한다 — 혼잣말로는 굴러가고, 채팅은 언제든 살아날
+                # 수 있다. 다만 조용히 두지 않고 로그로 알린다.
+                if self._chat_source_dead:
+                    self._chat_source_dead = False
+                    pipeline_task = await self._restart_chat(
+                        cfg, pipeline, pipeline_task, chat_stop)
+
                 now = _now(cfg.scheduler.timezone)
                 last_chat = pipeline.last_chat_time if pipeline else None
                 decision = ej.evaluate(now, last_chat)
@@ -500,6 +517,31 @@ class Orchestrator:
         log.error("코어 재연결 %d회 모두 실패 → 이번 방송을 정상 종료합니다. "
                   "(끊긴 채로 계속 송출하지 않습니다)", vt.reconnect_max_attempts)
         return False
+
+    async def _restart_chat(self, cfg, pipeline, pipeline_task, chat_stop):
+        """끊긴 채팅 소스를 새로 만들어 파이프라인을 다시 돌린다.
+
+        코어와 달리 채팅이 없어도 방송 자체는 굴러간다(혼잣말). 그래서
+        실패해도 방송을 내리지 않는다. 대신 조용히 두지 않는다 —
+        채팅 없는 방송은 이 기획의 핵심이 빠진 상태다.
+        """
+        log.error("채팅 연결이 끊겼습니다 — 다시 붙여봅니다.")
+        if pipeline_task is not None:
+            pipeline_task.cancel()
+            await asyncio.gather(pipeline_task, return_exceptions=True)
+        await self._sleep_or_stop(3)
+        if self._stop.is_set():
+            return None
+        try:
+            source = make_chat_source(cfg)
+            task = asyncio.create_task(pipeline.run(source, chat_stop))
+            log.info("채팅 연결 복구됨 (%s)", source.platform)
+            return task
+        except Exception as e:  # noqa: BLE001 - 플랫폼 사유 다양
+            log.error("채팅 재연결 실패: %s — 채팅 없이 방송을 계속합니다"
+                      "(혼잣말로 진행). 채팅이 필요하면 방송을 내리고 "
+                      "플랫폼 설정을 확인하세요.", e)
+            return None
 
     def _watch_output(self, data: dict, bridge, transcript) -> None:
         """AI 가 실제로 말한 문장을 운영자가 정한 금지어와 대조한다.

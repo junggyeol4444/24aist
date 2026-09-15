@@ -41,6 +41,7 @@ class ChatPipeline:
         on_message: Optional[Callable[[ChatMessage], None]] = None,
         safety: Optional[SafetyConfig] = None,
         on_send_error: Optional[Callable[[Exception], None]] = None,
+        on_source_ended: Optional[Callable[[], None]] = None,
     ):
         self.bridge = bridge
         self.cfg = cfg
@@ -48,6 +49,10 @@ class ChatPipeline:
         self.safety = safety or SafetyConfig()
         # 코어로 못 보냈을 때 오케스트레이터에 알린다(재연결 판단용).
         self.on_send_error = on_send_error
+        # 채팅 소스가 끝났을 때(플랫폼 연결이 끊겼을 때) 알린다.
+        # 채팅이 '안 오는 것'과 소스가 '죽은 것'은 다르다 — 전자는 정상이고
+        # (혼잣말로 방송을 끌고 간다) 후자는 사고다.
+        self.on_source_ended = on_source_ended
         # 같은 전송 오류를 매 채팅마다 트레이스백으로 찍으면 로그가 폭발한다.
         self._send_fail_streak = 0
         # 종료판단(채팅 저조/눈치 종료)에 쓰는 공유 상태. tz-aware UTC.
@@ -117,10 +122,24 @@ class ChatPipeline:
                     self._pending.append(msg)       # 말 끝나면 이어받음
                 else:
                     await self._send_single(msg)
+            if not stop_event.is_set():
+                # 우리가 멈춘 게 아닌데 소스가 끝났다 = 플랫폼 연결이 끊겼다.
+                log.error("채팅 소스가 끝났습니다 — 더는 채팅이 들어오지 않습니다.")
+                self._notify_source_ended()
         except asyncio.CancelledError:
             raise
         except Exception:
             log.exception("채팅 소비 루프 오류 — 종료")
+            if not stop_event.is_set():
+                self._notify_source_ended()
+
+    def _notify_source_ended(self):
+        if self.on_source_ended is None:
+            return
+        try:
+            self.on_source_ended()
+        except Exception:
+            log.debug("on_source_ended 콜백 오류", exc_info=True)
 
     # ------------------------------------------------------------- 눈치 루프
     async def _pace_loop(self, stop_event: asyncio.Event):

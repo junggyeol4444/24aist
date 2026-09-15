@@ -297,3 +297,100 @@ def test_teardown_continues_after_one_step_fails(tmp_path, monkeypatch):
                                None, transcript=BadTranscript()))
     assert done["obs_stop"] == 1
     assert done["announce"] == 1
+
+
+# --------------------------- 7) 채팅 소스가 죽으면 --------------------------
+def test_multi_chat_ends_when_all_platforms_die():
+    """동출에서 전 플랫폼이 죽으면 messages() 가 끝나야 한다.
+
+    안 끝나면 큐에서 영원히 기다린다 — 채팅이 영영 안 오는데 방송은
+    최대 max_minutes(기본 3시간) 동안 계속 돈다.
+    """
+    from aist.chat.base import ChatMessage, ChatSource
+    from aist.chat.multi import MultiChatSource
+
+    class Dies(ChatSource):
+        platform = "죽는쪽"
+        async def messages(self):
+            yield ChatMessage(author="a", text="첫 채팅", platform=self.platform)
+            raise ConnectionError("연결 끊김")
+
+    class Ends(ChatSource):
+        platform = "끝나는쪽"
+        async def messages(self):
+            yield ChatMessage(author="b", text="둘째", platform=self.platform)
+            return
+
+    async def main():
+        m = MultiChatSource([Dies(), Ends()])
+        got = []
+
+        async def read():
+            async for msg in m.messages():
+                got.append(msg.text)
+
+        await asyncio.wait_for(read(), timeout=5)   # TimeoutError 면 실패
+        await m.close()
+        return got
+
+    assert asyncio.run(main()) == ["첫 채팅", "둘째"]
+
+
+def test_pipeline_reports_dead_source():
+    """소스가 끝나면 오케스트레이터에 알려야 한다(채팅 없음과 구분)."""
+    from aist.chat.base import ChatMessage, ChatSource
+    from aist.chat_pipeline import ChatPipeline
+    from aist.config import BroadcastConfig, SafetyConfig, VTuberConfig
+    from aist.vtuber_bridge import VTuberBridge
+
+    class Spy(VTuberBridge):
+        def __init__(self):
+            super().__init__(VTuberConfig())
+        async def _send(self, payload): pass
+
+    class Dying(ChatSource):
+        platform = "twitch"
+        async def messages(self):
+            yield ChatMessage(author="a", text="안녕", platform="twitch")
+            return
+
+    seen = {"dead": 0}
+    pipe = ChatPipeline(Spy(), BroadcastConfig(), safety=SafetyConfig(),
+                        on_source_ended=lambda: seen.__setitem__("dead", seen["dead"] + 1))
+
+    async def main():
+        stop = asyncio.Event()
+        await pipe._consume(Dying(), stop)
+
+    asyncio.run(main())
+    assert seen["dead"] == 1
+
+
+def test_pipeline_does_not_report_when_we_stopped_it():
+    """우리가 멈춘 거면 사고가 아니다 — 알리면 안 된다."""
+    from aist.chat.base import ChatMessage, ChatSource
+    from aist.chat_pipeline import ChatPipeline
+    from aist.config import BroadcastConfig, SafetyConfig, VTuberConfig
+    from aist.vtuber_bridge import VTuberBridge
+
+    class Spy(VTuberBridge):
+        def __init__(self):
+            super().__init__(VTuberConfig())
+        async def _send(self, payload): pass
+
+    class Src(ChatSource):
+        platform = "twitch"
+        async def messages(self):
+            yield ChatMessage(author="a", text="안녕", platform="twitch")
+
+    seen = {"dead": 0}
+    pipe = ChatPipeline(Spy(), BroadcastConfig(), safety=SafetyConfig(),
+                        on_source_ended=lambda: seen.__setitem__("dead", seen["dead"] + 1))
+
+    async def main():
+        stop = asyncio.Event()
+        stop.set()                       # 종료 절차로 멈춘 상황
+        await pipe._consume(Src(), stop)
+
+    asyncio.run(main())
+    assert seen["dead"] == 0
