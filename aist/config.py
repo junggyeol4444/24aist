@@ -90,6 +90,10 @@ class SchedulerConfig:
     # 랜덤 변주(선택). 0 이면 정확히 그 시각. 강제 아님 — 운영자가 정한다.
     start_jitter_min: int = 0
     jitter_mode: str = "after"   # after(늦게만) | symmetric(앞뒤)
+    # 예정 시각을 이만큼 넘겨서 깨어나면 그 방송은 건너뛴다.
+    # (집 PC 는 잔다. 절전에서 깨면 예정보다 한참 늦은 시각인데, 그대로
+    #  시작하면 새벽 3시에 "19시 방송" 이 나간다. 0 이면 무조건 시작.)
+    late_start_grace_min: int = 30
 
 
 @dataclass

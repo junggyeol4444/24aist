@@ -148,6 +148,18 @@ class Orchestrator:
             await self._sleep_or_stop(wait)
             if self._stop.is_set():
                 break
+            # 절전/최대 절전에서 깨어났으면 지금이 예정 시각보다 한참 뒤일
+            # 수 있다. 그대로 시작하면 새벽에 "저녁 방송" 이 나간다.
+            grace = self.cfg.scheduler.late_start_grace_min
+            late_min = (_now(self.cfg.scheduler.timezone)
+                        - start_at).total_seconds() / 60.0
+            if grace > 0 and late_min > grace:
+                log.warning("예정 시각(%s)보다 %.0f분 늦었습니다 "
+                            "(절전에서 깨어났을 수 있음) — 이번 방송은 건너뜁니다. "
+                            "허용 지각은 scheduler.late_start_grace_min 으로 조정.",
+                            start_at.isoformat(), late_min)
+                used_slot = slot
+                continue
             used_slot = slot
             try:
                 await self._run_broadcast(skip_start_announce=pre_announced)
