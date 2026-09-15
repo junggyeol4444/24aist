@@ -28,6 +28,33 @@ _ARTICLE_API = "https://openapi.naver.com/v1/cafe/{cafe_id}/menu/{menu_id}/artic
 _TOKEN_API = "https://nid.naver.com/oauth2.0/token"
 
 
+def _euckr_safe(s: str) -> str:
+    """EUC-KR 로 못 보내는 글자(이모지 등)를 빼낸다.
+
+    네이버 카페 글쓰기 API 는 subject/content 를 EUC-KR 로 인코딩해
+    보내야 한다. 그런데 공지 문구에는 기본으로 이모지가 섞인다
+    (announce 의 varied 스타일). 이모지가 하나만 있어도 인코딩이 통째로
+    실패해서 공지가 안 올라갔다 — 그것도 "예외" 로만 찍혀서 왜 안 되는지
+    알기 어려웠다. 못 보내는 글자만 빼고 나머지는 그대로 올린다.
+    """
+    try:
+        s.encode("euc-kr")
+        return s
+    except UnicodeEncodeError:
+        pass
+    kept, dropped = [], 0
+    for ch in s:
+        try:
+            ch.encode("euc-kr")
+        except UnicodeEncodeError:
+            dropped += 1
+            continue
+        kept.append(ch)
+    log.info("네이버 카페: EUC-KR 로 못 보내는 글자 %d개를 빼고 올립니다(이모지 등).",
+             dropped)
+    return "".join(kept)
+
+
 class NaverCafeAnnouncer(Announcer):
     name = "naver_cafe"
 
@@ -65,8 +92,8 @@ class NaverCafeAnnouncer(Announcer):
         url = _ARTICLE_API.format(cafe_id=self.cfg.cafe_id, menu_id=self.cfg.menu_id)
         # 네이버 카페 글쓰기 API 는 subject/content 를 EUC-KR 로 인코딩해야 함
         body = (
-            "subject=" + quote(subject, encoding="euc-kr")
-            + "&content=" + quote(content, encoding="euc-kr")
+            "subject=" + quote(_euckr_safe(subject), encoding="euc-kr")
+            + "&content=" + quote(_euckr_safe(content), encoding="euc-kr")
         )
         try:
             r = requests.post(

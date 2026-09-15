@@ -7,12 +7,16 @@
 - 기본값 자체가 기획안의 "디폴트"를 반영한다(다 반응/딜레이0/변주0 등).
 """
 
+import difflib
+import logging
 import os
 from dataclasses import dataclass, field, fields, is_dataclass
 from pathlib import Path
 from typing import Any, Dict, List, Union, get_args, get_origin
 
 import yaml
+
+log = logging.getLogger("aist.config")
 
 
 # --------------------------------------------------------------------------- #
@@ -390,6 +394,8 @@ class Config:
     game: GameConfig = field(default_factory=GameConfig)
     safety: SafetyConfig = field(default_factory=SafetyConfig)
     secrets: Secrets = field(default_factory=Secrets)
+    # 설정 파일에 있었지만 프로그램이 모르는 키(오타 등). `aist check` 가 보여준다.
+    unknown_keys: List[str] = field(default_factory=list)
 
     def active_platforms(self) -> List[str]:
         """이번 방송에서 채팅을 수집할 플랫폼 목록(동출이면 여러 개)."""
@@ -404,7 +410,7 @@ class Config:
 # --------------------------------------------------------------------------- #
 # YAML(dict) → dataclass 재귀 변환. 모르는 키는 무시, 빠진 키는 기본값.
 # --------------------------------------------------------------------------- #
-def _build(cls, data: Any):
+def _build(cls, data: Any, path: str = "", unknown: Any = None):
     if not is_dataclass(cls):
         return data
     if data is None:
@@ -413,6 +419,12 @@ def _build(cls, data: Any):
         raise ConfigError(f"{cls.__name__} 섹션은 매핑(dict)이어야 합니다. 받은 값: {type(data).__name__}")
     kwargs: Dict[str, Any] = {}
     known = {f.name: f for f in fields(cls)}
+    if unknown is not None:
+        # 오타 잡기. 운영자가 메모장으로 고치다 보면 키 이름이 틀린다.
+        # 조용히 무시하면 "설정을 바꿨는데 아무 일도 안 일어난다" 가 된다.
+        for key in data:
+            if key not in known:
+                unknown.append(_unknown_note(path + str(key), known))
     for key, f in known.items():
         if key not in data:
             continue  # 기본값 사용
@@ -420,13 +432,23 @@ def _build(cls, data: Any):
         ftype = f.type
         # 중첩 dataclass 처리
         if is_dataclass(ftype):
-            kwargs[key] = _build(ftype, raw)
+            kwargs[key] = _build(ftype, raw, f"{path}{key}.", unknown)
         elif _is_dataclass_list(ftype) and isinstance(raw, list):
             item_cls = get_args(ftype)[0]
-            kwargs[key] = [_build(item_cls, item) for item in raw]
+            kwargs[key] = [_build(item_cls, item, f"{path}{key}[].", unknown)
+                           for item in raw]
         else:
             kwargs[key] = raw
     return cls(**kwargs)
+
+
+def _unknown_note(full_key: str, known) -> str:
+    """모르는 키 한 줄 안내(비슷한 이름이 있으면 같이 알려준다)."""
+    name = full_key.rsplit(".", 1)[-1]
+    close = difflib.get_close_matches(name, list(known), n=1, cutoff=0.7)
+    if close:
+        return f"{full_key} (혹시 {close[0]} 인가요?)"
+    return full_key
 
 
 def _is_dataclass_list(ftype) -> bool:
@@ -490,22 +512,31 @@ def load_config(path: Union[str, Path]) -> Config:
     if not isinstance(raw, dict):
         raise ConfigError("config.yaml 최상위는 매핑(dict)이어야 합니다.")
 
+    unknown: List[str] = []
     cfg = Config(
         platform=raw.get("platform", "twitch"),
         platforms=list(raw.get("platforms", []) or []),
-        chat=_build(ChatConfig, raw.get("chat")),
-        vtuber=_build(VTuberConfig, raw.get("vtuber")),
-        obs=_build(ObsConfig, raw.get("obs")),
-        scheduler=_build(SchedulerConfig, raw.get("scheduler")),
-        broadcast=_build(BroadcastConfig, raw.get("broadcast")),
-        end_judge=_build(EndJudgeConfig, raw.get("end_judge")),
-        announce=_build(AnnounceConfig, raw.get("announce")),
-        llm=_build(LlmConfig, raw.get("llm")),
-        memory=_build(MemoryConfig, raw.get("memory")),
-        logging=_build(LoggingConfig, raw.get("logging")),
-        game=_build(GameConfig, raw.get("game")),
+        chat=_build(ChatConfig, raw.get("chat"), "chat.", unknown),
+        vtuber=_build(VTuberConfig, raw.get("vtuber"), "vtuber.", unknown),
+        obs=_build(ObsConfig, raw.get("obs"), "obs.", unknown),
+        scheduler=_build(SchedulerConfig, raw.get("scheduler"), "scheduler.", unknown),
+        broadcast=_build(BroadcastConfig, raw.get("broadcast"), "broadcast.", unknown),
+        end_judge=_build(EndJudgeConfig, raw.get("end_judge"), "end_judge.", unknown),
+        announce=_build(AnnounceConfig, raw.get("announce"), "announce.", unknown),
+        llm=_build(LlmConfig, raw.get("llm"), "llm.", unknown),
+        memory=_build(MemoryConfig, raw.get("memory"), "memory.", unknown),
+        logging=_build(LoggingConfig, raw.get("logging"), "logging.", unknown),
+        game=_build(GameConfig, raw.get("game"), "game.", unknown),
+        safety=_build(SafetyConfig, raw.get("safety"), "safety.", unknown),
         secrets=Secrets.from_env(),
     )
+    _TOP_KEYS = {f.name for f in fields(Config)} - {"secrets", "unknown_keys"}
+    for key in raw:
+        if key not in _TOP_KEYS:
+            unknown.append(_unknown_note(str(key), _TOP_KEYS))
+    cfg.unknown_keys = unknown
+    for note in unknown:
+        log.warning("설정 파일에 모르는 키가 있습니다 — 무시됩니다: %s", note)
     cfg.resolve_secrets()
     _validate(cfg)
     return cfg

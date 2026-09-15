@@ -172,6 +172,12 @@ def cmd_check(args) -> int:
     py_ok, py_msg = preflight.core_python_ok()
     blockers = [n for n in miss if n.blocking]
 
+    if cfg.unknown_keys:
+        # 오타 난 키는 조용히 무시된다 — "설정을 바꿨는데 아무 일도 안 일어난다".
+        print("\n  설정 파일에서 무시된 키 (이름이 틀렸습니다):")
+        for note in cfg.unknown_keys:
+            print(f"    [!] {note}")
+
     problems = preflight.config_problems(cfg)
     if problems:
         print("\n  설정값 문제 (패키지가 다 깔려 있어도 방송이 이상하게 돕니다):")
