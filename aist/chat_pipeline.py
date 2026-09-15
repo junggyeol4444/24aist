@@ -62,6 +62,7 @@ class ChatPipeline:
         # '입 하나' 상태
         self._core_busy = False
         self._busy_since = 0.0
+        self._busy_timeouts = 0           # 말 끝 신호가 안 온 횟수(진단용)
         self._pending: List[ChatMessage] = []
         self._include_platform = False    # 동출일 때만 플랫폼 표기
         # 진행자 혼잣말: 이번 조용한 구간에 말 걸 목표 시각(발화/채팅 후 재설정)
@@ -71,6 +72,11 @@ class ChatPipeline:
     # ------------------------------------------------------------- 외부 상태
     def on_core_message(self, data: dict) -> None:
         """코어 drain 훅 — 말 시작/끝 신호로 '말하는 중'을 추적한다."""
+        # 말하는 동안에도 코어는 문장마다 audio 를 보낸다. 그게 오는 동안은
+        # '살아 있다'는 뜻이므로 폴백 시계를 다시 잰다. 폴백은 신호가 정말
+        # 유실됐을 때(아무 것도 안 올 때)만 돌아야 한다.
+        if self._core_busy and data.get("type") in ("audio", "full-text"):
+            self._busy_since = time.monotonic()
         if data.get("type") != "control":
             return
         text = data.get("text")
@@ -161,7 +167,18 @@ class ChatPipeline:
         if not self._core_busy:
             return False
         if time.monotonic() - self._busy_since > self.cfg.core_busy_timeout_sec:
-            log.debug("말 끝 신호 유실 추정 → 잠금 해제(폴백)")
+            # 말이 끝났다는 신호(conversation-chain-end)가 안 왔다.
+            # 코어는 '웹UI 가 재생을 마쳤다'는 응답을 받아야 이 신호를 보낸다.
+            # 즉 이게 계속 나면 웹UI(OBS 브라우저 소스)가 코어에 안 붙어
+            # 있다는 뜻이고, 그건 시청자에게 소리·자막이 안 나간다는 뜻이다.
+            self._busy_timeouts += 1
+            if self._busy_timeouts in (1, 5) or self._busy_timeouts % 20 == 0:
+                log.warning(
+                    "말이 끝났다는 신호가 %.0f초 동안 안 왔습니다(%d번째). "
+                    "웹UI(OBS 브라우저 소스)가 코어에 안 붙어 있으면 시청자에게 "
+                    "소리·자막이 안 나갑니다 — 브라우저 화면이 떠 있는지, "
+                    "코어 설정의 enable_proxy 가 켜져 있는지 확인하세요.",
+                    self.cfg.core_busy_timeout_sec, self._busy_timeouts)
             self._core_busy = False
             return False
         return True

@@ -178,6 +178,10 @@ def cmd_check(args) -> int:
     conf_ok, conf_msg = preflight.core_conf_ready()
     deps_ok, deps_msg = preflight.core_deps_ready()
     py_ok, py_msg = preflight.core_python_ok()
+    # 소리가 시청자에게 가는 경로(프록시)가 뚫려 있는지 — 이게 막히면
+    # 방송은 '도는 것처럼' 보이면서 화면에는 아무것도 안 나온다.
+    proxy_ok, proxy_msg = preflight.core_proxy_ready()
+    fe_proxy_ok, fe_proxy_msg = preflight.frontend_proxy_ready()
     blockers = [n for n in miss if n.blocking]
 
     if getattr(persona, "problems", None):
@@ -210,9 +214,12 @@ def cmd_check(args) -> int:
     print(f"    코어 conf.yaml : {'OK' if conf_ok else '[X] ' + conf_msg}")
     print(f"    코어 의존성    : {'OK (' + deps_msg + ')' if deps_ok else '[X] ' + deps_msg}")
     print(f"    파이썬 버전    : {'OK ' + py_msg if py_ok else '[X] ' + py_msg}")
+    print(f"    코어 프록시    : {'OK (enable_proxy 켜짐)' if proxy_ok else '[X] ' + proxy_msg}")
+    print(f"    웹UI 접속경로  : {'OK (/proxy-ws)' if fe_proxy_ok else '[X] ' + fe_proxy_msg}")
 
     print()
-    if blockers or not fe_ok or not conf_ok or not deps_ok or not py_ok or hard_problems:
+    if (blockers or not fe_ok or not conf_ok or not deps_ok or not py_ok
+            or not proxy_ok or not fe_proxy_ok or hard_problems):
         print("지금 상태로는 방송이 안 됩니다. 아래를 먼저 해결하세요:")
         if hard_problems:
             print("  - 위 '설정값 문제' 부터 고치세요 (config.yaml)")
@@ -226,6 +233,11 @@ def cmd_check(args) -> int:
         if not py_ok:
             print("  - 파이썬 버전 맞추기: 위 안내대로 다시 설치 후 .venv 를 지우고"
                   f" {preflight.hint(*preflight.CMD_SETUP_ALL)}")
+        if not proxy_ok:
+            print("  - 코어 설정에 enable_proxy: true 넣기 (안 넣으면 시청자에게 "
+                  "소리·자막이 안 갑니다)")
+        if not fe_proxy_ok:
+            print(f"  - 웹UI 접속 경로 고치기: {preflight.hint(*preflight.CMD_FRONTEND)}")
         print(f"  ( 한 번에: {preflight.hint(*preflight.CMD_SETUP_ALL)} )")
         return 1
     if miss or len(problems) > len(hard_problems):
@@ -341,6 +353,10 @@ def cmd_doctor(args) -> int:
         ok = False
         print(f"  [X] 코어 WS 연결 실패 ({cfg.vtuber.ws_url}): {e}")
         print("       → Open-LLM-VTuber 가 실행 중인지 확인 (uv run run_server.py)")
+        if cfg.vtuber.ws_url.rstrip("/").endswith("/proxy-ws"):
+            ok2, msg2 = preflight.core_proxy_ready()
+            if not ok2:
+                print(f"       → {msg2}")
 
     # 2) OBS
     # obsws-python 이 연결 실패 시 자체 ERROR+traceback 를 찍어 시끄러우니 죽인다

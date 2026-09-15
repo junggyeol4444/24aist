@@ -25,7 +25,10 @@ chat:
 
 # --- Open-LLM-VTuber 연결 (두뇌+입+얼굴+귀) ---
 vtuber:
-  ws_url: "ws://127.0.0.1:12393/client-ws"
+  # 반드시 /proxy-ws. /client-ws 로 두면 AI 의 목소리·자막이 이 프로그램으로만
+  # 오고, OBS 가 잡는 웹UI 에는 아무것도 안 갑니다(시청자에게 무음 방송).
+  # 코어 conf.yaml 의 system_config.enable_proxy 도 true 여야 합니다.
+  ws_url: "ws://127.0.0.1:12393/proxy-ws"
   connect_timeout_sec: 10
   reconnect: true                   # 코어가 늦게 떠도 기다린다(초기 연결)
   # 방송 '중' 코어가 죽었을 때 다시 붙는다. 끄면 끊긴 채로 계속 도는데,

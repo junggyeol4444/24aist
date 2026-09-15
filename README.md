@@ -141,7 +141,7 @@ aist run                    # 스케줄러로 완전 자동 운영
 | 종료 판단 | `aist/end_judge.py` | 4단계. 최대/최소 시간·정시·(선택)채팅저조·마무리 단계 |
 | 채팅 루프 | `aist/chat_pipeline.py` | 다 읽고 다 반응(자연 속도). (선택)폭주 처리 |
 | 채팅 수집 | `aist/chat/` | 트위치·유튜브·치지직·SOOP·Kick·트위캐스팅 + **동출(동시)** |
-| 코어 브릿지 | `aist/vtuber_bridge.py` | Open-LLM-VTuber `/client-ws` 로 입력 전달 |
+| 코어 브릿지 | `aist/vtuber_bridge.py` | Open-LLM-VTuber `/proxy-ws` 로 입력 전달(웹UI 와 같은 대화에 물림) |
 | OBS 제어 | `aist/obs_control.py` | obs-websocket 스트림 시작/종료 |
 | 공지 | `aist/announce/` | 디스코드(REST)·네이버 카페(공식 API) + 문구 변주 |
 | 장기기억 | `aist/memory.py` | "저번에~", 단골 닉네임 (+chroma 의미검색) |

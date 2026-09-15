@@ -190,6 +190,51 @@ def core_deps_ready(root: Path | None = None) -> tuple[bool, str]:
                    hint(*CMD_CORE_SETUP))
 
 
+def core_proxy_ready(root: Path | None = None) -> tuple[bool, str]:
+    """코어 설정에 enable_proxy 가 켜져 있는지.
+
+    이게 꺼져 있으면 /proxy-ws 자체가 안 열린다. 그러면 우리가 넣은 채팅의
+    결과(목소리·자막)가 웹UI 로 안 가고, 시청자는 멈춘 아바타와 무음만
+    본다. 방송이 '되는 것처럼' 보이면서 실제로는 아무것도 안 나가는
+    상태라 반드시 먼저 잡아야 한다.
+    """
+    root = root or repo_root()
+    core = root / "Open-LLM-VTuber"
+    conf = core / "conf.yaml"
+    if not conf.is_file():
+        conf = core / "conf.korean.yaml"
+    if not conf.is_file():
+        return False, "코어 설정(conf.yaml)이 없어 확인 못 함 — " + hint(*CMD_CORE_SETUP)
+    try:
+        import yaml
+        data = yaml.safe_load(conf.read_text(encoding="utf-8", errors="replace")) or {}
+    except Exception as e:  # noqa: BLE001 - 깨진 yaml 등
+        return False, f"코어 설정을 못 읽었습니다({conf.name}): {e}"
+    sysconf = data.get("system_config") or {}
+    if sysconf.get("enable_proxy") is True:
+        return True, "켜짐"
+    return False, (
+        f"{conf.name} 의 system_config.enable_proxy 가 켜져 있지 않습니다 → "
+        "AI 목소리·자막이 웹UI(OBS 화면)로 안 갑니다. "
+        "그 파일에 'enable_proxy: true' 를 넣고 코어를 다시 켜세요."
+    )
+
+
+def frontend_proxy_ready(root: Path | None = None) -> tuple[bool, str]:
+    """받아온 웹UI 가 /proxy-ws 로 붙게 설정돼 있는지."""
+    root = root or repo_root()
+    index = root / "Open-LLM-VTuber" / "frontend" / "index.html"
+    if not index.is_file():
+        return False, "웹UI 가 아직 없습니다 — " + hint(*CMD_FRONTEND)
+    from .frontend_patch import is_patched
+    if is_patched(index):
+        return True, "설정됨"
+    return False, (
+        "웹UI 가 /client-ws 로 붙습니다 → OBS 화면에 아무것도 안 나옵니다. "
+        + hint(*CMD_FRONTEND) + " 를 다시 실행하세요"
+    )
+
+
 def core_python_ok(root: Path | None = None) -> tuple[bool, str]:
     """지금 파이썬이 코어가 지원하는 범위인지.
 
@@ -324,6 +369,18 @@ def config_problems(cfg) -> list[str]:
             _parse_hhmm(ej.scheduled_end_hhmm)
         except ValueError as e:
             out.append(f"end_judge.scheduled_end_hhmm 이 잘못됨: {e}")
+
+    # 5-1) 코어 접속 경로 — /client-ws 는 1:1 경로라 방송에 소리가 안 나간다
+    ws = (cfg.vtuber.ws_url or "").rstrip("/")
+    if ws.endswith("/client-ws"):
+        out.append(Problem(
+            "vtuber.ws_url 이 /client-ws 입니다 → AI 의 목소리·자막이 이 프로그램"
+            "으로만 오고 OBS 가 잡는 웹UI 에는 안 갑니다(시청자는 무음). "
+            "/proxy-ws 로 바꾸세요: " + ws[: -len("/client-ws")] + "/proxy-ws"))
+    elif not ws.endswith("/proxy-ws"):
+        out.append(Problem(
+            f"vtuber.ws_url 의 끝이 /proxy-ws 가 아닙니다({cfg.vtuber.ws_url}) → "
+            "주소를 다시 확인하세요.", blocking=False))
 
     # 6) 공지를 켰는데 올릴 곳이 없음
     an = cfg.announce

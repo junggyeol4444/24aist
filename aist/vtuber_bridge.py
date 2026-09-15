@@ -1,6 +1,13 @@
 """Open-LLM-VTuber 브릿지 — 방송 코어(두뇌+입+얼굴)에 입력을 흘려보낸다.
 
-Open-LLM-VTuber 는 WebSocket 서버(`/client-ws`, 기본 포트 12393)를 연다.
+Open-LLM-VTuber 는 WebSocket 서버(기본 포트 12393)를 연다. 우리는 반드시
+`/proxy-ws` 로 붙는다. `/client-ws` 는 1:1 경로라서, 우리가 채팅을 넣으면
+AI 의 목소리·자막이 **우리 프로세스로만** 오고 OBS 가 잡는 웹UI 에는 아무
+것도 안 간다(시청자에게는 멈춘 아바타와 무음). 게다가 코어는 '재생이
+끝났다'는 응답을 우리에게서 기다리며 conversation-chain-end 를 영영 안
+보낸다(코어의 finalize_conversation_turn 에는 타임아웃이 없다).
+`/proxy-ws` 는 웹UI 와 우리를 같은 대화에 물리고 코어의 모든 출력을 양쪽에
+뿌린다. 코어 conf.yaml 의 system_config.enable_proxy 가 true 여야 열린다.
 우리가 보내는 메시지 타입(코어 소스 기준):
   - {"type": "text-input", "text": "..."}   → AI 가 그 입력에 반응(대화 트리거)
   - {"type": "ai-speak-signal"}             → 능동 발화(혼잣말) 트리거

@@ -272,6 +272,8 @@ def test_check_does_not_declare_failure_for_non_blocking_only(tmp_path, monkeypa
     monkeypatch.setattr(pf, "core_conf_ready", lambda: (True, ""))
     monkeypatch.setattr(pf, "core_deps_ready", lambda: (True, "ok"))
     monkeypatch.setattr(pf, "core_python_ok", lambda: (True, "3.12"))
+    monkeypatch.setattr(pf, "core_proxy_ready", lambda: (True, "켜짐"))
+    monkeypatch.setattr(pf, "frontend_proxy_ready", lambda: (True, "설정됨"))
 
     rc = cli.cmd_check(argparse.Namespace(config="x", persona="y"))
     out = capsys.readouterr().out

@@ -25,7 +25,11 @@ log = logging.getLogger("aist.config")
 @dataclass
 class VTuberConfig:
     """Open-LLM-VTuber 연결(두뇌+입+얼굴+귀)."""
-    ws_url: str = "ws://127.0.0.1:12393/client-ws"
+    # /proxy-ws 여야 한다. /client-ws 는 "보낸 클라이언트에게만" 결과를
+    # 돌려주는 1:1 경로라, 우리가 채팅을 넣으면 AI 의 목소리·자막이 우리
+    # 프로세스로만 오고 OBS 가 잡는 웹UI 에는 아무것도 안 간다(무음 방송).
+    # /proxy-ws 는 웹UI 와 우리를 같은 대화에 물려 모든 출력을 양쪽에 뿌린다.
+    ws_url: str = "ws://127.0.0.1:12393/proxy-ws"
     connect_timeout_sec: float = 10.0
     # 초기 연결 재시도(코어가 늦게 떠도 기다린다)
     reconnect: bool = True

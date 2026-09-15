@@ -5,6 +5,10 @@ system_config:
   port: 12393
   # New setting for alternative configurations
   config_alts_dir: 'characters'
+  # 여러 클라이언트(웹UI + 방송 자동화)를 한 대화에 물리는 /proxy-ws 를 연다.
+  # 이게 false 면 AI 의 목소리·자막이 채팅을 넣은 쪽으로만 가서,
+  # OBS 가 잡는 웹UI 에는 아무것도 안 나온다(무음 방송).
+  enable_proxy: true
   # Tool prompts that will be appended to the persona prompt
   tool_prompts:
     # This will be appended to the end of system prompt to let LLM include keywords to control facial expressions.
