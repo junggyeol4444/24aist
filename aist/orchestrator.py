@@ -331,14 +331,22 @@ class Orchestrator:
         # 코어 연결 종료
         await bridge.close()
 
-        # 트랜스크립트 마감
+        # 트랜스크립트 마감 — 한 단계가 터져도 나머지 뒷정리는 계속해야 한다.
+        # (여기서 예외가 올라가면 종료 공지까지 안 나간다. 디스크가 차면
+        #  실제로 그랬다.)
         transcript_path = None
         if transcript is not None:
-            transcript_path = transcript.path
-            transcript.close()
+            try:
+                transcript_path = transcript.path
+                transcript.close()
+            except Exception:
+                log.exception("트랜스크립트 마감 실패(방송 종료는 계속)")
 
         # 세션 기억 저장
-        self.memory.end_session()
+        try:
+            self.memory.end_session()
+        except Exception:
+            log.exception("세션 기억 저장 실패(방송 종료는 계속)")
 
         # 방송 후 리포트(다시보기 학습) — 실패해도 조용히 넘어감
         if not aborted and self.cfg.logging.auto_report:

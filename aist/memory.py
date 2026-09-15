@@ -60,12 +60,26 @@ class Memory:
         return []
 
     def _save(self) -> None:
+        """기억을 파일에 쓴다. 실패해도 예외를 올리지 않는다.
+
+        여기서 예외가 올라가면 방송 종료 절차(_teardown)가 중간에 끊겨
+        종료 공지가 안 나간다. 디스크가 차면 실제로 그렇게 됐다.
+        기억을 못 남기는 건 심각하므로 로그로는 크게 알린다.
+        """
         tmp = self.sessions_file.with_suffix(".json.tmp")
-        tmp.write_text(
-            json.dumps(self._sessions, ensure_ascii=False, indent=2),
-            encoding="utf-8",
-        )
-        tmp.replace(self.sessions_file)
+        try:
+            tmp.write_text(
+                json.dumps(self._sessions, ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
+            tmp.replace(self.sessions_file)
+        except OSError as e:
+            log.error("기억 저장 실패 — 이번 방송 기억이 남지 않습니다 "
+                      "(디스크 여유 공간을 확인하세요): %s", e)
+            try:
+                tmp.unlink()
+            except OSError:
+                pass
 
     # --- 세션 라이프사이클 --------------------------------------------------
     def start_session(self) -> None:

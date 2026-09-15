@@ -29,6 +29,7 @@ class Transcript:
         self.dir = Path(dir_path)
         self._fh = None
         self.path: Optional[Path] = None
+        self._write_failed = False
 
     def open_session(self, start_dt: datetime) -> Path:
         self.dir.mkdir(parents=True, exist_ok=True)
@@ -45,8 +46,14 @@ class Transcript:
         try:
             self._fh.write(json.dumps(record, ensure_ascii=False) + "\n")
             self._fh.flush()
-        except OSError as e:
-            log.warning("트랜스크립트 기록 실패: %s", e)
+        except (OSError, ValueError) as e:
+            # OSError: 디스크 참 / 권한. ValueError: 핸들이 이미 닫힘.
+            # 채팅마다 경고를 찍으면 로그가 폭발하므로 한 번만 알리고
+            # 이후로는 기록을 포기한다(방송은 계속 돌아야 한다).
+            if not self._write_failed:
+                self._write_failed = True
+                log.error("트랜스크립트 기록 실패 — 이번 방송은 기록 없이 진행합니다: %s", e)
+            self._fh = None
 
     def log_chat(self, msg: ChatMessage) -> None:
         self._write({

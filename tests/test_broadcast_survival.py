@@ -231,3 +231,69 @@ def test_no_banned_words_means_no_work(tmp_path):
 
     orch._watch_output({"type": "audio", "display_text": {"text": "아무 말"}},
                        Bridge(), None)
+
+
+# --------------------------- 6) 디스크가 차도 방송은 제대로 내려간다 --------
+def test_memory_save_failure_does_not_break_teardown(tmp_path, monkeypatch):
+    """디스크가 차면 기억 저장에서 OSError 가 올라와 종료 공지까지 막혔다."""
+    from pathlib import Path as _P
+    from aist.config import MemoryConfig
+    from aist.memory import Memory
+
+    m = Memory(MemoryConfig(path=str(tmp_path / "mem")))
+    m.start_session()
+
+    def no_space(self, *a, **k):
+        raise OSError(28, "No space left on device")
+
+    monkeypatch.setattr(_P, "write_text", no_space)
+    m.end_session()          # 예외가 올라오면 안 된다
+
+
+def test_transcript_write_failure_stops_quietly(tmp_path, caplog):
+    """핸들이 죽으면 채팅마다 ValueError 가 났다(로그 폭발 + 콜백 예외)."""
+    from datetime import datetime, timezone
+    from aist.chat.base import ChatMessage
+    from aist.transcript import Transcript
+
+    t = Transcript(str(tmp_path / "tr"))
+    t.open_session(datetime.now(timezone.utc))
+    t._fh.close()            # 디스크 오류로 핸들이 죽은 상황
+
+    for _ in range(50):
+        t.log_chat(ChatMessage(author="닉", text="안녕", platform="twitch"))
+
+    errors = [r for r in caplog.records if r.levelname == "ERROR"]
+    assert len(errors) == 1        # 한 번만 알리고 조용히 포기
+
+
+def test_teardown_continues_after_one_step_fails(tmp_path, monkeypatch):
+    """한 단계가 터져도 OBS 종료·종료 공지까지 간다."""
+    orch = _orch(tmp_path)
+    orch.cfg.announce.on_end = True
+    orch.cfg.announce.discord.enabled = False
+    orch.cfg.announce.naver_cafe.enabled = False
+    done = {"obs_stop": 0, "announce": 0}
+
+    class Obs:
+        def stop_stream(self): done["obs_stop"] += 1
+        def close(self): pass
+
+    class Bridge:
+        async def close(self): pass
+
+    class BadTranscript:
+        path = None
+        def close(self): raise OSError(28, "No space left on device")
+
+    async def fake_announce(kind, now):
+        done["announce"] += 1
+
+    monkeypatch.setattr(orch, "_announce", fake_announce)
+    monkeypatch.setattr(orch.memory, "end_session",
+                        lambda: (_ for _ in ()).throw(OSError("disk")))
+
+    asyncio.run(orch._teardown(Obs(), Bridge(), None, None, None,
+                               None, transcript=BadTranscript()))
+    assert done["obs_stop"] == 1
+    assert done["announce"] == 1
