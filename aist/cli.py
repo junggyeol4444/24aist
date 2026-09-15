@@ -532,16 +532,38 @@ async def _run_with_signals(orch, coro_name: str) -> None:
                 pass
 
 
+def _acquire_single(cfg):
+    """중복 실행 잠금. 이미 돌고 있으면 None 을 돌려준다(그리고 안내 출력).
+
+    같은 방송을 두 번 켜면 AI 가 채팅마다 두 번 말하고, 먼저 끝난 쪽이
+    OBS 송출을 내려 아직 방송 중인 쪽 화면이 꺼진다.
+    """
+    from .single_instance import InstanceLock, lock_path_for
+    lock = InstanceLock(lock_path_for(cfg.safety.stop_flag_path))
+    if lock.acquire():
+        return lock
+    print("이미 방송 프로그램이 돌고 있습니다 — 이 창은 그냥 닫으세요.")
+    print("  같은 방송을 두 번 켜면 AI 가 채팅마다 두 번 말하고,")
+    print("  먼저 끝나는 쪽이 OBS 송출을 내려 화면이 꺼집니다.")
+    print("  돌고 있는 방송을 끝내려면: windows\\중단.bat (또는 aist stop)")
+    return None
+
+
 def cmd_broadcast_now(args) -> int:
     from .orchestrator import Orchestrator
     cfg, persona = _load(args)
     if not _gate(cfg, getattr(args, "force", False)):
+        return 1
+    lock = _acquire_single(cfg)
+    if lock is None:
         return 1
     orch = Orchestrator(cfg, persona)
     try:
         asyncio.run(_run_with_signals(orch, "run_one_now"))
     except KeyboardInterrupt:
         print("\n중단됨")
+    finally:
+        lock.release()
     return 0
 
 
@@ -662,11 +684,16 @@ def cmd_run(args) -> int:
     cfg, persona = _load(args)
     if not _gate(cfg, getattr(args, "force", False)):
         return 1
+    lock = _acquire_single(cfg)
+    if lock is None:
+        return 1
     orch = Orchestrator(cfg, persona)
     try:
         asyncio.run(_run_with_signals(orch, "run"))
     except KeyboardInterrupt:
         print("\n중단됨")
+    finally:
+        lock.release()
     return 0
 
 
