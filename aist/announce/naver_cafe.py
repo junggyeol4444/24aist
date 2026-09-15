@@ -14,6 +14,7 @@ requests 지연 import, 호출은 asyncio.to_thread.
 
 import asyncio
 import logging
+import time
 from typing import Optional
 from urllib.parse import quote
 
@@ -85,7 +86,13 @@ class NaverCafeAnnouncer(Announcer):
             log.error("네이버 카페 공지 실패 (%s): %s", r.status_code, r.text[:300])
             return False
         except Exception as e:  # noqa: BLE001
-            log.error("네이버 카페 공지 예외: %s", e)
+            # 네트워크 문제면 다시 해볼 만하다. 카페는 계정 리스크가 있어
+            # (기획안 5-2 "빈도 낮게") 한 번만 더 시도한다.
+            if _retry:
+                log.warning("네이버 카페 공지 예외: %s — 3초 뒤 한 번 더 시도합니다.", e)
+                time.sleep(3)
+                return self._official_post(subject, content, _retry=False)
+            log.error("네이버 카페 공지 예외: %s — 공지가 안 나갔습니다.", e)
             return False
 
     def _refresh_token(self) -> bool:

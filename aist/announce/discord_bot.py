@@ -15,6 +15,7 @@ from typing import Optional
 
 from ..config import DiscordAnnounce
 from .base import Announcer
+from .retry import post_with_retry
 
 log = logging.getLogger("aist.announce.discord")
 
@@ -61,11 +62,17 @@ class DiscordAnnouncer(Announcer):
         return {"content": mention, "embeds": [embed], "allowed_mentions": allowed}
 
     def _post_sync(self, payload: dict) -> bool:
+        """한 번 실패가 곧 '공지 없음' 이 되지 않게 짧게 재시도한다."""
         try:
-            import requests  # 지연 import
+            import requests  # noqa: F401 - 미설치 확인용
         except ImportError:
             log.error("requests 미설치: `pip install requests`")
             return False
+        return post_with_retry(lambda: self._post_once(payload), what="디스코드 공지")
+
+    def _post_once(self, payload: dict):
+        """(성공여부, 상태코드, 사유). 상태코드 None 이면 네트워크 예외."""
+        import requests
         url = f"{_API}/channels/{self.cfg.channel_id}/messages"
         headers = {"Authorization": f"Bot {self.token}"}
         try:
@@ -85,9 +92,7 @@ class DiscordAnnouncer(Announcer):
                                   json=payload, timeout=15)
             if r.status_code in (200, 201):
                 log.info("디스코드 공지 게시 완료")
-                return True
-            log.error("디스코드 공지 실패 (%s): %s", r.status_code, r.text[:300])
-            return False
-        except Exception as e:  # noqa: BLE001
-            log.error("디스코드 공지 예외: %s", e)
-            return False
+                return True, r.status_code, ""
+            return False, r.status_code, r.text[:200]
+        except Exception as e:  # noqa: BLE001 - 네트워크 사유 다양
+            return False, None, str(e)
