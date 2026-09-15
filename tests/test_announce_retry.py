@@ -15,7 +15,24 @@ from aist.announce.retry import (DEFAULT_ATTEMPTS, post_with_retry,
 
 
 # --------------------------- 어떤 실패를 다시 해볼까 ------------------------
+def _fake_requests(monkeypatch, post):
+    """requests 를 끼워 넣는다.
+
+    진짜 requests 를 import 하면 그게 안 깔린 환경(핵심 설치만 한 CI)에서
+    테스트가 죽는다. 공지 재시도 로직은 requests 자체와 상관없는 코드다.
+    """
+    import sys
+    import types
+
+    mod = types.ModuleType("requests")
+    mod.post = post
+    monkeypatch.setitem(sys.modules, "requests", mod)
+    return mod
+
+
 @pytest.mark.parametrize("status", [429, 500, 502, 503, 504, None])
+
+
 def test_transient_failures_are_retried(status):
     assert should_retry_status(status) is True
 
@@ -105,8 +122,7 @@ def test_discord_retries_on_server_error(monkeypatch):
         calls["n"] += 1
         return Resp(200 if calls["n"] >= 2 else 503)
 
-    import requests
-    monkeypatch.setattr(requests, "post", fake_post)
+    _fake_requests(monkeypatch, fake_post)
     monkeypatch.setattr("time.sleep", lambda s: None)
     ann = DiscordAnnouncer(DiscordAnnounce(channel_id=1), "token")
     assert ann._post_sync({"content": "x"}) is True
@@ -127,8 +143,7 @@ def test_discord_does_not_retry_on_bad_channel(monkeypatch):
         calls["n"] += 1
         return Resp()
 
-    import requests
-    monkeypatch.setattr(requests, "post", fake_post)
+    _fake_requests(monkeypatch, fake_post)
     monkeypatch.setattr("time.sleep", lambda s: None)
     ann = DiscordAnnouncer(DiscordAnnounce(channel_id=999), "token")
     assert ann._post_sync({"content": "x"}) is False

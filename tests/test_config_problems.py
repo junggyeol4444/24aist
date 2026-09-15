@@ -169,13 +169,16 @@ def test_pre_notice_never_lands_after_end():
 # 설정대로 안 돈다. 리눅스에서는 멀쩡해서 리눅스만 테스트하면 안 보인다.
 def test_tzdata_is_a_windows_dependency():
     """윈도우에서 zoneinfo 가 돌려면 tzdata 가 반드시 깔려야 한다."""
-    import tomllib
-    with open("pyproject.toml", "rb") as fh:
-        data = tomllib.load(fh)
-    deps = data["project"]["dependencies"]
-    tz = [d for d in deps if d.lower().startswith("tzdata")]
-    assert tz, f"tzdata 가 핵심 의존성에 없습니다: {deps}"
-    assert "win32" in tz[0], f"윈도우 마커가 없습니다: {tz[0]}"
+    # tomllib 은 3.11 부터다. 이 검사 하나 때문에 3.10 에서 테스트가 죽으면
+    # 안 되므로 파일 내용을 그대로 본다.
+    from pathlib import Path
+
+    text = (Path(__file__).resolve().parents[1] / "pyproject.toml").read_text(
+        encoding="utf-8")
+    lines = [ln.strip() for ln in text.splitlines()
+             if ln.strip().lower().lstrip("\"'").startswith("tzdata")]
+    assert lines, "tzdata 가 핵심 의존성에 없습니다"
+    assert any("win32" in ln for ln in lines), f"윈도우 마커가 없습니다: {lines}"
 
 
 def test_missing_tzdata_gives_actionable_message(monkeypatch):
