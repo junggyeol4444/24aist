@@ -243,3 +243,57 @@ def test_installer_checks_python_version():
     assert "PYMIN" in text, "파이썬 버전을 파싱하지 않는다"
     assert "GEQ 13" in text, "3.13 이상을 막지 않는다"
     assert "LSS 10" in text, "3.10 미만을 막지 않는다"
+
+
+# =========================================================================
+# 방송을 끄는 방법 — Wine 으로 .bat 을 실제로 돌려보다 찾은 것.
+#
+# 윈도우에서 cmd 창을 X 로 닫으면 CTRL_CLOSE_EVENT 가 가는데 파이썬은
+# 그걸 시그널로 처리하지 않는다. 정상 종료가 안 돌아 OBS 스트림이 켜진 채
+# 남는다(시청자에겐 멈춘 화면이 계속 나감). 그런데 방송시작.bat 이
+# "창을 닫으면 멈춥니다" 라고 그 방법을 권하고 있었다.
+# =========================================================================
+_RUNNING_BATS = ["방송시작.bat", "테스트방송.bat", "전체실행.bat", "리허설.bat"]
+
+
+def _bat(name):
+    return (WINDOWS_DIR / name).read_text(encoding="utf-8")
+
+
+def test_stop_bat_exists():
+    """터미널 없이 방송을 안전하게 끌 수단이 있어야 한다.
+
+    aist stop 은 있었지만 .bat 이 없었다. README 는 "터미널 몰라도 됨"을
+    표방하는데 끄는 안전한 방법만 터미널 명령이었다.
+    """
+    p = WINDOWS_DIR / "중단.bat"
+    assert p.exists(), "중단.bat 이 없습니다"
+    assert "stop" in p.read_text(encoding="utf-8")
+
+
+def test_stop_bat_has_no_bom_and_is_crlf():
+    raw = (WINDOWS_DIR / "중단.bat").read_bytes()
+    assert raw[:3] != b"\xef\xbb\xbf"
+    assert b"\r\n" in raw
+
+
+@pytest.mark.parametrize("name", _RUNNING_BATS)
+def test_running_bats_do_not_recommend_closing_window(name):
+    """창 닫기를 '끄는 방법'으로 안내하면 안 된다."""
+    text = _bat(name)
+    assert "창을 닫으면 멈춥니다" not in text, (
+        f"{name}: 창 닫기는 OBS 스트림을 켜진 채 남긴다"
+    )
+
+
+@pytest.mark.parametrize("name", _RUNNING_BATS)
+def test_running_bats_point_at_stop_bat(name):
+    """방송이 도는 .bat 은 안전하게 끄는 법을 알려줘야 한다."""
+    assert "중단.bat" in _bat(name), f"{name}: 중단.bat 안내가 없습니다"
+
+
+def test_docs_warn_about_closing_window():
+    for path in (Path("README.md"), WINDOWS_DIR / "사용법.md"):
+        text = path.read_text(encoding="utf-8")
+        assert "중단.bat" in text, f"{path}: 중단.bat 안내 없음"
+        assert "X 로 닫" in text, f"{path}: 창 닫기 경고 없음"
