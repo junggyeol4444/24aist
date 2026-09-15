@@ -23,7 +23,9 @@ def test_chzzk_parse_chat_and_donation():
     assert _parse_chat_bdy(chat) == [("별님", "안녕", False, "")]
     dono = {"cmd": 93102, "bdy": [{"profile": None, "msg": "감사", "extras": json.dumps({"payAmount": 1000})}]}
     nick, text, is_dono, amount = _parse_chat_bdy(dono)[0]
-    assert is_dono is True and amount == "1000" and text == "감사"
+    # 금액은 화면 표기와 같은 "1,000원" 형태로 — 단위 없이 넘기면
+    # 방송인이 "1000 후원" 이라고만 듣는다.
+    assert is_dono is True and amount == "1,000원" and text == "감사"
 
 
 def test_soop_packet_roundtrip():

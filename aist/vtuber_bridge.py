@@ -52,6 +52,9 @@ def format_chat_line(text: str, source: Optional[str] = None,
         tags.append(_PLATFORM_KR.get(platform, platform))
     if donation is not None:
         tags.append(f"{donation} 후원" if donation else "후원")
+    if not text:
+        # 메시지 없이 금액만 온 후원 — 콜론 뒤가 비면 어색하게 읽힌다.
+        return f"{source} ({', '.join(tags)})" if tags else source
     if tags:
         return f"{source} ({', '.join(tags)}): {text}"
     return f"{source}: {text}"

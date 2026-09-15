@@ -170,3 +170,34 @@ def test_broadcast_still_survives_a_code_bug():
     for _ in range(5):
         asyncio.run(p._send_single(
             ChatMessage(author="a", text="b", platform="twitch")))
+
+
+# ---------------------- 메시지 없는 후원(금액만) ----------------------
+def test_chzzk_donation_without_message_is_not_dropped():
+    """치즈 후원은 메시지 없이 금액만 오는 경우가 흔하다.
+
+    그걸 버리면 시청자가 돈을 냈는데 방송인은 아무 말도 안 하고 지나간다.
+    """
+    from aist.chat.chzzk import _parse_chat_bdy
+    raw = {"cmd": 93102, "bdy": [{"profile": '{"nickname": "후원자"}',
+                                  "msg": "",
+                                  "extras": '{"payAmount": 10000}'}]}
+    parsed = _parse_chat_bdy(raw)
+    assert parsed == [("후원자", "", True, "10,000원")]
+
+
+def test_chzzk_amount_has_unit_and_separator():
+    from aist.chat.chzzk import _format_amount
+    assert _format_amount('{"payAmount": 1000}') == "1,000원"
+    assert _format_amount({"payAmount": 50000}) == "50,000원"
+    assert _format_amount('{"payAmount": "3000"}') == "3,000원"
+    assert _format_amount("") == ""
+    assert _format_amount("망가진 json") == ""
+    assert _format_amount('{"payAmount": "무료"}') == "무료"
+
+
+def test_empty_donation_line_has_no_dangling_colon():
+    from aist.vtuber_bridge import format_chat_line
+    line = format_chat_line("", source="후원자", platform="chzzk", donation="10,000원")
+    assert line == "후원자 (치지직, 10,000원 후원)"
+    assert not line.endswith(":")

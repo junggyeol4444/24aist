@@ -24,6 +24,30 @@ _CMD = {"ping": 0, "pong": 10000, "connect": 100, "chat": 93101, "donation": 931
 _UA = {"User-Agent": "Mozilla/5.0", "Accept": "application/json"}
 
 
+def _format_amount(extras) -> str:
+    """후원 금액을 사람이 읽는 표기로. 못 읽으면 빈 문자열.
+
+    payAmount 는 숫자(원)로 온다. 그대로 넘기면 방송인에게 "10000 후원"
+    으로 들려서 단위가 없다. 화면에 뜨는 것과 같은 "10,000원" 으로 맞춘다.
+    """
+    if not extras:
+        return ""
+    if isinstance(extras, str):
+        try:
+            extras = json.loads(extras)
+        except json.JSONDecodeError:
+            return ""
+    if not isinstance(extras, dict):
+        return ""
+    pay = extras.get("payAmount", "")
+    if pay in ("", None):
+        return ""
+    try:
+        return f"{int(pay):,}원"
+    except (TypeError, ValueError):
+        return str(pay)
+
+
 def _parse_chat_bdy(raw: dict):
     """cmd 93101/93102 의 bdy(list) → (nickname, text) 들을 만든다."""
     out = []
@@ -40,13 +64,7 @@ def _parse_chat_bdy(raw: dict):
                 pass
         msg = c.get("msg") or c.get("content") or ""
         is_dono = raw.get("cmd") == _CMD["donation"]
-        amount = ""
-        if is_dono:
-            extra = c.get("extras")
-            try:
-                amount = str(json.loads(extra).get("payAmount", "")) if extra else ""
-            except (json.JSONDecodeError, TypeError):
-                amount = ""
+        amount = _format_amount(c.get("extras")) if is_dono else ""
         out.append((nickname, msg, is_dono, amount))
     return out
 
@@ -109,7 +127,9 @@ class ChzzkChat(ChatSource):
                             continue
                         if cmd in (_CMD["chat"], _CMD["donation"]):
                             for nick, text, is_dono, amount in _parse_chat_bdy(data):
-                                if not text:
+                                # 메시지 없는 후원(금액만)도 흘려보낸다. 버리면
+                                # 시청자가 돈을 냈는데 방송인은 모르고 지나간다.
+                                if not text and not is_dono:
                                     continue
                                 yield ChatMessage(
                                     author=nick, text=text, platform=self.platform,
