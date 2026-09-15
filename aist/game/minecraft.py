@@ -23,6 +23,7 @@ import logging
 from typing import Optional
 
 from ..config import GameConfig
+from ..safety import sanitize_incoming
 from ..vtuber_bridge import VTuberBridge
 
 log = logging.getLogger("aist.game.minecraft")
@@ -92,16 +93,24 @@ class MinecraftFeed:
 
         if event == "chat":
             if self.cfg.forward_game_chat:
-                username = data.get("username", "?")
-                message = data.get("message", "")
+                # 게임 채팅도 시청자 채팅과 똑같이 소독한다. 안 하면 게임
+                # 서버의 다른 플레이어가 개행으로 시스템 신호를 위조해
+                # 방송인을 조종할 수 있다(시청자 채팅에는 있는 보호가
+                # 여기만 빠져 있었다).
+                message, username = sanitize_incoming(
+                    data.get("message", ""), data.get("username", "?"))
                 if message:
-                    await self._safe_say(message, source=username, platform="minecraft")
+                    await self._safe_say(message, source=username,
+                                         platform="minecraft")
             return
 
         if event in self.cfg.react_events:
             cue = _EVENT_CUES.get(event)
             if cue is None:
-                cue = f"(게임 상황: {event})"
+                # 모르는 이벤트 이름도 외부 입력이다 — 그대로 큐에 넣으면
+                # 사이드카가 임의 문자열로 시스템 신호를 만들 수 있다.
+                safe_event, _ = sanitize_incoming(str(event), "")
+                cue = f"(게임 상황: {safe_event})"
             await self._safe_say(cue)
 
     async def _safe_say(self, text: str, source: Optional[str] = None,

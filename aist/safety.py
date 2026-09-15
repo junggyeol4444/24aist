@@ -26,7 +26,8 @@ log = logging.getLogger("aist.safety")
 
 # 시스템 신호를 흉내내는 문구 — 시청자 입력에서는 무력화한다.
 # (운영자 지시는 이 표현을 쓰고, 시청자는 못 쓰게 해서 경계를 만든다)
-_CUE_MARKERS = ("매니저 귓속말", "매니저귓속말", "manager whisper")
+_CUE_MARKERS = ("매니저 귓속말", "매니저귓속말", "manager whisper",
+                "게임 상황", "게임상황")
 
 # 코어에 넘기는 채팅 한 줄의 상한. 지나치게 긴 입력으로 앞의 지시를
 # 밀어내는 것(컨텍스트 밀어내기)을 막는다.
@@ -59,7 +60,8 @@ def _defang_markers(s: str) -> str:
         if m in s:
             # 가운데에 보이지 않는 구분을 넣는 대신, 사람이 읽어도 자연스럽고
             # 신호로는 안 읽히는 형태로 바꾼다.
-            s = s.replace(m, "매니저 얘기")
+            s = s.replace(m, "매니저 얘기" if "매니저" in m or "manager" in m
+                          else "게임 얘기")
             log.warning("채팅에서 시스템 신호 흉내 문구를 무력화했습니다.")
     return s
 
