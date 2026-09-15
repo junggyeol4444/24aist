@@ -242,14 +242,31 @@ def config_problems(cfg) -> list[str]:
     sch = cfg.scheduler
 
     # 1) 타임존
+    #
+    # 윈도우에는 시스템 타임존 DB 가 없다. tzdata 패키지가 없으면 정상적인
+    # 'Asia/Seoul' 도 실패한다 — 그때 "오타"라고 안내하면 운영자가 멀쩡한
+    # 설정을 고치려 들게 된다. 원인을 구분해서 알려준다.
     try:
         from zoneinfo import ZoneInfo
         ZoneInfo(sch.timezone)
     except Exception:
-        out.append(
-            f"타임존 '{sch.timezone}' 을 찾을 수 없습니다 → 시간이 UTC 로 계산되어 "
-            f"방송이 몇 시간씩 어긋납니다. 예: Asia/Seoul"
-        )
+        try:
+            import tzdata  # noqa: F401
+            has_tzdata = True
+        except ImportError:
+            has_tzdata = False
+        import zoneinfo as _zi
+        if not has_tzdata and not _zi.TZPATH:
+            out.append(
+                "타임존 데이터가 없습니다(윈도우는 시스템에 없음) → config 의 "
+                f"timezone '{sch.timezone}' 이 무시되고 PC 로컬 시간으로 방송 "
+                "시각이 계산됩니다. 고치기: pip install tzdata"
+            )
+        else:
+            out.append(
+                f"타임존 '{sch.timezone}' 을 찾을 수 없습니다 → 시간이 어긋납니다. "
+                f"예: Asia/Seoul"
+            )
 
     # 2) 요일 키
     unknown = [k for k in sch.weekly if k not in _WEEKDAY_KEYS]

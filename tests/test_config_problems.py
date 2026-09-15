@@ -157,3 +157,77 @@ def test_pre_notice_never_lands_after_end():
         seen = _phases(cfg, start)
         assert "PRE_NOTICE" in seen, f"{h:02d}시 시작에서 예고 없음: {seen}"
         assert seen["PRE_NOTICE"] < seen["END"], f"{h:02d}시 시작에서 예고가 종료 이후"
+
+
+# --------------------------- 윈도우 타임존 --------------------------------
+# Wine 에 윈도우 파이썬을 올려 aist check 를 실제로 돌려보다 찾았다.
+# 윈도우에는 시스템 타임존 DB 가 없다(TZPATH 가 비어 있다). tzdata 패키지가
+# 없으면 정상적인 'Asia/Seoul' 도 ZoneInfoNotFoundError 를 낸다.
+#
+# 그러면 orchestrator._now() 가 조용히 PC 로컬 시간으로 떨어져서
+# config 의 timezone 설정이 통째로 무시된다 — 24시간 자동 운영의 스케줄러가
+# 설정대로 안 돈다. 리눅스에서는 멀쩡해서 리눅스만 테스트하면 안 보인다.
+def test_tzdata_is_a_windows_dependency():
+    """윈도우에서 zoneinfo 가 돌려면 tzdata 가 반드시 깔려야 한다."""
+    import tomllib
+    with open("pyproject.toml", "rb") as fh:
+        data = tomllib.load(fh)
+    deps = data["project"]["dependencies"]
+    tz = [d for d in deps if d.lower().startswith("tzdata")]
+    assert tz, f"tzdata 가 핵심 의존성에 없습니다: {deps}"
+    assert "win32" in tz[0], f"윈도우 마커가 없습니다: {tz[0]}"
+
+
+def test_missing_tzdata_gives_actionable_message(monkeypatch):
+    """tzdata 가 없어서 실패한 것을 '오타'라고 안내하면 안 된다.
+
+    멀쩡한 Asia/Seoul 을 고치라고 하면 운영자가 헤맨다.
+    """
+    import builtins
+    import zoneinfo
+    real_import = builtins.__import__
+
+    def no_tzdata(name, *a, **k):
+        if name == "tzdata":
+            raise ImportError("no tzdata")
+        return real_import(name, *a, **k)
+
+    def boom(key):
+        raise zoneinfo.ZoneInfoNotFoundError(f"No time zone found with key {key}")
+
+    monkeypatch.setattr(builtins, "__import__", no_tzdata)
+    monkeypatch.setattr(zoneinfo, "ZoneInfo", boom)
+    monkeypatch.setattr(zoneinfo, "TZPATH", ())
+
+    c = _cfg()
+    c.scheduler.timezone = "Asia/Seoul"      # 멀쩡한 값
+    c.scheduler.weekly = {"mon": ["19:00"]}
+    probs = config_problems(c)
+    msg = " ".join(probs)
+    assert "tzdata" in msg, f"해결 방법(pip install tzdata)이 없습니다: {probs}"
+    assert "오타" not in msg
+
+
+def test_now_warns_instead_of_silently_falling_back(caplog):
+    """타임존을 못 쓰면 조용히 넘어가지 말고 알려야 한다."""
+    import logging
+    from aist import orchestrator as orch
+
+    orch._tz_warned.clear()
+    with caplog.at_level(logging.ERROR):
+        orch._now("Nowhere/Nothing")
+    assert any("로컬 시간" in r.getMessage() for r in caplog.records), \
+        f"경고가 없습니다: {[r.getMessage() for r in caplog.records]}"
+
+
+def test_now_warns_only_once_per_timezone(caplog):
+    """매 호출마다 찍으면 24시간 로그가 폭발한다."""
+    import logging
+    from aist import orchestrator as orch
+
+    orch._tz_warned.clear()
+    with caplog.at_level(logging.ERROR):
+        for _ in range(20):
+            orch._now("Nowhere/Nothing")
+    errors = [r for r in caplog.records if r.levelname == "ERROR"]
+    assert len(errors) == 1, f"{len(errors)}번 찍혔습니다"

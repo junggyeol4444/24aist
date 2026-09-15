@@ -54,11 +54,25 @@ _CUE_OPENING = ("(매니저 귓속말: 방송 방금 시작했어. 방송 여는
 # 안 끄고 30초~1분 정도 여운을 둔다. config.end_judge.wind_down 에서 조정.
 
 
+_tz_warned = set()
+
+
 def _now(tz_name: str) -> datetime:
+    """설정한 타임존의 현재 시각. 실패하면 로컬 시간으로 떨어진다.
+
+    조용히 떨어지면 안 된다 — 윈도우에는 시스템 타임존 DB 가 없어서
+    tzdata 패키지가 없으면 항상 여기로 온다. 그러면 config 의 timezone
+    설정이 통째로 무시된 채 PC 로컬 시간으로 방송 시각이 계산된다.
+    PC 시간대가 다르면 방송이 몇 시간씩 어긋난다.
+    """
     try:
         from zoneinfo import ZoneInfo
         return datetime.now(ZoneInfo(tz_name))
-    except Exception:  # tz 미지원/오타 → 로컬 시간
+    except Exception as e:  # noqa: BLE001 - tz 미지원/오타/DB 없음
+        if tz_name not in _tz_warned:
+            _tz_warned.add(tz_name)
+            log.error("타임존 '%s' 을 쓸 수 없어 PC 로컬 시간으로 계산합니다 "
+                      "— 방송 시각이 어긋날 수 있습니다: %s", tz_name, e)
         return datetime.now().astimezone()
 
 
