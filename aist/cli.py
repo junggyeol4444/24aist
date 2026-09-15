@@ -705,6 +705,12 @@ def cmd_rehearse(args) -> int:
     cfg.obs.launch_if_not_running = False
     cfg.announce.discord.enabled = False
     cfg.announce.naver_cafe.enabled = False
+    # 게시처만 끄면 공지 문구는 그대로 만들어져 로그에 "[공지/start] ..." 로
+    # 찍힌다. 화면에 "공지 없음" 이라고 해놓고 공지가 찍히면 운영자는
+    # 공지가 나간 줄 안다. 리허설에서는 공지 단계 자체를 건너뛴다.
+    # (문구를 보고 싶으면 `aist announce-preview`)
+    cfg.announce.on_start = False
+    cfg.announce.on_end = False
     cfg.end_judge.min_minutes = 0
     cfg.end_judge.max_minutes = max(1, args.minutes)
     # 마무리 단계도 리허설 길이에 맞춰 줄인다. 실제 방송의 기본값(유예 5분,

@@ -118,6 +118,10 @@ def test_rehearse_disables_stream_and_announce(monkeypatch, tmp_path):
     assert cfg.obs.launch_if_not_running is False
     assert cfg.announce.discord.enabled is False
     assert cfg.announce.naver_cafe.enabled is False
+    # 게시처만 꺼두면 공지 문구는 그대로 만들어져 로그에 "[공지/start]" 로
+    # 찍힌다 — 화면에는 "공지 없음" 이라 해놓고. 단계 자체를 꺼야 한다.
+    assert cfg.announce.on_start is False
+    assert cfg.announce.on_end is False
     assert cfg.platform == "rehearsal"
 
 
