@@ -113,6 +113,14 @@ class ObsController:
             raise ObsError("OBS 에 먼저 connect() 해야 합니다.")
         return self._client
 
+    def _is_streaming(self) -> Optional[bool]:
+        """지금 송출 중인지. 알 수 없으면 None."""
+        try:
+            status = self._require().get_stream_status()
+            return bool(getattr(status, "output_active", False))
+        except Exception:  # noqa: BLE001 - 상태 조회 실패는 치명적이지 않음
+            return None
+
     def start_stream(self):
         """스트림 시작. start_stream=false 면 (테스트 단계) 건너뛴다.
 
@@ -122,14 +130,17 @@ class ObsController:
             log.info("obs.start_stream=false → 스트림 시작은 운영자 수동(건너뜀)")
             return
         cl = self._require()
+        if self._is_streaming():
+            log.info("이미 스트리밍 중 → 시작 생략")
+            return
         try:
-            status = cl.get_stream_status()
-            if getattr(status, "output_active", False):
-                log.info("이미 스트리밍 중 → 시작 생략")
-                return
-        except Exception:  # 상태 조회 실패는 치명적이지 않음
-            pass
-        cl.start_stream()
+            cl.start_stream()
+        except ObsError:
+            raise
+        except Exception as e:  # noqa: BLE001 - obsws 는 자기 예외를 던진다
+            # 호출자는 ObsError 만 잡는다. 정규화하지 않으면 방송 사이클이
+            # 엉뚱한 곳에서 끊긴다.
+            raise ObsError(f"스트림 시작 실패: {e}") from e
         log.info("OBS 스트림 시작")
         self._simulcast(start=True)
 
@@ -139,7 +150,18 @@ class ObsController:
             return
         cl = self._require()
         self._simulcast(start=False)
-        cl.stop_stream()
+        if self._is_streaming() is False:
+            # 이미 꺼져 있다. 그냥 stop 을 부르면 obsws 가 예외를 던지고,
+            # 그게 방송 종료 절차 전체를 깨뜨린다(운영자가 OBS 에서 직접
+            # 껐거나 스트림 키 오류로 자동 중단된 경우에 실제로 일어난다).
+            log.info("이미 스트리밍이 아님 → 종료 생략")
+            return
+        try:
+            cl.stop_stream()
+        except ObsError:
+            raise
+        except Exception as e:  # noqa: BLE001 - obsws 는 자기 예외를 던진다
+            raise ObsError(f"스트림 종료 실패: {e}") from e
         log.info("OBS 스트림 종료")
 
     def _simulcast(self, start: bool):
