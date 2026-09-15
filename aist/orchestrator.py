@@ -15,7 +15,7 @@
 
 import asyncio
 import logging
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Optional
 
@@ -108,8 +108,16 @@ class Orchestrator:
             log.warning("scheduler.enabled=false → 자동 시작 안 함. run_one_now() 를 쓰세요.")
             return
         log.info("오케스트레이터 시작 — 24시간 대기 모드")
+        used_slot = None      # 이번 루프에서 이미 방송한 슬롯
         while not self._stop.is_set():
             now = _now(self.cfg.scheduler.timezone)
+            if used_slot is not None and now <= used_slot:
+                # 방금 끝낸 방송이 쓴 슬롯을 다시 집으면 같은 방송이 두 번
+                # 나간다. 시작 변주(symmetric)로 슬롯보다 일찍 시작했거나,
+                # 방송이 슬롯 시각 전에 끝난 경우(코어 유실 등)에 실제로
+                # 일어난다. 그 슬롯은 지난 것으로 본다.
+                now = used_slot + timedelta(seconds=1)
+            slot = self.scheduler.next_slot(now)
             start_at = self.scheduler.next_start(now)
             if start_at is None:
                 log.info("앞으로 예정된 방송이 없습니다(전부 휴방). 1시간 후 재확인.")
@@ -140,6 +148,7 @@ class Orchestrator:
             await self._sleep_or_stop(wait)
             if self._stop.is_set():
                 break
+            used_slot = slot
             try:
                 await self._run_broadcast(skip_start_announce=pre_announced)
             except Exception:
