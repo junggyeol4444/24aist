@@ -235,6 +235,31 @@ def frontend_proxy_ready(root: Path | None = None) -> tuple[bool, str]:
     )
 
 
+def core_startup_files_ready(root: Path | None = None) -> tuple[bool, str]:
+    """코어가 시작할 때 '있어야만' 하는 것들이 있는지.
+
+    실제로 코어를 띄워 보고 찾은 것들이다. 없으면 코어가 파이썬 예외를
+    뱉고 그대로 죽는다 — 운영자에게는 창이 깜빡이고 사라지는 것으로 보인다.
+      avatars/         : StaticFiles 마운트 대상. 없으면
+                         "Directory 'avatars' does not exist"
+      mcp_servers.json : ServerRegistry 가 시작할 때 읽는다. 없으면
+                         "File 'mcp_servers.json' does not exist"
+    """
+    root = root or repo_root()
+    core = root / "Open-LLM-VTuber"
+    if not core.is_dir():
+        return False, "Open-LLM-VTuber/ 디렉터리가 없습니다"
+    missing = []
+    if not (core / "avatars").is_dir():
+        missing.append("avatars/ 폴더")
+    if not (core / "mcp_servers.json").is_file():
+        missing.append("mcp_servers.json")
+    if missing:
+        return False, (f"코어 시작에 필요한 게 없습니다: {', '.join(missing)} — "
+                       + hint(*CMD_CORE_SETUP))
+    return True, "있음"
+
+
 def core_python_ok(root: Path | None = None) -> tuple[bool, str]:
     """지금 파이썬이 코어가 지원하는 범위인지.
 

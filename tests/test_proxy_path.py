@@ -103,3 +103,60 @@ def test_frontend_proxy_ready_reports_unpatched(tmp_path):
     from aist.frontend_patch import patch_index
     patch_index(fe)
     assert frontend_proxy_ready(tmp_path)[0] is True
+
+
+# --------- 코어가 '시작조차' 못 하던 것들 (실제로 코어를 띄워서 찾음) ---------
+def test_core_startup_files_are_shipped():
+    """실제로 코어를 띄워 보니 이것들이 없어서 파이썬 예외로 죽었다.
+
+      avatars/          → "Directory 'avatars' does not exist"
+      mcp_servers.json  → "File 'mcp_servers.json' does not exist"
+    새로 받은 사람은 코어 창이 깜빡이고 사라지는 것만 본다.
+    """
+    core = ROOT / "Open-LLM-VTuber"
+    assert (core / "avatars").is_dir(), "avatars/ 가 없으면 코어가 안 뜬다"
+    assert (core / "mcp_servers.json").is_file(), "mcp_servers.json 이 없으면 코어가 안 뜬다"
+    import json
+    assert "mcp_servers" in json.loads(
+        (core / "mcp_servers.json").read_text(encoding="utf-8"))
+
+
+def test_preflight_catches_missing_startup_files(tmp_path):
+    from aist.preflight import core_startup_files_ready
+
+    core = tmp_path / "Open-LLM-VTuber"
+    core.mkdir()
+    ok, msg = core_startup_files_ready(tmp_path)
+    assert ok is False and "avatars" in msg and "mcp_servers.json" in msg
+
+    (core / "avatars").mkdir()
+    (core / "mcp_servers.json").write_text("{}", encoding="utf-8")
+    assert core_startup_files_ready(tmp_path)[0] is True
+
+
+def test_core_proxy_does_not_crash_on_silent_payload():
+    """TTS 가 실패하면 코어는 audio=None 인 '무음 payload' 를 보낸다.
+
+    그 자리에서 len(None) 이 터지면서 메시지가 어떤 클라이언트에게도 안 갔고,
+    웹UI 가 재생 완료를 못 보내 대화가 영영 안 끝났다 — 그 뒤로 방송인이
+    한 마디도 못 한다. (실제 코어를 띄워 재현하고 고쳤다)
+    """
+    src = (ROOT / "Open-LLM-VTuber" / "src" / "open_llm_vtuber"
+           / "proxy_handler.py").read_text(encoding="utf-8")
+    assert "len(message.get('audio', ''))" not in src, "수정이 되돌아갔습니다"
+    assert "len(message.get('audio') or '')" in src
+
+    # 같은 계산을 그대로 돌려본다(audio=None 이어도 안 터져야 한다)
+    message = {"type": "audio", "audio": None, "volumes": [],
+               "display_text": {"text": "안녕"}}
+    log_msg = {**{k: v for k, v in message.items() if k != "audio"},
+               "audio": f"[Audio data, {len(message.get('audio') or '')} bytes truncated]"}
+    assert log_msg["display_text"]["text"] == "안녕"
+
+
+def test_korean_conf_does_not_download_a_gigabyte_for_unused_asr():
+    """이 방송은 마이크를 안 쓴다. 그런데 코어는 시작할 때 음성인식을 무조건
+    초기화한다. 기본값(sherpa_onnx_asr)은 첫 실행에서 1GB 를 받는다."""
+    conf = yaml.safe_load(
+        (ROOT / "Open-LLM-VTuber" / "conf.korean.yaml").read_text(encoding="utf-8"))
+    assert conf["character_config"]["asr_config"]["asr_model"] != "sherpa_onnx_asr"

@@ -269,7 +269,11 @@ class ProxyHandler:
             if "audio" not in message
             else {
                 **{k: v for k, v in message.items() if k != "audio"},
-                "audio": f"[Audio data, {len(message.get('audio', ''))} bytes truncated]",
+                # 24aist 개조: TTS 가 실패하거나 무음 표시일 때 audio 는 None 이다.
+                # len(None) 이 터지면서 이 메시지가 어떤 클라이언트에게도 전달되지
+                # 않았고, 그러면 웹UI 가 재생 완료를 못 보내 대화가 영영 안 끝났다
+                # (그 뒤로 방송인이 한 마디도 못 한다).
+                "audio": f"[Audio data, {len(message.get('audio') or '')} bytes truncated]",
             }
         )
 

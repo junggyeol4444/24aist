@@ -49,6 +49,13 @@ fi
 
 # 3) 한국어 개조 설정 적용
 if [ ! -f "$CORE/conf.yaml" ]; then
+# 코어가 시작할 때 있어야 하는 것들(없으면 파이썬 예외로 그대로 죽는다)
+mkdir -p "$CORE/avatars" "$CORE/logs" "$CORE/cache"
+if [ ! -f "$CORE/mcp_servers.json" ]; then
+  printf '{\n  "mcp_servers": {}\n}\n' > "$CORE/mcp_servers.json"
+  echo "==> mcp_servers.json 생성(빈 목록)"
+fi
+
   if [ -f "$CORE/conf.korean.yaml" ]; then
     cp "$CORE/conf.korean.yaml" "$CORE/conf.yaml"
     echo "==> conf.korean.yaml → conf.yaml 적용(페르소나/한국어 TTS 포함)"

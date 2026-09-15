@@ -49,6 +49,15 @@ popd
 
 echo.
 echo [3/3] 코어 설정 conf.yaml 준비...
+REM 코어가 시작할 때 있어야 하는 것들 ^(없으면 파이썬 오류로 창이 그냥 닫힌다^)
+if not exist "Open-LLM-VTuber\avatars" mkdir "Open-LLM-VTuber\avatars"
+if not exist "Open-LLM-VTuber\logs" mkdir "Open-LLM-VTuber\logs"
+if not exist "Open-LLM-VTuber\cache" mkdir "Open-LLM-VTuber\cache"
+if not exist "Open-LLM-VTuber\mcp_servers.json" (
+  > "Open-LLM-VTuber\mcp_servers.json" echo {"mcp_servers": {}}
+  echo     mcp_servers.json 생성^(빈 목록^)
+)
+
 if exist "Open-LLM-VTuber\conf.yaml" (
   echo     이미 있음 ^(덮어쓰지 않음^)
 ) else (

@@ -199,7 +199,13 @@ character_config:
   # === Automatic Speech Recognition ===
   asr_config:
     # speech to text model options: 'faster_whisper', 'whisper_cpp', 'whisper', 'azure_asr', 'fun_asr', 'groq_whisper_asr', 'sherpa_onnx_asr'
-    asr_model: 'sherpa_onnx_asr'
+    # 이 방송은 마이크를 안 쓴다(입력은 채팅 글이다). 그런데 코어는 시작할 때
+    # 음성인식 엔진을 무조건 하나 초기화한다. 기본값(sherpa_onnx_asr)은 첫
+    # 실행에서 모델 약 1GB 를 내려받고 2GB 넘게 차지한다 — 쓰지도 않는
+    # 기능 때문에 설치가 오래 걸리고, 다운로드가 막히면 코어가 아예 안 뜬다.
+    # 그래서 받을 게 없는 엔진으로 둔다(키는 비워둔다. 실제 음성인식은 안 함).
+    # 마이크를 쓰려면 sherpa_onnx_asr 로 되돌리고 코어를 다시 켜면 된다.
+    asr_model: groq_whisper_asr
 
     azure_asr:
       api_key: 'azure_api_key'
