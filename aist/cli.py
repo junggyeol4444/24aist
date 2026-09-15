@@ -860,10 +860,16 @@ def main(argv=None) -> int:
     args = parser.parse_args(argv)
     _load_dotenv()
     _setup_logging(args.log)
+    from .config import ConfigError
     try:
         return args.func(args)
     except KeyboardInterrupt:
         return 130
+    except (ConfigError, FileNotFoundError) as e:
+        # 설정/페르소나 파일 문제는 운영자가 고칠 수 있는 것들이다.
+        # 파이썬 트레이스백을 보여주면 고칠 수 있는 사람도 못 고친다.
+        print(f"\n[오류] {e}")
+        return 1
 
 
 if __name__ == "__main__":

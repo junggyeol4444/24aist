@@ -417,6 +417,65 @@ class Config:
 # --------------------------------------------------------------------------- #
 # YAML(dict) → dataclass 재귀 변환. 모르는 키는 무시, 빠진 키는 기본값.
 # --------------------------------------------------------------------------- #
+def _type_name(ftype) -> str:
+    return {int: "정수", float: "숫자", bool: "true/false", str: "문자열"}.get(
+        ftype, getattr(ftype, "__name__", str(ftype)))
+
+
+def _coerce(value, ftype, dotted: str):
+    """설정 값을 선언된 타입으로 맞춘다. 못 맞추면 한국어로 알려준다.
+
+    운영자는 이 파일을 손으로 고친다. 따옴표 하나 차이로 "180" 이 문자열이
+    되면 방송 도중에 TypeError 로 죽는데, 그 메시지로는 아무것도 못 고친다.
+    맞출 수 있으면 조용히 맞추고, 못 맞추면 어디를 어떻게 고치라고 말한다.
+    """
+    origin = get_origin(ftype)
+    if origin in (list, List):
+        if value is None:
+            return []
+        if isinstance(value, (list, tuple)):
+            return list(value)
+        return [value]              # 한 줄로 적은 경우(platforms: twitch)
+    if origin in (dict, Dict):
+        if value is None:
+            return {}
+        if not isinstance(value, dict):
+            raise ConfigError(
+                f"{dotted} 는 '항목: 값' 형태여야 합니다. 지금 값: {value!r}")
+        return value
+    if ftype is bool:
+        if isinstance(value, bool):
+            return value
+        if isinstance(value, str) and value.strip().lower() in (
+                "true", "false", "yes", "no", "y", "n", "on", "off"):
+            return value.strip().lower() in ("true", "yes", "y", "on")
+        if isinstance(value, int):
+            return bool(value)
+        raise ConfigError(f"{dotted} 는 true 또는 false 여야 합니다. 지금 값: {value!r}")
+    if ftype in (int, float):
+        if isinstance(value, bool):
+            raise ConfigError(f"{dotted} 는 {_type_name(ftype)}여야 합니다. 지금 값: {value!r}")
+        if isinstance(value, (int, float)):
+            return ftype(value)
+        if isinstance(value, str):
+            try:
+                return ftype(value.strip())
+            except ValueError:
+                pass
+        raise ConfigError(
+            f"{dotted} 는 {_type_name(ftype)}여야 합니다. 지금 값: {value!r}")
+    if ftype is str:
+        if value is None:
+            return ""
+        if isinstance(value, str):
+            return value
+        if isinstance(value, (int, float, bool)):
+            # 따옴표를 빼먹은 경우가 대부분이다(예: password: 1234)
+            return str(value)
+        raise ConfigError(f"{dotted} 는 문자열이어야 합니다. 지금 값: {value!r}")
+    return value
+
+
 def _build(cls, data: Any, path: str = "", unknown: Any = None):
     if not is_dataclass(cls):
         return data
@@ -445,7 +504,7 @@ def _build(cls, data: Any, path: str = "", unknown: Any = None):
             kwargs[key] = [_build(item_cls, item, f"{path}{key}[].", unknown)
                            for item in raw]
         else:
-            kwargs[key] = raw
+            kwargs[key] = _coerce(raw, ftype, f"{path}{key}")
     return cls(**kwargs)
 
 
@@ -522,7 +581,9 @@ def load_config(path: Union[str, Path]) -> Config:
     unknown: List[str] = []
     cfg = Config(
         platform=raw.get("platform", "twitch"),
-        platforms=list(raw.get("platforms", []) or []),
+        # platforms 를 한 줄로 적으면(platforms: twitch) list() 가 글자 단위로
+        # 쪼개서 't','w','i'... 가 된다. 목록으로 맞춰준다.
+        platforms=_coerce(raw.get("platforms"), List[str], "platforms"),
         chat=_build(ChatConfig, raw.get("chat"), "chat.", unknown),
         vtuber=_build(VTuberConfig, raw.get("vtuber"), "vtuber.", unknown),
         obs=_build(ObsConfig, raw.get("obs"), "obs.", unknown),
