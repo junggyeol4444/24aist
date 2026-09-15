@@ -91,6 +91,14 @@ broadcast:
   idle_proactive_speak: true
   idle_gap_min_sec: 6              # 말 끝난 뒤 이 정도만 조용해도 말 이음
   idle_gap_max_sec: 15             # 아무리 늦어도 이 안엔 말을 건다
+  # 말하는 동안 쌓인 채팅을 한 번에 넘길 때의 상한.
+  # 정상 방송에서는 걸릴 일이 없는 값이다 — 걸리면 그게 폭주 신호다.
+  # 넘쳐도 채팅을 버리지 않는다: AI 에게는 최근 것 + "그 외 N건" 으로
+  # 규모를 알리고, 기록·기억에는 전부 남는다.
+  # 이 상한이 없으면 폭주 시 한 메시지가 수십만 자가 되어 LLM 이 조용히
+  # 잘라먹는다(채팅이 사라지는데 아무도 모름).
+  max_batch_lines: 80
+  max_batch_chars: 4000
   # 채팅 폭주 처리: 기본 off. 실제 폭주가 생긴 뒤 운영자가 켠다.
   flood_handling:
     enabled: false

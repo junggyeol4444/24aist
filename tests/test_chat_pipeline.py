@@ -145,3 +145,62 @@ def test_idle_speak_fires_when_quiet():
         return bridge.proactive
 
     assert asyncio.run(run()) == 1
+
+
+# =========================================================================
+# 폭주 시 한 메시지가 수십만 자가 되던 것.
+#
+# 말하는 동안 쌓인 채팅을 한 번에 넘기는데 상한이 없었다. 5000건이면
+# 13만 4천 자짜리 메시지 하나가 코어로 갔고, LLM 이 조용히 잘라먹어
+# 채팅이 사라지는데 아무도 몰랐다 — 기획안 1-2 "다 읽고 다 반응" 이
+# 소리 없이 깨진다.
+#
+# 버리는 게 아니다: 기록·기억에는 전부 남고, AI 에게는 최근 것 +
+# "그 외 N건" 으로 규모를 알린다(사람 방송인도 쏟아지면 다 못 읽고
+# "엄청 빠르네" 하고 반응한다 — 기획안 1-2 의 그 상황).
+# =========================================================================
+def _big_batch(n):
+    from aist.chat.base import ChatMessage
+    return [ChatMessage(author=f"시청자{i}", text="오늘 방송 진짜 재밌어요 ㅋㅋㅋ",
+                        platform="twitch") for i in range(n)]
+
+
+def _send_and_get(batch, **cfg_over):
+    from aist.config import BroadcastConfig, SafetyConfig
+    bridge = FakeBridge()
+    pipe = ChatPipeline(bridge, BroadcastConfig(**cfg_over), safety=SafetyConfig())
+    asyncio.run(pipe._send_batch(batch))
+    return bridge.said[0][1]
+
+
+def test_small_batch_is_untouched():
+    text = _send_and_get(_big_batch(10))
+    assert "그 외" not in text
+    assert text.count("\n") == 10        # 귓속말 1줄 + 채팅 10줄
+
+
+def test_huge_batch_is_capped():
+    text = _send_and_get(_big_batch(5000))
+    assert len(text) < 10000, f"여전히 {len(text)}자"
+
+
+def test_huge_batch_tells_ai_how_many_more():
+    text = _send_and_get(_big_batch(5000))
+    assert "그 외" in text and "건 더" in text
+
+
+def test_cap_keeps_the_most_recent():
+    """사람이 채팅창을 보면 최근 것이 눈에 들어온다."""
+    text = _send_and_get(_big_batch(1000))
+    assert "시청자999" in text, "최근 채팅이 빠졌다"
+    assert "시청자0:" not in text
+
+
+def test_operator_can_raise_the_cap():
+    text = _send_and_get(_big_batch(200), max_batch_lines=200, max_batch_chars=100000)
+    assert "그 외" not in text
+
+
+def test_cap_warns_so_operator_notices(caplog):
+    _send_and_get(_big_batch(500))
+    assert any("쏟아져" in r.getMessage() for r in caplog.records)

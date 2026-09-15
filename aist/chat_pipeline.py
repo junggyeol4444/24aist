@@ -182,6 +182,30 @@ class ChatPipeline:
             return msg.text, msg.author
         return sanitize_incoming(msg.text, msg.author)
 
+    def _cap_batch(self, lines: List[str]):
+        """한 번에 넘길 양을 제한한다. (남길 줄, 못 넣은 건수) 를 돌려준다.
+
+        최근 것을 남긴다 — 사람이 채팅창을 보면 최근 것이 눈에 들어온다.
+        상한에 걸리는 건 정상 방송에선 없는 일이라, 걸리면 로그로 알린다
+        (운영자가 폭주를 인지하고 flood_handling 을 켤지 정한다 — 기획안 4-2).
+        """
+        max_lines = max(1, self.cfg.max_batch_lines)
+        max_chars = max(100, self.cfg.max_batch_chars)
+        kept, total = [], 0
+        for line in reversed(lines):          # 최근 것부터
+            if len(kept) >= max_lines or total + len(line) > max_chars:
+                break
+            kept.append(line)
+            total += len(line) + 1
+        kept.reverse()
+        dropped = len(lines) - len(kept)
+        if dropped:
+            log.warning("채팅이 쏟아져 한 번에 %d건 중 %d건만 넘깁니다 "
+                        "(기록·기억에는 전부 남습니다). 폭주가 잦으면 "
+                        "config 의 broadcast.flood_handling 을 검토하세요.",
+                        len(lines), len(kept))
+        return kept, dropped
+
     @staticmethod
     def _donation(msg: ChatMessage) -> Optional[str]:
         """후원이면 금액 문자열을, 아니면 None 을 돌려준다.
@@ -251,8 +275,15 @@ class ChatPipeline:
                 m.platform if self._include_platform else None,
                 self._donation(m),
             ))
+        lines, dropped = self._cap_batch(lines)
+        body = "\n".join(lines)
+        if dropped:
+            # 버린 게 아니다 — 기록·기억에는 전부 남았다. AI 에게는 감당
+            # 가능한 양과 '얼마나 쏟아졌는지' 를 같이 준다. 사람 방송인도
+            # 채팅이 쏟아지면 다 못 읽고 "엄청 빠르네" 하고 반응한다.
+            body += f"\n(그 외 {dropped}건 더 올라왔어. 채팅이 빠르게 쏟아지는 중이야.)"
         try:
-            await self.bridge.say_to_ai(self._BATCH_WHISPER + "\n" + "\n".join(lines))
+            await self.bridge.say_to_ai(self._BATCH_WHISPER + "\n" + body)
             self._send_fail_streak = 0
             self._mark_busy()
         except Exception as e:
