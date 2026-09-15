@@ -365,3 +365,40 @@ def test_block_outside_echo_parens_are_fine(tmp_path):
     p = tmp_path / "ok.bat"
     p.write_text('@echo off\r\necho 이건 블록 밖이라 (괜찮다)\r\n', encoding="utf-8")
     assert not _unescaped_paren_echoes(p)
+
+
+# =========================================================================
+# 작업 스케줄러 기본값은 24시간 무인 운영에 맞지 않는다.
+# schtasks 로 만든 작업의 기본값:
+#   - 실행 시간 제한 72시간 → 3일 뒤 방송인이 강제 종료된다
+#   - 배터리면 시작 안 함    → 노트북은 전원 뽑으면 안 켜진다
+#   - 배터리로 바뀌면 중지   → 방송 중에 꺼진다
+# 기획안 7-8 "서버에 올려두고 며칠씩 알아서 돌게" 가 3일에서 멈춘다.
+# =========================================================================
+def test_autostart_removes_execution_time_limit():
+    t = _bat("자동시작등록.bat")
+    assert "PT0S" in t, "실행 시간 제한을 해제하지 않으면 3일 뒤 작업이 종료된다"
+
+
+def test_autostart_handles_battery_settings():
+    t = _bat("자동시작등록.bat")
+    assert "AllowStartIfOnBatteries" in t
+    assert "DontStopIfGoingOnBatteries" in t
+
+
+def test_autostart_does_not_stack_instances():
+    """재시작 루프와 겹쳐 인스턴스가 쌓이면 방송인이 여러 개 뜬다."""
+    assert "IgnoreNew" in _bat("자동시작등록.bat")
+
+
+def test_autostart_still_succeeds_if_hardening_fails():
+    """세부 설정 실패가 등록 자체를 실패로 만들면 안 된다 — 경고만."""
+    t = _bat("자동시작등록.bat")
+    assert "[경고]" in t, "실패 시 경고가 있어야 한다"
+    assert "exit /b 0" in t, "harden 은 실패해도 0 을 돌려줘야 한다"
+
+
+def test_autostart_tells_operator_how_to_fix_by_hand():
+    """자동 설정이 실패하면 손으로 고치는 법을 알려줘야 한다."""
+    t = _bat("자동시작등록.bat")
+    assert "작업 스케줄러" in t and "속성" in t
