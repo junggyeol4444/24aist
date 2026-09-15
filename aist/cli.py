@@ -401,23 +401,56 @@ def cmd_build_persona(args) -> int:
 
     target = Path(args.conf) if args.conf else None
     if target and target.exists():
-        data = yaml.safe_load(target.read_text(encoding="utf-8")) or {}
-        cc = data.setdefault("character_config", {})
-        cc["persona_prompt"] = prompt
+        from .config import read_text_lenient
+        from .paths import unique_path
+        original = read_text_lenient(target)   # 메모장이 저장한 인코딩도 읽는다
+
+        wanted = [(["character_config", "persona_prompt"], prompt),
+                  # GPT-SoVITS 를 TTS 로 지정(한국어). 세부 ref_audio 는 운영자가 채움.
+                  (["character_config", "tts_config", "tts_model"], "gpt_sovits_tts")]
         if args.live2d:
-            cc["live2d_model_name"] = args.live2d
-        # GPT-SoVITS 를 TTS 로 지정(한국어). 세부 ref_audio 는 운영자가 채움.
-        tts = cc.setdefault("tts_config", {})
-        tts["tts_model"] = "gpt_sovits_tts"
-        # 시스템 host/port 를 우리 ws_url 과 일치시키지는 않음(운영자 환경 우선).
-        backup = target.with_suffix(target.suffix + ".bak")
-        backup.write_text(target.read_text(encoding="utf-8"), encoding="utf-8")
-        target.write_text(yaml.safe_dump(data, allow_unicode=True, sort_keys=False), encoding="utf-8")
+            wanted.append((["character_config", "live2d_model_name"], args.live2d))
+
+        # 1순위: 주석을 살린 채 값만 갈아끼운다. 코어 conf.yaml 은 설명
+        # 주석이 빽빽하고, 운영자가 거기서 LLM 키·TTS 경로를 직접 채운다.
+        kept_comments = True
+        try:
+            from .conf_patch import ConfPatchError, set_value
+            text = original
+            for path_keys, value in wanted:
+                text = set_value(text, path_keys, value)
+        except Exception as e:  # noqa: BLE001 - 형식이 예상과 다르면 물러선다
+            log = logging.getLogger("aist.cli")
+            log.info("주석 유지 방식 실패(%s) → 값만 다시 씁니다(주석은 사라집니다)", e)
+            kept_comments = False
+            data = yaml.safe_load(original) or {}
+            cc = data.get("character_config")
+            if not isinstance(cc, dict):     # 'character_config:' 만 있고 비어 있는 경우
+                cc = {}
+                data["character_config"] = cc
+            for path_keys, value in wanted:
+                node = data
+                for k in path_keys[:-1]:
+                    nxt = node.get(k)
+                    if not isinstance(nxt, dict):
+                        nxt = {}
+                        node[k] = nxt
+                    node = nxt
+                node[path_keys[-1]] = value
+            text = yaml.safe_dump(data, allow_unicode=True, sort_keys=False)
+
+        # 백업은 덮어쓰지 않는다. 두 번 돌리면 원본 백업이 개조본으로
+        # 바뀌어 되돌릴 수 없게 된다.
+        backup = unique_path(target.with_suffix(target.suffix + ".bak"))
+        backup.write_text(original, encoding="utf-8")
+        target.write_text(text, encoding="utf-8")
         print(f"개조 완료: {target}\n  - character_config.persona_prompt 주입")
         print(f"  - tts_config.tts_model = gpt_sovits_tts")
         if args.live2d:
             print(f"  - live2d_model_name = {args.live2d}")
         print(f"  (원본 백업: {backup})")
+        if not kept_comments:
+            print("  ※ 이 파일의 설명 주석은 사라졌습니다. 원래 설명은 백업 파일에 있습니다.")
         print("  ※ GPT-SoVITS 의 ref_audio_path/api_url 은 conf.yaml 에서 직접 채우세요.")
     else:
         out = Path(args.out)
