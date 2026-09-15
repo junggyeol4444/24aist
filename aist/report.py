@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import List, Optional
 
 from .memory import Memory
+from .paths import unique_path
 from .transcript import read_transcript
 
 log = logging.getLogger("aist.report")
@@ -106,7 +107,8 @@ def generate_report(
     out = Path(out_dir)
     out.mkdir(parents=True, exist_ok=True)
     fname = (start[:16].replace(":", "").replace("T", "_") or "session") + ".md"
-    path = out / fname
+    # 같은 분에 두 번 방송하면 앞 리포트를 덮어쓴다.
+    path = unique_path(out / fname)
     path.write_text("\n".join(lines), encoding="utf-8")
     log.info("방송 리포트 생성: %s", path)
     return path
