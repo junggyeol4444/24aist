@@ -140,3 +140,27 @@ def test_example_config_still_loads():
     assert cfg.scheduler.retry_max >= 0
     assert cfg.broadcast.core_mute_max_strikes >= 0
     assert not cfg.unknown_keys, cfg.unknown_keys
+
+
+def test_operator_guide_quotes_real_log_lines():
+    """운영자 가이드가 '이 문장이 뜨면 이걸 확인하세요' 라고 적어놨는데
+    정작 코드에 그 문장이 없으면, 운영자는 로그에서 찾지 못한다.
+
+    (메시지를 고칠 때 문서도 같이 고치라는 뜻의 테스트다)
+    """
+    from pathlib import Path
+
+    code = "\n".join(p.read_text(encoding="utf-8")
+                     for p in Path("aist").rglob("*.py"))
+    guide = Path("docs/OPERATOR.md").read_text(encoding="utf-8")
+    phrases = [
+        "코어가 말을 해도 시청자에게 나가지 않는 상태입니다",
+        "방송인이 LLM 오류 문구만 반복해서 읽고 있습니다",
+        "OBS 송출이 또 내려갔습니다",
+        "채팅을 살릴 수 없습니다",
+        "연속으로 소리 없이(자막만) 나갔습니다",
+        "기억 파일을 읽지 못했습니다",
+    ]
+    for ph in phrases:
+        assert ph in guide, f"가이드에서 빠짐: {ph}"
+        assert ph in code, f"코드에 없는 문장을 가이드가 인용함: {ph}"
