@@ -130,6 +130,19 @@ def repo_root() -> Path:
     return Path(__file__).resolve().parent.parent
 
 
+def _no_core_msg(root: Path) -> str:
+    """코어 폴더를 못 찾았을 때. 어디서 찾았는지까지 알려준다.
+
+    exe 를 dist 폴더에서 바로 실행하면 여기로 온다. 예전에는 "없습니다"
+    한 줄만 나와서, 운영자는 멀쩡히 있는 코어를 다시 받으러 갔다.
+    (repo_root() 는 실행 위치에 코어가 있으면 그걸 먼저 쓴다)
+    """
+    import os
+    return (f"Open-LLM-VTuber/ 폴더를 못 찾았습니다 (찾아본 곳: {root}). "
+            f"지금 실행 위치는 {os.getcwd()} 입니다 — 저장소 폴더에서 "
+            "실행했는지 확인하세요.")
+
+
 def core_frontend_ready(root: Path | None = None) -> tuple[bool, str]:
     """코어 웹UI(프론트엔드)가 받아져 있는지.
 
@@ -139,7 +152,7 @@ def core_frontend_ready(root: Path | None = None) -> tuple[bool, str]:
     root = root or repo_root()
     core = root / "Open-LLM-VTuber"
     if not core.is_dir():
-        return False, "Open-LLM-VTuber/ 디렉터리가 없습니다"
+        return False, _no_core_msg(root)
     if (core / "frontend" / "index.html").is_file():
         return True, "받아짐"
     return False, ("프론트엔드(웹UI) 미설치 — " + hint(*CMD_FRONTEND) +
@@ -155,7 +168,7 @@ def core_conf_ready(root: Path | None = None) -> tuple[bool, str]:
     root = root or repo_root()
     core = root / "Open-LLM-VTuber"
     if not core.is_dir():
-        return False, "Open-LLM-VTuber/ 디렉터리가 없습니다"
+        return False, _no_core_msg(root)
     if (core / "conf.yaml").is_file():
         return True, "있음"
     if (core / "conf.korean.yaml").is_file():
@@ -179,7 +192,7 @@ def core_deps_ready(root: Path | None = None) -> tuple[bool, str]:
     root = root or repo_root()
     core = root / "Open-LLM-VTuber"
     if not core.is_dir():
-        return False, "Open-LLM-VTuber/ 디렉터리가 없습니다"
+        return False, _no_core_msg(root)
     if (core / ".venv").is_dir():
         return True, "코어 전용 .venv 있음"
     missing_markers = [m for m in _CORE_MARKERS
@@ -248,7 +261,7 @@ def core_startup_files_ready(root: Path | None = None) -> tuple[bool, str]:
     root = root or repo_root()
     core = root / "Open-LLM-VTuber"
     if not core.is_dir():
-        return False, "Open-LLM-VTuber/ 디렉터리가 없습니다"
+        return False, _no_core_msg(root)
     missing = []
     if not (core / "avatars").is_dir():
         missing.append("avatars/ 폴더")

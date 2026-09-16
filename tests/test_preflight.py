@@ -244,3 +244,20 @@ def test_llm_check_passes_for_a_filled_cloud_key(tmp_path):
         "        llm_api_key: 'sk-real-looking-key'\n"
         "        model: 'gpt-4o-mini'\n", encoding="utf-8")
     assert core_llm_config(tmp_path)[0] is True
+
+
+def test_missing_core_folder_says_where_it_looked(tmp_path, monkeypatch):
+    """코어 폴더를 못 찾으면 어디서 찾았는지·지금 어디서 도는지 알려준다.
+
+    exe 를 dist 폴더에서 바로 실행하면 이 길로 온다. 예전에는 "없습니다"
+    한 줄만 나와서, 운영자는 멀쩡히 있는 코어를 다시 받으러 갔다.
+    """
+    from aist.preflight import (core_conf_ready, core_deps_ready,
+                                core_frontend_ready, core_startup_files_ready)
+
+    monkeypatch.chdir(tmp_path)
+    for fn in (core_frontend_ready, core_conf_ready, core_deps_ready,
+               core_startup_files_ready):
+        ok, msg = fn(tmp_path / "없는곳")
+        assert ok is False
+        assert "찾아본 곳" in msg and "실행 위치" in msg, (fn.__name__, msg)
