@@ -447,6 +447,10 @@ class Orchestrator:
         if kind == "end" and not cfg.on_end:
             return
         if not should_post(now, cfg):
+            # 어느 공지가 안 나갔는지 남긴다. 시작 공지가 빠지면 시청자는
+            # 방송이 켜진 걸 모른다 — 운영자가 알아야 설정을 판단한다.
+            log.info("[공지/%s] 새벽 회피 시간대라 게시하지 않습니다 "
+                     "(announce.avoid_late_night)", kind)
             return
         ctx = AnnounceContext(
             kind=kind,

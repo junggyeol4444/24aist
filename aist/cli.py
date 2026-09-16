@@ -106,7 +106,18 @@ def _load(args):
     from .persona import Persona
     cfg = load_config(args.config)
     _setup_file_logging(cfg.logging)
-    persona = Persona.load(args.persona) if Path(args.persona).exists() else Persona()
+    if Path(args.persona).exists():
+        persona = Persona.load(args.persona)
+    else:
+        # 파일이 없으면 기본 캐릭터로 돈다 — 조용히 그러면 안 된다.
+        # 방송인의 성격이 통째로 비는 것이고, 운영자는 자기가 적은 설정이
+        # 왜 반영이 안 되는지 알 수 없다.
+        persona = Persona()
+        persona.problems = [
+            f"페르소나 파일이 없습니다: {args.persona} — 기본 캐릭터로 돕니다. "
+            f"config/persona.example.yaml 을 복사해서 만드세요."
+        ]
+        logging.getLogger("aist").warning("%s", persona.problems[0])
     return cfg, persona
 
 
@@ -182,6 +193,13 @@ def cmd_check(args) -> int:
     # 방송은 '도는 것처럼' 보이면서 화면에는 아무것도 안 나온다.
     proxy_ok, proxy_msg = preflight.core_proxy_ready()
     files_ok, files_msg = preflight.core_startup_files_ready()
+    persona_missing = any("페르소나 파일이 없습니다" in n
+                          for n in getattr(persona, "problems", []))
+    if persona_missing:
+        persona_ok, persona_msg = False, "persona.yaml 이 없습니다(위 참고)"
+    else:
+        persona_ok, persona_msg = preflight.persona_applied_to_core(
+            persona.render_system_prompt())
     fe_proxy_ok, fe_proxy_msg = preflight.frontend_proxy_ready()
     blockers = [n for n in miss if n.blocking]
 
@@ -217,11 +235,13 @@ def cmd_check(args) -> int:
     print(f"    파이썬 버전    : {'OK ' + py_msg if py_ok else '[X] ' + py_msg}")
     print(f"    코어 시작 파일 : {'OK' if files_ok else '[X] ' + files_msg}")
     print(f"    코어 프록시    : {'OK (enable_proxy 켜짐)' if proxy_ok else '[X] ' + proxy_msg}")
+    print(f"    페르소나 반영  : {'OK' if persona_ok else '[X] ' + persona_msg}")
     print(f"    웹UI 접속경로  : {'OK (/proxy-ws)' if fe_proxy_ok else '[X] ' + fe_proxy_msg}")
 
     print()
     if (blockers or not fe_ok or not conf_ok or not deps_ok or not py_ok
-            or not proxy_ok or not fe_proxy_ok or not files_ok or hard_problems):
+            or not proxy_ok or not fe_proxy_ok or not files_ok or not persona_ok
+            or hard_problems):
         print("지금 상태로는 방송이 안 됩니다. 아래를 먼저 해결하세요:")
         if hard_problems:
             print("  - 위 '설정값 문제' 부터 고치세요 (config.yaml)")
@@ -237,6 +257,8 @@ def cmd_check(args) -> int:
                   f" {preflight.hint(*preflight.CMD_SETUP_ALL)}")
         if not files_ok:
             print(f"  - 코어 시작 파일 채우기: {preflight.hint(*preflight.CMD_CORE_SETUP)}")
+        if not persona_ok:
+            print(f"  - 페르소나 코어에 반영: {preflight.hint(*preflight.CMD_PERSONA)}")
         if not proxy_ok:
             print("  - 코어 설정에 enable_proxy: true 넣기 (안 넣으면 시청자에게 "
                   "소리·자막이 안 갑니다)")

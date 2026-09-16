@@ -260,6 +260,40 @@ def core_startup_files_ready(root: Path | None = None) -> tuple[bool, str]:
     return True, "있음"
 
 
+CMD_PERSONA = (r"windows\페르소나적용.bat 더블클릭",
+               "aist build-persona --conf Open-LLM-VTuber/conf.yaml")
+
+
+def persona_applied_to_core(persona_prompt: str,
+                            root: Path | None = None) -> tuple[bool, str]:
+    """persona.yaml 을 고친 게 코어에 반영돼 있는지.
+
+    운영자는 persona.yaml 을 고친다(기획안 3단계). 그런데 방송인의 성격은
+    코어의 conf.yaml 에 박혀 있어서, build-persona 를 다시 돌리지 않으면
+    고친 내용이 방송에 하나도 반영되지 않는다 — 그런데 아무도 알려주지
+    않았다. 여기서 비교해서 알려준다.
+    """
+    root = root or repo_root()
+    core = root / "Open-LLM-VTuber"
+    conf = core / "conf.yaml"
+    if not conf.is_file():
+        conf = core / "conf.korean.yaml"
+    if not conf.is_file():
+        return False, "코어 설정이 없어 확인 못 함 — " + hint(*CMD_CORE_SETUP)
+    try:
+        import yaml
+        data = yaml.safe_load(conf.read_text(encoding="utf-8", errors="replace")) or {}
+    except Exception as e:  # noqa: BLE001
+        return False, f"코어 설정을 못 읽었습니다({conf.name}): {e}"
+    in_core = ((data.get("character_config") or {}).get("persona_prompt") or "").strip()
+    if not in_core:
+        return False, ("코어에 페르소나가 안 들어가 있습니다 — " + hint(*CMD_PERSONA))
+    if in_core == (persona_prompt or "").strip():
+        return True, "코어에 반영됨"
+    return False, ("persona.yaml 을 고친 게 코어에 아직 반영되지 않았습니다 "
+                   "(방송인 성격은 코어 설정에 박혀 있습니다) — " + hint(*CMD_PERSONA))
+
+
 def core_python_ok(root: Path | None = None) -> tuple[bool, str]:
     """지금 파이썬이 코어가 지원하는 범위인지.
 

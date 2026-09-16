@@ -52,3 +52,50 @@ def test_shipped_example_persona_is_clean():
         f = root / name
         if f.exists():
             assert Persona.load(f).problems == [], f"{name} 에 형식 문제가 있습니다"
+
+
+# ---------------- persona.yaml 을 고쳐도 방송에 반영이 안 되던 것 ----------------
+def test_core_persona_mismatch_is_reported(tmp_path):
+    """방송인의 성격은 코어 conf.yaml 안에 박혀 있다.
+
+    persona.yaml 만 고치고 build-persona 를 안 돌리면 방송에는 하나도
+    반영되지 않는데, 아무도 알려주지 않았다.
+    """
+    from aist.preflight import persona_applied_to_core
+
+    core = tmp_path / "Open-LLM-VTuber"
+    core.mkdir()
+    (core / "conf.yaml").write_text(
+        "character_config:\n  persona_prompt: |-\n    너는 '별이'다.\n",
+        encoding="utf-8")
+
+    ok, msg = persona_applied_to_core("너는 '별이'다.", tmp_path)
+    assert ok is True, msg
+
+    ok, msg = persona_applied_to_core("너는 '달이'다.", tmp_path)
+    assert ok is False and "반영" in msg
+    assert "build-persona" in msg or "페르소나적용" in msg
+
+
+def test_persona_apply_bat_exists():
+    """윈도우 사용자는 명령을 못 친다 — 더블클릭할 파일이 있어야 한다."""
+    from pathlib import Path
+
+    bat = Path(__file__).resolve().parents[1] / "windows" / "페르소나적용.bat"
+    assert bat.is_file()
+    text = bat.read_bytes().decode("utf-8")
+    assert "build-persona" in text
+    assert not bat.read_bytes().startswith(b"\xef\xbb\xbf")
+
+
+def test_missing_persona_file_is_loud(tmp_path, monkeypatch, capsys):
+    """persona.yaml 이 없으면 기본 캐릭터로 도는데, 조용히 그러면 안 된다."""
+    import argparse
+
+    import aist.cli as cli
+
+    cfg_path = tmp_path / "c.yaml"
+    cfg_path.write_text("platform: rehearsal\n", encoding="utf-8")
+    cfg, persona = cli._load(argparse.Namespace(
+        config=str(cfg_path), persona=str(tmp_path / "없는파일.yaml")))
+    assert any("페르소나 파일이 없습니다" in n for n in persona.problems)
