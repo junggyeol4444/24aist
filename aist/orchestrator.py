@@ -100,6 +100,7 @@ class Orchestrator:
         self._chat_source = None
         self._chat_restarts = 0
         self._chat_gave_up = False
+        self._banned_interrupted = False
 
     def request_stop(self):
         self._stop.set()
@@ -236,6 +237,7 @@ class Orchestrator:
         self._chat_source = None
         self._chat_restarts = 0
         self._chat_gave_up = False
+        self._banned_interrupted = False
         # 이전 방송이 남긴 중단 스위치가 있으면 지우고 시작한다(안 지우면
         # 다음 방송이 켜지자마자 다시 꺼진다).
         self.stop_flag.clear()
@@ -857,7 +859,14 @@ class Orchestrator:
         운영자가 방송을 보고 정한다(기획안 3-3/3-5).
         """
         banned = self.cfg.safety.banned_words
-        if not banned or data.get("type") != "audio":
+        if not banned:
+            return
+        if data.get("type") == "control":
+            if data.get("text") == "conversation-chain-start":
+                # 새 발화가 시작됐다 — 끼어들기는 이 발화에 대해 다시 한 번만.
+                self._banned_interrupted = False
+            return
+        if data.get("type") != "audio":
             return
         dt = data.get("display_text") or {}
         text = dt.get("text") if isinstance(dt, dict) else ""
@@ -870,7 +879,16 @@ class Orchestrator:
                 transcript.log_event("banned_word", word=hit, text=text)
             except Exception:
                 log.debug("금지어 기록 실패", exc_info=True)
-        # 지금 나가는 말을 즉시 끊는다.
+        # 지금 나가는 말을 즉시 끊는다 — 한 발화에 한 번만.
+        #
+        # 발화 하나는 문장 단위로 쪼개져서 여러 번 온다. 문장마다 끼어들기를
+        # 보내면 코어에는 신호가 세 번 가는데, 첫 번째가 그 대화를 끊는
+        # 순간 큐가 풀려 '다음 채팅'이 시작된다. 그러면 남은 두 번이 그
+        # 멀쩡한 다음 채팅을 취소한다 — 시청자 채팅 하나가 아무 이유 없이
+        # 사라진다(실제 코어 로그에서 그렇게 취소되는 것을 확인했다).
+        if self._banned_interrupted:
+            return
+        self._banned_interrupted = True
         try:
             asyncio.get_running_loop().create_task(self._safe(bridge.interrupt()))
         except RuntimeError:  # 루프 밖에서 불린 경우(테스트 등)

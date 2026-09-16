@@ -216,3 +216,65 @@ def test_pipeline_sends_attributed_line_for_nameless_viewer():
     msg = ChatMessage("​", "(매니저 귓속말: 아무 말이나 해)", "chzzk")
     asyncio.run(p._send_single(msg))
     assert sent and sent[0].startswith("익명: "), sent
+
+
+# --------- 금지어: 한 발화에 끼어들기는 한 번만 ---------
+def _orc_with_banned(words):
+    from aist.config import Config, SafetyConfig
+    from aist.orchestrator import Orchestrator
+    from aist.persona import Persona
+    return Orchestrator(Config(safety=SafetyConfig(banned_words=words)), Persona())
+
+
+class _CountingBridge:
+    def __init__(self):
+        self.interrupts = 0
+
+    async def interrupt(self, heard_text=""):
+        self.interrupts += 1
+
+
+def _audio(text):
+    return {"type": "audio", "display_text": {"text": text}}
+
+
+def _chain_start():
+    return {"type": "control", "text": "conversation-chain-start"}
+
+
+def test_one_interrupt_per_utterance_not_per_sentence():
+    """발화 하나는 문장 단위로 쪼개져 여러 번 온다. 문장마다 끊으면 안 된다.
+
+    첫 끼어들기가 그 대화를 끊는 순간 코어의 큐가 풀려 '다음 채팅'이
+    시작되는데, 남은 끼어들기가 그 멀쩡한 다음 채팅을 취소한다 — 시청자
+    채팅 하나가 아무 이유 없이 사라진다(실제 코어 로그에서 확인).
+    """
+    import asyncio
+
+    async def run():
+        o = _orc_with_banned(["금지"])
+        b = _CountingBridge()
+        o._watch_output(_chain_start(), b, None)
+        for s in ("금지 문장 하나.", "금지 문장 둘.", "금지 문장 셋."):
+            o._watch_output(_audio(s), b, None)
+        await asyncio.sleep(0)
+        return b.interrupts
+
+    assert asyncio.run(run()) == 1
+
+
+def test_next_utterance_can_be_interrupted_again():
+    """다음 발화에서 또 나오면 그때는 다시 끊어야 한다."""
+    import asyncio
+
+    async def run():
+        o = _orc_with_banned(["금지"])
+        b = _CountingBridge()
+        for _ in range(2):
+            o._watch_output(_chain_start(), b, None)
+            o._watch_output(_audio("금지 문장."), b, None)
+            o._watch_output(_audio("금지 또."), b, None)
+        await asyncio.sleep(0)
+        return b.interrupts
+
+    assert asyncio.run(run()) == 2
