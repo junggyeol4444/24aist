@@ -34,6 +34,12 @@ _CUE_MARKERS = ("매니저 귓속말", "매니저귓속말", "manager whisper",
 MAX_CHAT_CHARS = 500
 MAX_AUTHOR_CHARS = 60
 
+# 닉네임이 비면 채팅이 "닉: 내용" 이 아니라 내용만 한 줄로 나간다. 그러면
+# 시청자 입력과 운영자 지시(괄호로 시작하는 무대 뒤 신호)가 코어 쪽에서
+# 구별되지 않는다 — 닉네임을 제로폭 문자로만 채우면 실제로 통과했다.
+# 그래서 빈 닉네임은 이 이름으로 대신한다(플랫폼의 익명 후원 표기와 같다).
+ANON_AUTHOR = "익명"
+
 
 def _strip_control(s: str) -> str:
     """개행·탭·제로폭 등 제어/포맷 문자를 공백으로 바꾸고 공백을 정리한다.
@@ -75,7 +81,12 @@ def sanitize_incoming(text: str, author: str = "") -> tuple:
     t = _defang_markers(_strip_control(text))[:MAX_CHAT_CHARS]
     a = _defang_markers(_strip_control(author))[:MAX_AUTHOR_CHARS]
     # 닉네임에 콜론이 있으면 "닉: 내용" 형식을 흉내낼 수 있다.
-    a = a.replace(":", " ")
+    a = a.replace(":", " ").strip()
+    if not a:
+        # 닉네임이 비어 있으면(제로폭만 넣었거나 플랫폼이 안 준 경우)
+        # 채팅이 이름 없이 한 줄로 나간다. 그 줄이 괄호로 시작하면
+        # 코어 쪽에서는 운영자의 무대 뒤 지시와 똑같아 보인다.
+        a = ANON_AUTHOR
     return t, a
 
 
