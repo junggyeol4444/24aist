@@ -51,15 +51,23 @@ def test_memory_survives_crash_midway(tmp_path):
     from aist.config import MemoryConfig
     from aist.memory import Memory
 
-    m = Memory(MemoryConfig(path=str(tmp_path / "mem")))
+    cfg = MemoryConfig(path=str(tmp_path / "mem"))
+    m = Memory(cfg)
     m.start_session()
-    assert m.sessions_file.exists()      # 시작하자마자 파일이 있어야 한다
+    assert m.current_file.exists()       # 시작하자마자 파일이 있어야 한다
     m._last_save = 0.0                   # 체크포인트 간격을 강제로 지나가게
     m.note_chat(ChatMessage("별하나", "안녕", "chzzk"))
-    saved = json.loads(m.sessions_file.read_text(encoding="utf-8"))
-    assert len(saved) == 1
-    assert saved[0]["end"] is None
-    assert "별하나" in saved[0]["viewers"]
+    saved = json.loads(m.current_file.read_text(encoding="utf-8"))
+    assert saved["end"] is None
+    assert "별하나" in saved["viewers"]
+
+    # 크래시 뒤 새 프로세스가 읽으면 그 기억이 살아 있어야 한다.
+    m2 = Memory(cfg)
+    assert len(m2._sessions) == 1
+    assert "별하나" in m2._sessions[-1]["viewers"]
+    # 다음 방송을 시작하면 정식 기억(sessions.json)으로 옮겨 적는다.
+    m2.start_session()
+    assert len(json.loads(m2.sessions_file.read_text(encoding="utf-8"))) == 1
 
 
 def test_memory_session_not_counted_twice(tmp_path):
@@ -88,3 +96,30 @@ def test_recent_summary_ignores_live_session(tmp_path):
     m.start_session()
     m.note_chat(ChatMessage("나", "하이", "chzzk"))
     assert "1명" in m.recent_summary()
+
+
+def test_checkpoint_writes_only_current_session(tmp_path):
+    """방송 중 체크포인트는 전체 기억이 아니라 진행 중 세션만 써야 한다.
+
+    전체를 쓰면 1년치(약 27MB)에서 한 번에 380ms 씩 이벤트 루프가 멎고,
+    3시간 방송이면 9.5GB 를 디스크에 쓴다(실측). 채팅이 밀린다.
+    """
+    from aist.chat.base import ChatMessage
+    from aist.config import MemoryConfig
+    from aist.memory import Memory
+
+    cfg = MemoryConfig(path=str(tmp_path / "mem"))
+    m = Memory(cfg)
+    for _ in range(50):                 # 지난 방송 기록을 잔뜩 쌓아둔다
+        m.start_session()
+        m.note_chat(ChatMessage("가", "안녕", "chzzk"))
+        m.end_session()
+    assert not m.current_file.exists()   # 정상 종료면 진행 중 파일은 없다
+
+    m.start_session()
+    before = m.sessions_file.stat().st_mtime_ns
+    m._last_save = 0.0
+    m.note_chat(ChatMessage("나", "하이", "chzzk"))
+    # 체크포인트가 전체 파일을 건드리지 않았어야 한다.
+    assert m.sessions_file.stat().st_mtime_ns == before
+    assert m.current_file.exists()

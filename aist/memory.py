@@ -36,9 +36,19 @@ class Memory:
         self.dir = Path(cfg.path)
         self.dir.mkdir(parents=True, exist_ok=True)
         self.sessions_file = self.dir / "sessions.json"
+        # 진행 중인 세션만 따로 담는 작은 파일. 전체 기억을 30초마다 다시
+        # 쓰면 1년치(약 27MB)에서 한 번에 380ms 씩 이벤트 루프가 멎고,
+        # 3시간 방송이면 9.5GB 를 디스크에 쓴다(실측).
+        self.current_file = self.dir / "current_session.json"
         self._sessions: List[Dict] = self._load()
         self._cur: Optional[Dict] = None
         self._last_save = 0.0
+        # 지난번에 비정상 종료된 세션(있으면). 다음 방송을 시작할 때
+        # 정식 기억으로 옮긴다 — 읽기 전용 명령(report 등)은 건드리지 않는다.
+        self._orphan: Optional[Dict] = self._load_current()
+        if self._orphan is not None:
+            log.warning("지난 방송이 정상 종료되지 않았습니다 — 중간까지의 기억을 살립니다.")
+            self._sessions.append(self._orphan)
         # chroma 백엔드(선택): 의미검색용 색인. 실패하면 키워드 검색으로 대체.
         self._chroma = self._init_chroma() if cfg.backend == "chroma" else None
 
@@ -64,6 +74,39 @@ class Memory:
             except (json.JSONDecodeError, OSError):
                 log.warning("기억 파일 읽기 실패 → 새로 시작")
         return []
+
+    def _load_current(self) -> Optional[Dict]:
+        """비정상 종료로 남은 '진행 중이던 세션' 파일을 읽는다."""
+        if not self.current_file.exists():
+            return None
+        try:
+            data = json.loads(self.current_file.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError):
+            log.warning("진행 중이던 기억 파일을 읽지 못했습니다 → 무시")
+            return None
+        return data if isinstance(data, dict) and data.get("start") else None
+
+    def _save_current(self) -> None:
+        """진행 중인 세션 하나만 쓴다(작다 = 자주 써도 된다)."""
+        if self._cur is None:
+            return
+        tmp = self.current_file.with_suffix(".json.tmp")
+        try:
+            tmp.write_text(json.dumps(self._cur, ensure_ascii=False),
+                           encoding="utf-8")
+            tmp.replace(self.current_file)
+        except OSError as e:
+            log.error("진행 중 기억 저장 실패(디스크 여유 공간 확인): %s", e)
+            try:
+                tmp.unlink()
+            except OSError:
+                pass
+
+    def _clear_current(self) -> None:
+        try:
+            self.current_file.unlink()
+        except OSError:
+            pass
 
     def _save(self) -> None:
         """기억을 파일에 쓴다. 실패해도 예외를 올리지 않는다.
@@ -97,6 +140,11 @@ class Memory:
         그래서 '시작 시점에 한 번 + 진행 중 주기적으로' 저장한다.
         _cur 는 _sessions 안의 바로 그 객체라, 이후 변경은 저장만 하면 남는다.
         """
+        # 지난 방송이 크래시로 끝났다면, 그 기억을 지금 정식으로 옮겨 적는다.
+        # (읽기 전용 명령이 아니라 '다음 방송 시작' 시점에만 파일을 건드린다)
+        if self._orphan is not None:
+            self._orphan = None
+            self._save()
         self._cur = {
             "start": _now_iso(),
             "end": None,
@@ -106,7 +154,7 @@ class Memory:
             "summary": "",
         }
         self._sessions.append(self._cur)
-        self._save()
+        self._save_current()
         self._last_save = time.monotonic()
 
     def _checkpoint(self) -> None:
@@ -115,7 +163,7 @@ class Memory:
         if now - self._last_save < _CHECKPOINT_SEC:
             return
         self._last_save = now
-        self._save()
+        self._save_current()
 
     def record_event(self, kind: str, **data) -> None:
         if self._cur is None:
@@ -148,6 +196,7 @@ class Memory:
             self._sessions.append(session)
         self._cur = None
         self._save()
+        self._clear_current()
         self._last_save = time.monotonic()
         self._index(session, len(self._sessions))
 
