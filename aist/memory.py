@@ -43,6 +43,7 @@ class Memory:
         self._sessions: List[Dict] = self._load()
         self._cur: Optional[Dict] = None
         self._last_save = 0.0
+        self._save_fails = 0
         # 지난번에 비정상 종료된 세션(있으면). 다음 방송을 시작할 때
         # 정식 기억으로 옮긴다 — 읽기 전용 명령(report 등)은 건드리지 않는다.
         self._orphan: Optional[Dict] = self._load_current()
@@ -95,8 +96,15 @@ class Memory:
             tmp.write_text(json.dumps(self._cur, ensure_ascii=False),
                            encoding="utf-8")
             tmp.replace(self.current_file)
+            self._save_fails = 0
         except OSError as e:
-            log.error("진행 중 기억 저장 실패(디스크 여유 공간 확인): %s", e)
+            # 디스크가 차면 이 자리가 30초마다 돈다. 3시간이면 같은 줄이
+            # 340개 쌓여서, 회전 로그가 밀려 정작 필요한 기록이 사라진다.
+            # 처음엔 크게, 그 뒤로는 드물게 알린다(상황은 안 바뀌니까).
+            self._save_fails += 1
+            if self._save_fails in (1, 3, 10) or self._save_fails % 20 == 0:
+                log.error("진행 중 기억 저장 실패(디스크 여유 공간 확인, "
+                          "%d번째): %s", self._save_fails, e)
             try:
                 tmp.unlink()
             except OSError:

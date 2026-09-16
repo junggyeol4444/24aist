@@ -143,3 +143,28 @@ def test_recent_summary_skips_failed_short_attempt(tmp_path):
     m.start_session()                       # 15초 만에 끝난 시도
     m.end_session()
     assert "3명" in m.recent_summary()
+
+
+def test_disk_full_checkpoint_does_not_flood_the_log(tmp_path, caplog, monkeypatch):
+    """디스크가 차면 체크포인트가 30초마다 같은 ERROR 를 찍는다.
+
+    3시간 방송이면 같은 줄이 340개 쌓여서 회전 로그가 밀린다 — 실제로
+    디스크를 채우고 돌려보니 그렇게 나왔다. 처음엔 크게, 그 뒤로는 드물게.
+    """
+    import logging
+    import pathlib
+
+    from aist.config import MemoryConfig
+    from aist.memory import Memory
+
+    m = Memory(MemoryConfig(path=str(tmp_path / "mem")))
+    m.start_session()
+
+    def boom(*a, **k):
+        raise OSError(28, "No space left on device")
+
+    monkeypatch.setattr(pathlib.Path, "write_text", boom)
+    with caplog.at_level(logging.ERROR, logger="aist.memory"):
+        for _ in range(40):
+            m._save_current()
+    assert len(caplog.records) == 5          # 1·3·10·20·40 회째만

@@ -117,7 +117,11 @@ def generate_report(
     if events:
         lines.append(f"- 기록된 이벤트: {len(events)}건")
         for e in events[:20]:
-            lines.append(f"  - [{e.get('t','')[:16]}] {e.get('kind')}")
+            # 기억은 UTC 로 적히는데 리포트의 나머지는 운영자 타임존이다.
+            # 그대로 두면 02:15 방송 리포트 안에 17:16 이벤트가 찍혀서
+            # 트랜스크립트와 맞춰보려던 운영자가 헤맨다.
+            when = _to_local(e.get("t", ""), tz_name)[:16]
+            lines.append(f"  - [{when}] {e.get('kind')}")
 
     # 트랜스크립트 통계 + AI 발화 전문
     if transcript_path:

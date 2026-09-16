@@ -85,3 +85,25 @@ def test_to_local_passes_through_junk(bad):
 def test_to_local_survives_unknown_timezone():
     iso = "2026-09-15T01:47:42+00:00"
     assert _to_local(iso, "Nowhere/Nothing") == iso
+
+
+def test_event_times_use_operator_timezone(tmp_path):
+    """리포트 안에서 시각 표기가 섞이면 안 된다.
+
+    기억은 UTC 로 적히는데 리포트 제목·시작·종료는 운영자 타임존이다.
+    이벤트만 UTC 로 남으면 02:15 방송 리포트에 17:16 이벤트가 찍힌다
+    (실제 리포트에서 그렇게 나왔다).
+    """
+    from aist.config import MemoryConfig
+    from aist.memory import Memory
+    from aist.report import generate_report
+
+    m = Memory(MemoryConfig(path=str(tmp_path / "mem")))
+    m.start_session()
+    m.record_event("tts_silent")
+    m.end_session()
+    body = generate_report(m, str(tmp_path / "r"),
+                           tz_name="Asia/Seoul").read_text(encoding="utf-8")
+    start_hour = body.split("- 시작: ")[1][11:13]
+    event_hour = body.split("tts_silent")[0].rsplit("[", 1)[1][11:13]
+    assert start_hour == event_hour, body
