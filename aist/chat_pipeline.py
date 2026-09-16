@@ -69,6 +69,8 @@ class ChatPipeline:
         self.last_chat_time: datetime = datetime.now(timezone.utc)
         self._last_chat_mono = time.monotonic()
         self._flood_window = deque()      # 최근 forward 시각(monotonic)
+        self._flood_dropped = 0           # 폭주 처리로 AI 에게 안 넘긴 건수
+        self._batch_capped = 0            # 한 묶음 상한에 걸린 횟수
         # '입 하나' 상태
         self._core_busy = False
         self._busy_since = 0.0
@@ -380,10 +382,14 @@ class ChatPipeline:
         kept.reverse()
         dropped = len(lines) - len(kept)
         if dropped:
-            log.warning("채팅이 쏟아져 한 번에 %d건 중 %d건만 넘깁니다 "
-                        "(기록·기억에는 전부 남습니다). 폭주가 잦으면 "
-                        "config 의 broadcast.flood_handling 을 검토하세요.",
-                        len(lines), len(kept))
+            # 폭주는 몇 초에 한 번씩 계속 걸린다. 매번 찍으면 3시간이면
+            # 같은 줄이 수천 개 쌓여 회전 로그가 밀린다.
+            self._batch_capped += 1
+            if self._batch_capped in (1, 10) or self._batch_capped % 100 == 0:
+                log.warning("채팅이 쏟아져 한 번에 %d건 중 %d건만 넘깁니다"
+                            "(%d번째, 기록·기억에는 전부 남습니다). 폭주가 잦으면 "
+                            "config 의 broadcast.flood_handling 을 검토하세요.",
+                            len(lines), len(kept), self._batch_capped)
         return kept, dropped
 
     @staticmethod
@@ -506,6 +512,17 @@ class ChatPipeline:
         while self._flood_window and now - self._flood_window[0] > fh.window_sec:
             self._flood_window.popleft()
         if len(self._flood_window) >= fh.max_per_window:
-            return False  # 폭주 구간: 이번 건은 AI 발화로 넘기지 않음(읽기는 됨)
+            # 폭주 구간: 이번 건은 AI 발화로 넘기지 않는다(읽기·기억은 된다).
+            # 운영자가 직접 켠 기능이지만, 얼마나 걸러지는지 안 알려주면
+            # 기준값이 너무 낮아도 알 수가 없다 — 기획안 1-2 의 "다 반응"을
+            # 일부러 잠시 끄는 구간이므로 규모는 보여준다.
+            self._flood_dropped += 1
+            if self._flood_dropped in (1, 10) or self._flood_dropped % 100 == 0:
+                log.warning("폭주 처리로 채팅 %d건을 방송인에게 넘기지 않았습니다 "
+                            "(%d초에 %d건 상한). 기록·기억에는 전부 남습니다 — "
+                            "너무 많이 걸러지면 broadcast.flood_handling 의 "
+                            "max_per_window 를 올리세요.",
+                            self._flood_dropped, fh.window_sec, fh.max_per_window)
+            return False
         self._flood_window.append(now)
         return True

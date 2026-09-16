@@ -391,3 +391,51 @@ def test_display_only_message_without_text_is_not_counted():
     for _ in range(5):
         p.on_core_message({"type": "audio", "display_text": {"text": ""}})
     assert fired == []
+
+
+# --------- 폭주 처리: 조용히 버리지 않는다, 그렇다고 도배하지도 않는다 -----
+def test_flood_drop_is_reported_but_not_every_time(caplog):
+    """운영자가 직접 켠 기능이라도, 얼마나 걸러지는지는 보여줘야 한다.
+
+    안 보여주면 기준값이 너무 낮아도 알 수가 없다 — 기획안 1-2 의
+    "다 읽고 다 반응" 을 일부러 잠시 끄는 구간이기 때문이다.
+    그렇다고 매 건 찍으면 폭주 3시간에 로그가 수천 줄이 된다.
+    """
+    import logging
+
+    from aist.chat_pipeline import ChatPipeline
+    from aist.config import BroadcastConfig, FloodHandling
+
+    cfg = BroadcastConfig(flood_handling=FloodHandling(
+        enabled=True, max_per_window=2, window_sec=60))
+    p = ChatPipeline(object(), cfg)
+    with caplog.at_level(logging.WARNING, logger="aist.chat_pipeline"):
+        passed = sum(1 for _ in range(200) if p._should_forward())
+    assert passed == 2                      # 상한만큼만 통과
+    assert p._flood_dropped == 198
+    # 1·10·100회째만 — 198줄이 아니라 세 줄
+    assert len(caplog.records) == 3
+
+
+def test_batch_cap_warning_is_not_repeated_every_batch(caplog):
+    """폭주는 몇 초마다 계속 걸린다 — 매번 찍으면 로그가 밀린다."""
+    import logging
+
+    from aist.chat_pipeline import ChatPipeline
+    from aist.config import BroadcastConfig
+
+    p = ChatPipeline(object(), BroadcastConfig(max_batch_lines=1))
+    with caplog.at_level(logging.WARNING, logger="aist.chat_pipeline"):
+        for _ in range(50):
+            kept, dropped = p._cap_batch(["가", "나", "다"])
+            assert len(kept) == 1 and dropped == 2
+    assert len(caplog.records) == 2         # 1·10회째만
+
+
+def test_flood_handling_off_by_default_passes_everything():
+    from aist.chat_pipeline import ChatPipeline
+    from aist.config import BroadcastConfig
+
+    p = ChatPipeline(object(), BroadcastConfig())
+    assert all(p._should_forward() for _ in range(500))
+    assert p._flood_dropped == 0
