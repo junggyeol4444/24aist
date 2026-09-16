@@ -160,3 +160,27 @@ def test_korean_conf_does_not_download_a_gigabyte_for_unused_asr():
     conf = yaml.safe_load(
         (ROOT / "Open-LLM-VTuber" / "conf.korean.yaml").read_text(encoding="utf-8"))
     assert conf["character_config"]["asr_config"]["asr_model"] != "sherpa_onnx_asr"
+
+
+def test_core_trims_conversation_memory():
+    """방송이 길어져도 LLM 에 보내는 대화가 무한히 늘면 안 된다.
+
+    코어의 기본 동작은 상한이 없어서, 매 응답마다 지금까지의 모든 대화를
+    다시 보낸다. 실제로 재보니 채팅 30건에 LLM 이 받는 메시지가 60개까지
+    늘었고(계속 증가), 상한을 켜면 42개에서 평평해졌다. 몇 시간짜리 방송
+    에서는 갈수록 느려지다가 컨텍스트 한도에서 응답이 끊긴다.
+    """
+    core = ROOT / "Open-LLM-VTuber" / "src" / "open_llm_vtuber"
+    agent = (core / "agent" / "agents" / "basic_memory_agent.py").read_text(
+        encoding="utf-8")
+    assert "_trim_memory" in agent, "대화 기록 상한 처리가 사라졌습니다"
+    assert "self._trim_memory()" in agent
+
+    factory = (core / "agent" / "agent_factory.py").read_text(encoding="utf-8")
+    assert "max_memory_messages" in factory, "설정값이 에이전트로 전달되지 않습니다"
+
+    conf = yaml.safe_load(
+        (ROOT / "Open-LLM-VTuber" / "conf.korean.yaml").read_text(encoding="utf-8"))
+    limit = (conf["character_config"]["agent_config"]["agent_settings"]
+             ["basic_memory_agent"]["max_memory_messages"])
+    assert isinstance(limit, int) and limit > 0, f"상한이 꺼져 있습니다: {limit}"

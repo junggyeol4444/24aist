@@ -82,5 +82,10 @@ def test_korean_conf_still_has_the_explanations():
     kr_keys, tmpl_keys = keys(yaml.safe_load(kr)), keys(yaml.safe_load(tmpl))
     assert tmpl_keys <= kr_keys, f"템플릿에 있는 설정이 빠졌습니다: {tmpl_keys - kr_keys}"
     # 우리가 일부러 켜두는 것(웹UI 와 방송 자동화를 한 대화에 물리는 경로)
-    assert kr_keys - tmpl_keys <= {"system_config.enable_proxy"}
+    # 우리가 일부러 켜두는 것들(웹UI 와 같은 대화에 물리기, 긴 방송 대비 기록 상한)
+    assert kr_keys - tmpl_keys <= {
+        "system_config.enable_proxy",
+        "character_config.agent_config.agent_settings.basic_memory_agent"
+        ".max_memory_messages",
+    }
     assert yaml.safe_load(kr)["system_config"]["enable_proxy"] is True

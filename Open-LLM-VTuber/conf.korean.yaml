@@ -90,6 +90,11 @@ character_config:
         faster_first_response: True
         # Method for segmenting sentences: 'regex' or 'pysbd'
         segment_method: 'pysbd'
+        # 대화 기록 상한(0 이면 무제한). 방송은 몇 시간씩 돌고 채팅이 계속
+        # 들어온다. 상한이 없으면 매 응답마다 지금까지의 모든 대화를 LLM 에
+        # 다시 보내게 되어, 갈수록 느려지다가 컨텍스트 한도에서 응답이 끊긴다.
+        # 40 = 최근 20번 주고받은 정도. 길게 기억시키려면 늘리면 된다.
+        max_memory_messages: 40
         # Use MCP (Model Context Protocol) Plus to let the LLM have the ability to use tools
         # 'Plus' means that it has the ability to call tools by using OpenAI API.
         use_mcpp: True
