@@ -29,6 +29,19 @@ class MultiChatSource(ChatSource):
         self._watcher = None
         self._closed = False
 
+    @property
+    def fatal(self) -> str:
+        """모든 플랫폼이 '재시도해도 안 됨' 으로 포기했을 때만 포기로 본다.
+
+        이게 없으면 동출에서는 오케스트레이터가 영영 다시 붙이기를 시도한다
+        — 하나로 묶인 소스라 개별 플랫폼의 포기 사유가 안 보이기 때문이다.
+        하나라도 살아 있을 수 있으면 포기하지 않는다(그 플랫폼 채팅은 온다).
+        """
+        reasons = [r for r in (getattr(s, "fatal", "") for s in self.sources) if r]
+        if len(reasons) < len(self.sources):
+            return ""
+        return " / ".join(dict.fromkeys(reasons))
+
     async def _pump(self, src: ChatSource):
         try:
             async for m in src.messages():
