@@ -732,6 +732,13 @@ def cmd_wait_core(args) -> int:
         if time.monotonic() >= deadline:
             print(f"[오류] {args.timeout}초 안에 코어가 뜨지 않았습니다.")
             print("       코어실행.bat / run.sh core 가 떠 있는지, 포트가 맞는지 확인하세요.")
+            # /proxy-ws 는 코어 설정에서 켜야 열린다. 코어가 멀쩡히 떠 있어도
+            # 그게 꺼져 있으면 여기서 영영 못 붙는다 — 원인을 바로 알려준다.
+            if cfg.vtuber.ws_url.rstrip("/").endswith("/proxy-ws"):
+                from . import preflight
+                ok, msg = preflight.core_proxy_ready()
+                if not ok:
+                    print(f"       {msg}")
             return 1
         time.sleep(2)
 
