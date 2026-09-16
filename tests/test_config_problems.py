@@ -366,3 +366,75 @@ def test_check_declares_failure_when_only_tts_is_broken(tmp_path, monkeypatch, c
     assert rc == 1
     assert "지금 상태로는 방송이 안 됩니다" in out
     assert "TTS" in out
+
+
+# --------------- 음수 설정값: "끄기" 지 "즉시 발동" 이 아니다 ---------------
+def test_negative_thresholds_do_not_fire_immediately():
+    """음수를 넣으면 안전장치가 켜자마자 발동해 방송을 내려버렸다.
+
+    게다가 로그에는 엉뚱한 진단이 남는다 — "웹UI 가 안 붙어 있습니다".
+    운영자는 멀쩡한 웹UI 를 의심하며 시간을 버린다.
+    """
+    from aist.chat_pipeline import ChatPipeline
+    from aist.config import BroadcastConfig
+
+    muted = []
+    p = ChatPipeline(object(),
+                     BroadcastConfig(core_busy_timeout_sec=-1,
+                                     core_mute_max_strikes=-3),
+                     on_core_mute=lambda: muted.append(1))
+    p._mark_busy()
+    assert p._busy_now() is True      # 방금 말을 시작했다 — 멈춘 게 아니다
+    assert muted == []
+
+    silent = []
+    q = ChatPipeline(object(), BroadcastConfig(tts_silent_max_strikes=-1),
+                     on_tts_silent=lambda: silent.append(1))
+    for _ in range(5):
+        q.on_core_message({"type": "audio", "display_text": {"text": "안녕"}})
+    assert silent == []               # 음수는 '끄기' 로 본다
+
+
+def test_negative_busy_timeout_falls_back_to_default():
+    from aist.chat_pipeline import ChatPipeline
+    from aist.config import BroadcastConfig
+
+    assert ChatPipeline(object(), BroadcastConfig(
+        core_busy_timeout_sec=-1))._busy_timeout() == 90.0
+    assert ChatPipeline(object(), BroadcastConfig(
+        core_busy_timeout_sec=30))._busy_timeout() == 30.0
+
+
+def test_all_bad_numbers_are_reported_at_once():
+    """하나 고치고 다시 돌리고를 스무 번 반복하게 만들면 안 된다."""
+    from aist.config import Config
+    from aist.preflight import _number_problems
+
+    c = Config()
+    c.broadcast.core_busy_timeout_sec = -1
+    c.broadcast.core_mute_max_strikes = -3
+    c.obs.stream_check_sec = -10
+    c.scheduler.retry_max = -1
+    c.end_judge.wind_down.closing_wait_sec = -5
+    names = " ".join(str(m) for m in _number_problems(c))
+    for key in ("core_busy_timeout_sec", "core_mute_max_strikes",
+                "stream_check_sec", "retry_max", "closing_wait_sec"):
+        assert key in names, key
+
+
+def test_sane_defaults_report_nothing():
+    """기본 설정에서 경고가 뜨면 운영자가 경고를 안 믿게 된다."""
+    from aist.config import Config
+    from aist.preflight import _number_problems
+
+    assert _number_problems(Config()) == []
+
+
+def test_swapped_idle_gap_is_reported():
+    from aist.config import Config
+    from aist.preflight import _number_problems
+
+    c = Config()
+    c.broadcast.idle_gap_min_sec = 100
+    c.broadcast.idle_gap_max_sec = 1
+    assert any("뒤바뀐" in str(m) for m in _number_problems(c))

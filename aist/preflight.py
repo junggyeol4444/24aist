@@ -590,4 +590,81 @@ def config_problems(cfg) -> list[str]:
             "(공지만 안 나갈 뿐 방송은 됩니다. 안 쓸 거면 announce.discord.enabled=false)",
             blocking=False))
 
+    out.extend(_number_problems(cfg))
+    return out
+
+
+# 음수가 들어가면 "꺼짐"이 아니라 "즉시 발동"이 되는 값들. 방송이 켜지자마자
+# 내려가는데, 로그에는 엉뚱한 진단이 남는다("웹UI 가 안 붙어 있습니다").
+# 코드 쪽은 0 이하를 '끄기'로 막아뒀지만, 운영자가 의도한 값은 아니므로
+# 여기서 같이 알려준다. 한 번에 다 보여준다 — 하나 고치고 다시 돌리고를
+# 반복하게 만들지 않는다.
+_POSITIVE_ONLY = (
+    ("vtuber.connect_timeout_sec", lambda c: c.vtuber.connect_timeout_sec),
+    ("vtuber.reconnect_max_attempts", lambda c: c.vtuber.reconnect_max_attempts),
+    ("vtuber.reconnect_backoff_sec", lambda c: c.vtuber.reconnect_backoff_sec),
+    ("broadcast.core_busy_timeout_sec", lambda c: c.broadcast.core_busy_timeout_sec),
+    ("broadcast.max_batch_lines", lambda c: c.broadcast.max_batch_lines),
+    ("broadcast.max_batch_chars", lambda c: c.broadcast.max_batch_chars),
+    ("end_judge.max_minutes", lambda c: c.end_judge.max_minutes),
+)
+
+# 0 이면 '끄기'라서 괜찮지만 음수는 실수인 값들.
+_NON_NEGATIVE = (
+    ("broadcast.core_mute_max_strikes", lambda c: c.broadcast.core_mute_max_strikes),
+    ("broadcast.core_error_max_strikes", lambda c: c.broadcast.core_error_max_strikes),
+    ("broadcast.tts_silent_max_strikes", lambda c: c.broadcast.tts_silent_max_strikes),
+    ("broadcast.idle_gap_min_sec", lambda c: c.broadcast.idle_gap_min_sec),
+    ("broadcast.idle_gap_max_sec", lambda c: c.broadcast.idle_gap_max_sec),
+    ("broadcast.artificial_delay_sec", lambda c: c.broadcast.artificial_delay_sec),
+    ("obs.stream_check_sec", lambda c: c.obs.stream_check_sec),
+    ("obs.stream_restart_max", lambda c: c.obs.stream_restart_max),
+    ("obs.unreachable_max", lambda c: c.obs.unreachable_max),
+    ("scheduler.retry_max", lambda c: c.scheduler.retry_max),
+    ("scheduler.retry_backoff_sec", lambda c: c.scheduler.retry_backoff_sec),
+    ("scheduler.retry_min_left_min", lambda c: c.scheduler.retry_min_left_min),
+    ("scheduler.late_start_grace_min", lambda c: c.scheduler.late_start_grace_min),
+    ("scheduler.start_jitter_min", lambda c: c.scheduler.start_jitter_min),
+    ("announce.pre_announce_minutes", lambda c: c.announce.pre_announce_minutes),
+    ("end_judge.min_minutes", lambda c: c.end_judge.min_minutes),
+    ("end_judge.end_jitter_min", lambda c: c.end_judge.end_jitter_min),
+    ("end_judge.wind_down.pre_notice_minutes_before_end",
+     lambda c: c.end_judge.wind_down.pre_notice_minutes_before_end),
+    ("end_judge.wind_down.end_grace_minutes",
+     lambda c: c.end_judge.wind_down.end_grace_minutes),
+    ("end_judge.wind_down.closing_wait_sec",
+     lambda c: c.end_judge.wind_down.closing_wait_sec),
+    ("end_judge.wind_down.closing_max_wait_sec",
+     lambda c: c.end_judge.wind_down.closing_max_wait_sec),
+)
+
+
+def _number_problems(cfg) -> list["Problem"]:
+    out: list[Problem] = []
+    for name, get in _POSITIVE_ONLY:
+        try:
+            v = get(cfg)
+        except AttributeError:
+            continue
+        if v is not None and v <= 0:
+            out.append(Problem(
+                f"{name} 가 {v} 입니다 → 0 보다 커야 합니다. "
+                "(지금은 기본값으로 대신 돌지만, 적어둔 값은 무시됩니다)",
+                blocking=False))
+    for name, get in _NON_NEGATIVE:
+        try:
+            v = get(cfg)
+        except AttributeError:
+            continue
+        if v is not None and v < 0:
+            out.append(Problem(
+                f"{name} 가 {v} 입니다 → 음수는 넣을 수 없습니다. "
+                "(0 은 '끄기' 입니다)",
+                blocking=False))
+    b = cfg.broadcast
+    if b.idle_gap_min_sec > b.idle_gap_max_sec:
+        out.append(Problem(
+            f"broadcast.idle_gap_min_sec({b.idle_gap_min_sec}) 가 "
+            f"idle_gap_max_sec({b.idle_gap_max_sec}) 보다 큽니다 → 뒤바뀐 것 같습니다.",
+            blocking=False))
     return out

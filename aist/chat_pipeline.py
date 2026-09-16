@@ -142,7 +142,7 @@ class ChatPipeline:
         아무 것도 안 남아서 운영자가 알 길이 없다.
         """
         limit = self.cfg.tts_silent_max_strikes
-        if not limit:
+        if limit <= 0:
             return
         if data.get("audio"):
             self._silent_streak = 0
@@ -173,7 +173,7 @@ class ChatPipeline:
         self._chain_had_error = False
         self._llm_error_streak += 1
         limit = self.cfg.core_error_max_strikes
-        if not limit or self._llm_error_streak < limit:
+        if limit <= 0 or self._llm_error_streak < limit:
             return
         if self._brain_reported or not self.on_core_brain_dead:
             return
@@ -277,10 +277,20 @@ class ChatPipeline:
         except asyncio.CancelledError:
             raise
 
+    def _busy_timeout(self) -> float:
+        """말 끝 신호 폴백 시간. 0 이하는 설정 실수로 보고 기본값을 쓴다.
+
+        음수를 넣으면 모든 발화가 시작하자마자 '멈춘 것'이 돼서, 방송이
+        켜지자마자 "웹UI 가 안 붙어 있습니다" 로 내려간다 — 운영자에게는
+        멀쩡한 설정을 의심하게 만드는 엉뚱한 진단이다.
+        """
+        t = self.cfg.core_busy_timeout_sec
+        return t if t > 0 else 90.0
+
     def _busy_now(self) -> bool:
         if not self._core_busy:
             return False
-        if time.monotonic() - self._busy_since > self.cfg.core_busy_timeout_sec:
+        if time.monotonic() - self._busy_since > self._busy_timeout():
             # 말이 끝났다는 신호(conversation-chain-end)가 안 왔다.
             # 코어는 '웹UI 가 재생을 마쳤다'는 응답을 받아야 이 신호를 보낸다.
             # 즉 이게 계속 나면 웹UI(OBS 브라우저 소스)가 코어에 안 붙어
@@ -293,7 +303,7 @@ class ChatPipeline:
                     "웹UI(OBS 브라우저 소스)가 코어에 안 붙어 있으면 시청자에게 "
                     "소리·자막이 안 나갑니다 — 브라우저 화면이 떠 있는지, "
                     "코어 설정의 enable_proxy 가 켜져 있는지 확인하세요.",
-                    self.cfg.core_busy_timeout_sec, self._busy_timeouts)
+                    self._busy_timeout(), self._busy_timeouts)
             # 로컬에서 잠금만 푸는 걸로는 부족하다. 코어 쪽에는 끝나지 않은
             # 대화가 그대로 걸려 있어서, 이 뒤에 보내는 채팅이 전부 그 뒤에
             # 줄만 서고 영영 안 나간다(실제로 웹UI 가 대화 도중에 끊겼을 때
@@ -306,7 +316,7 @@ class ChatPipeline:
             # 화면만 몇 시간씩 내보내게 된다. 연속으로 이 지경이면 끊긴
             # 코어와 똑같이 취급한다 — 조용히 송출하느니 내리는 게 낫다.
             limit = self.cfg.core_mute_max_strikes
-            if (limit and self._busy_streak >= limit
+            if (limit > 0 and self._busy_streak >= limit
                     and not self._mute_reported and self.on_core_mute):
                 self._mute_reported = True
                 log.error(

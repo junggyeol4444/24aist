@@ -52,7 +52,7 @@ def test_all_chat_reaches_ai():
     async def run():
         bridge = FakeBridge()
         reads = []
-        cfg = BroadcastConfig(idle_proactive_speak=False, core_busy_timeout_sec=0)
+        cfg = BroadcastConfig(idle_proactive_speak=False, core_busy_timeout_sec=0.001)
         pipe = ChatPipeline(bridge, cfg, on_message=lambda m: reads.append(m.author))
         stop = asyncio.Event()
         task = asyncio.create_task(pipe.run(FakeSource(_msgs(5)), stop))
@@ -104,7 +104,7 @@ def test_flood_handling_limits_forward_but_reads_all():
         bridge = FakeBridge()
         reads = []
         cfg = BroadcastConfig(
-            idle_proactive_speak=False, core_busy_timeout_sec=0,
+            idle_proactive_speak=False, core_busy_timeout_sec=0.001,
             flood_handling=FloodHandling(enabled=True, max_per_window=1, window_sec=10),
         )
         pipe = ChatPipeline(bridge, cfg, on_message=lambda m: reads.append(m.author))
@@ -217,15 +217,20 @@ def test_core_mute_reported_after_consecutive_timeouts():
     from aist.chat_pipeline import ChatPipeline
     from aist.config import BroadcastConfig
 
-    cfg = BroadcastConfig(core_busy_timeout_sec=0.0, core_mute_max_strikes=3)
+    cfg = BroadcastConfig(core_busy_timeout_sec=0.001, core_mute_max_strikes=3)
     fired = []
     p = ChatPipeline(object(), cfg, on_core_mute=lambda: fired.append(1))
-    for _ in range(3):
+
+    def stuck():
+        """말 끝 신호가 안 온 채로 폴백 시간이 지난 상태를 만든다."""
         p._mark_busy()
-        assert p._busy_now() is False     # 매번 타임아웃 처리
+        p._busy_since -= 10
+        return p._busy_now()
+
+    for _ in range(3):
+        assert stuck() is False           # 매번 타임아웃 처리
     assert fired == [1]
-    # 한 번만 알린다(로그 폭발 방지)
-    p._mark_busy(); p._busy_now()
+    stuck()                               # 한 번만 알린다(로그 폭발 방지)
     assert fired == [1]
 
 
@@ -234,14 +239,20 @@ def test_core_mute_streak_resets_on_healthy_end():
     from aist.chat_pipeline import ChatPipeline
     from aist.config import BroadcastConfig
 
-    cfg = BroadcastConfig(core_busy_timeout_sec=0.0, core_mute_max_strikes=3)
+    cfg = BroadcastConfig(core_busy_timeout_sec=0.001, core_mute_max_strikes=3)
     fired = []
     p = ChatPipeline(object(), cfg, on_core_mute=lambda: fired.append(1))
+
+    def stuck():
+        p._mark_busy()
+        p._busy_since -= 10
+        p._busy_now()
+
     for _ in range(2):
-        p._mark_busy(); p._busy_now()
+        stuck()
     p.on_core_message({"type": "control", "text": "conversation-chain-end"})
     for _ in range(2):
-        p._mark_busy(); p._busy_now()
+        stuck()
     assert fired == []                    # 2회씩 끊겨 있으므로 아직 아니다
 
 
