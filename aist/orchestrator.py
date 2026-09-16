@@ -40,6 +40,9 @@ from .vtuber_bridge import VTuberBridge
 
 log = logging.getLogger("aist.orchestrator")
 
+# 송출 시작 직후 첫 확인까지 두는 여유(초).
+_OBS_FIRST_CHECK_SEC = 15.0
+
 # 마무리 단계의 '매니저 귓속말' — 페르소나 무대규칙에 따라 AI 는 이 내용을
 # 입 밖에 내지 않고 행동으로만 반영한다. (운영자가 문구 수정 가능)
 _CUE_WIND_DOWN = ("(매니저 귓속말: 슬슬 마무리 분위기로 가자. 새 주제나 새 판 "
@@ -166,18 +169,39 @@ class Orchestrator:
                 used_slot = slot
                 continue
             used_slot = slot
-            try:
-                await self._run_broadcast(skip_start_announce=pre_announced)
-            except Exception:
-                log.exception("방송 사이클 중 오류 — 루프는 계속 유지")
+            # 사고로 일찍 끝나면 같은 슬롯을 다시 해본다. 예전에는 한 번
+            # 죽으면 그 날 방송이 통째로 날아갔다 — 19시에 켜서 19시 2분에
+            # 인터넷이 잠깐 끊기면, 운영자가 자는 사이 2분짜리 방송만 남고
+            # 다음 방송은 내일이었다. 무인 운영에서는 그게 정상일 수 없다.
+            left = max(0, self.cfg.scheduler.retry_max)
+            skip_announce = pre_announced
+            while not self._stop.is_set():
+                try:
+                    result = await self._run_broadcast(
+                        skip_start_announce=skip_announce, retries_left=left)
+                except Exception:
+                    log.exception("방송 사이클 중 오류 — 루프는 계속 유지")
+                    break
+                if result != "retry" or left <= 0:
+                    break
+                left -= 1
+                skip_announce = True      # 시작 공지는 이미 나갔다
+                log.warning("방송이 사고로 일찍 끝났습니다 — %.0f초 뒤 같은 슬롯을 "
+                            "다시 켭니다(남은 재시도 %d회).",
+                            self.cfg.scheduler.retry_backoff_sec, left)
+                await self._sleep_or_stop(self.cfg.scheduler.retry_backoff_sec)
 
     async def run_one_now(self):
         """지금 한 방송만 진행(시작 수동). 끄는 건 종료 판단이 한다."""
         await self._run_broadcast()
 
     # ------------------------------------------------------------ 한 사이클
-    async def _run_broadcast(self, skip_start_announce: bool = False):
+    async def _run_broadcast(self, skip_start_announce: bool = False,
+                            retries_left: int = 0) -> str:
         """방송 한 사이클. 어떤 경로로 빠져나가든 뒷정리는 반드시 돈다.
+
+        돌려주는 값: "normal"(정상 종료) | "aborted"(시작도 못 함) |
+        "retry"(사고로 일찍 끝났고 같은 슬롯을 다시 해볼 만함).
 
         뒷정리(_teardown)가 안 돌면 OBS 스트림이 켜진 채 남고 기록·기억이
         유실된다. 실제로 Ctrl+C 를 눌러보니 그 상태가 됐다. 그래서 OBS 를
@@ -196,6 +220,8 @@ class Orchestrator:
         game_task: Optional[asyncio.Task] = None
         drain_task: Optional[asyncio.Task] = None
         aborted = False
+        ej = None
+        core_gone = False
         self._core_lost = False
         self._chat_source_dead = False
         self._core_mute = False
@@ -227,6 +253,11 @@ class Orchestrator:
                 obs.start_stream()
             except ObsError as e:
                 log.error("OBS 시작 실패: %s (start_stream=false 면 정상)", e)
+            # 송출 감시의 첫 확인은 조금 뒤에 한다. StartStream 이 돌아와도
+            # OBS 가 실제로 '송출 중'으로 바뀌는 데는 몇 초가 걸린다 —
+            # 곧바로 물어보면 멀쩡한 방송을 '내려갔다'고 오해한다.
+            self._next_obs_check = time.monotonic() + max(
+                cfg.obs.stream_check_sec, _OBS_FIRST_CHECK_SEC)
 
             # 3) 코어 연결 + 채팅 파이프라인
             self.memory.start_session()
@@ -411,16 +442,35 @@ class Orchestrator:
                         pipeline, cfg.end_judge.wind_down.closing_max_wait_sec)
                     await self._sleep_or_stop(cfg.end_judge.wind_down.closing_wait_sec)
         finally:
+            # 사고로 일찍 끝났는데 아직 오늘 방송 시간이 한참 남았으면,
+            # 같은 슬롯을 다시 해본다. 그때는 "오늘 방송 끝!" 공지를 내면
+            # 안 된다 — 시청자는 끝난 줄 알고 나가고, 몇 분 뒤 다시 켜진다.
+            will_retry = (core_gone and retries_left > 0 and not self._stop.is_set()
+                          and ej is not None
+                          and self._enough_time_left(ej))
             # Ctrl+C·예외·코어 유실 어느 경우에도 뒷정리는 반드시 돈다.
             # shield 로 감싸 취소 중에도 끝까지 돌게 한다.
             await asyncio.shield(self._teardown(
                 obs, bridge, pipeline, pipeline_task, chat_stop,
                 start_dt, drain_task=drain_task,
-                transcript=transcript, game_task=game_task, aborted=aborted))
+                transcript=transcript, game_task=game_task,
+                aborted=aborted, skip_end_announce=will_retry))
+        if aborted:
+            return "aborted"
+        return "retry" if will_retry else "normal"
+
+    def _enough_time_left(self, ej) -> bool:
+        """다시 켜서 방송이라고 할 만한 시간이 남았는지.
+
+        1분짜리 방송을 다시 켜는 건 시청자에게 더 이상하다.
+        """
+        left = (ej.planned_end - _now(self.cfg.scheduler.timezone)).total_seconds()
+        return left >= max(600, self.cfg.scheduler.retry_min_left_min * 60)
 
     async def _teardown(self, obs, bridge, pipeline, pipeline_task, chat_stop,
                         start_dt, drain_task=None, transcript=None,
-                        game_task=None, aborted: bool = False):
+                        game_task=None, aborted: bool = False,
+                        skip_end_announce: bool = False):
         # 채팅 파이프라인 정지 (취소 후 반드시 회수해서 태스크 누수 방지)
         if chat_stop is not None:
             chat_stop.set()
@@ -495,7 +545,7 @@ class Orchestrator:
             except Exception:
                 log.exception("컨텐츠 팩 생성 실패(방송에는 영향 없음)")
 
-        if not aborted:
+        if not aborted and not skip_end_announce:
             end_dt = _now(self.cfg.scheduler.timezone)
             await self._announce("end", end_dt)
         log.info("=== 방송 종료 ===")

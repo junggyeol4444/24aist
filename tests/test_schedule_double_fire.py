@@ -44,7 +44,7 @@ def _run_loop_with_clock(tmp_path, monkeypatch, start_times, jitter_mode="symmet
     async def fake_sleep(sec):
         clock["t"] = clock["t"] + timedelta(seconds=sec)
 
-    async def fake_broadcast(skip_start_announce=False):
+    async def fake_broadcast(skip_start_announce=False, retries_left=0):
         starts.append(clock["t"])
         clock["t"] = clock["t"] + timedelta(minutes=2)   # 2분짜리 방송
         if len(starts) >= 3:

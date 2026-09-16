@@ -36,7 +36,7 @@ def _setup(tmp_path, monkeypatch, oversleep_min, grace=30):
         extra = timedelta(minutes=oversleep_min) if slept["n"] == 1 else timedelta()
         clock["t"] = clock["t"] + timedelta(seconds=sec) + extra
 
-    async def fake_broadcast(skip_start_announce=False):
+    async def fake_broadcast(skip_start_announce=False, retries_left=0):
         starts.append(clock["t"])
         clock["t"] = clock["t"] + timedelta(hours=1)
         o.request_stop()

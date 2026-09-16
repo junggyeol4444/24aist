@@ -104,6 +104,13 @@ class SchedulerConfig:
     # (집 PC 는 잔다. 절전에서 깨면 예정보다 한참 늦은 시각인데, 그대로
     #  시작하면 새벽 3시에 "19시 방송" 이 나간다. 0 이면 무조건 시작.)
     late_start_grace_min: int = 30
+    # 방송이 사고로 일찍 끝났을 때(코어 유실·송출 내려감·두뇌 죽음)
+    # 같은 슬롯을 몇 번까지 다시 해볼지. 0 이면 그날 방송은 그걸로 끝.
+    retry_max: int = 3
+    retry_backoff_sec: float = 60.0
+    # 다시 켰을 때 최소 이만큼은 남아 있어야 한다(분). 1분짜리 방송을
+    # 다시 켜는 건 시청자에게 더 이상하다.
+    retry_min_left_min: int = 20
 
 
 @dataclass
