@@ -36,6 +36,34 @@ def should_retry_status(status: Optional[int]) -> bool:
     return status == 429 or status >= 500
 
 
+def retry_after_of(r) -> Optional[float]:
+    """응답이 알려준 대기 시간(초). 없거나 못 읽으면 None.
+
+    헤더 Retry-After(초)와 본문 retry_after(초) 중 큰 값을 쓴다 — 더 짧게
+    잡았다가 먼저 보내면 레이트 리밋 위반으로 세어져 계정·IP 가 더 오래
+    막힌다. 여기서 예외가 나면 바깥이 네트워크 오류로 오인해 재시도하면
+    안 될 4xx 까지 다시 보내게 되므로, 무슨 일이 있어도 던지지 않는다.
+    """
+    vals = []
+    headers = getattr(r, "headers", None) or {}
+    try:
+        head = headers.get("Retry-After")
+    except Exception:  # noqa: BLE001
+        head = None
+    if head:
+        try:
+            vals.append(float(head))
+        except (TypeError, ValueError):
+            pass
+    try:
+        body = r.json()
+        if isinstance(body, dict) and body.get("retry_after") is not None:
+            vals.append(float(body["retry_after"]))
+    except Exception:  # noqa: BLE001 - 본문이 JSON 이 아닐 수 있다
+        pass
+    return max(vals) if vals else None
+
+
 def post_with_retry(
     send: Callable[[], tuple],
     *,

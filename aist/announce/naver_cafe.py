@@ -14,13 +14,13 @@ requests 지연 import, 호출은 asyncio.to_thread.
 
 import asyncio
 import logging
-import time
 from typing import Optional
 from urllib.parse import quote
 
 from ..config import NaverCafeAnnounce
 from ..config import Secrets
 from .base import Announcer
+from .retry import post_with_retry, retry_after_of
 
 log = logging.getLogger("aist.announce.naver")
 
@@ -80,9 +80,18 @@ class NaverCafeAnnouncer(Announcer):
         return False
 
     # --- 경로 A: 공식 API --------------------------------------------------
-    def _official_post(self, subject: str, content: str, _retry: bool = True) -> bool:
+    def _official_post(self, subject: str, content: str) -> bool:
+        """공식 API 로 글을 올린다. 실패 사유에 따라 짧게 재시도한다.
+
+        예전에는 네트워크 예외만 한 번 더 해보고, 서버 오류(5xx)나 레이트
+        리밋(429)은 그대로 포기했다 — 네이버가 잠깐 흔들린 것뿐인데 그날
+        시작 공지가 통째로 안 나간다(기획안 2-2② 의 기본 동선이 빠진다).
+        디스코드와 같은 규칙을 쓴다: 4xx 는 설정 문제라 재시도 안 함,
+        5xx·429·네트워크는 재시도, 서버가 기다리라고 한 시간은 지킨다.
+        카페는 계정 리스크가 있어(기획안 5-2 "빈도 낮게") 횟수는 2회로 둔다.
+        """
         try:
-            import requests  # 지연 import
+            import requests  # noqa: F401 - 미설치 확인용
         except ImportError:
             log.error("requests 미설치: `pip install requests`")
             return False
@@ -94,6 +103,13 @@ class NaverCafeAnnouncer(Announcer):
         if problem:
             log.error("%s 공지는 건너뜁니다.", problem)
             return False
+        return post_with_retry(
+            lambda: self._post_once(subject, content),
+            what="네이버 카페 공지", attempts=2, backoff_sec=3.0)
+
+    def _post_once(self, subject: str, content: str, allow_refresh: bool = True):
+        """(성공여부, 상태코드, 사유, 서버가 알려준 대기초)."""
+        import requests
         url = _ARTICLE_API.format(cafe_id=self.cfg.cafe_id, menu_id=self.cfg.menu_id)
         # 네이버 카페 글쓰기 API 는 subject/content 를 EUC-KR 로 인코딩해야 함
         body = (
@@ -110,22 +126,15 @@ class NaverCafeAnnouncer(Announcer):
                 data=body.encode("ascii"),
                 timeout=15,
             )
-            if r.status_code == 200:
-                log.info("네이버 카페 공지 게시 완료(공식 API)")
-                return True
-            if r.status_code == 401 and _retry and self._refresh_token():
-                return self._official_post(subject, content, _retry=False)
-            log.error("네이버 카페 공지 실패 (%s): %s", r.status_code, r.text[:300])
-            return False
-        except Exception as e:  # noqa: BLE001
-            # 네트워크 문제면 다시 해볼 만하다. 카페는 계정 리스크가 있어
-            # (기획안 5-2 "빈도 낮게") 한 번만 더 시도한다.
-            if _retry:
-                log.warning("네이버 카페 공지 예외: %s — 3초 뒤 한 번 더 시도합니다.", e)
-                time.sleep(3)
-                return self._official_post(subject, content, _retry=False)
-            log.error("네이버 카페 공지 예외: %s — 공지가 안 나갔습니다.", e)
-            return False
+        except Exception as e:  # noqa: BLE001 - 네트워크 사유 다양
+            return False, None, str(e), None
+        if r.status_code == 200:
+            log.info("네이버 카페 공지 게시 완료(공식 API)")
+            return True, 200, "", None
+        if r.status_code == 401 and allow_refresh and self._refresh_token():
+            # 토큰이 만료됐을 뿐이다 — 갱신하고 그 자리에서 한 번 더.
+            return self._post_once(subject, content, allow_refresh=False)
+        return False, r.status_code, r.text[:300], retry_after_of(r)
 
     def _refresh_token(self) -> bool:
         try:
@@ -149,6 +158,15 @@ class NaverCafeAnnouncer(Announcer):
             data = r.json()
             tok = data.get("access_token")
             if tok:
+                # 받아온 값도 검사한다. 헤더에 실을 수 없는 값이 오면
+                # (오류 페이지·프록시 응답 등) 그 뒤 요청이 전부
+                # "'latin-1' codec can't encode..." 로 죽는데, 그 메시지로는
+                # 운영자가 고칠 방법이 없다. 여기서 사유를 말해준다.
+                from ..safety import token_problem
+                bad = token_problem("네이버 갱신 토큰", str(tok))
+                if bad:
+                    log.error("%s", bad)
+                    return False
                 self._access_token = tok
                 log.info("네이버 access token 갱신됨")
                 return True

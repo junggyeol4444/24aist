@@ -211,7 +211,7 @@ def test_retry_after_parsing_never_raises():
     여기서 터지면 바깥에서 네트워크 오류로 오인해, 다시 보내면 안 되는
     4xx 까지 재시도하게 된다(실제로 그렇게 깨졌다).
     """
-    from aist.announce.discord_bot import DiscordAnnouncer
+    from aist.announce.retry import retry_after_of
 
     class _NoHeaders:
         status_code = 404
@@ -229,6 +229,75 @@ def test_retry_after_parsing_never_raises():
         def json(self):
             return {"retry_after": 3.5}
 
-    assert DiscordAnnouncer._retry_after(_NoHeaders()) is None
-    assert DiscordAnnouncer._retry_after(_WeirdHeaders()) is None
-    assert DiscordAnnouncer._retry_after(_BodyOnly()) == 3.5
+    assert retry_after_of(_NoHeaders()) is None
+    assert retry_after_of(_WeirdHeaders()) is None
+    assert retry_after_of(_BodyOnly()) == 3.5
+
+
+# --------- 네이버 카페도 같은 재시도 규칙을 쓴다 ---------
+def _naver(monkeypatch, responses, token="old-token-abc"):
+    """responses: [(status, text), ...] 를 차례로 돌려주는 가짜 requests."""
+    import aist.announce.naver_cafe as nc
+    from aist.config import NaverCafeAnnounce, Secrets
+
+    calls = []
+
+    class Resp:
+        def __init__(self, code):
+            self.status_code = code
+            self.text = "err"
+            self.headers = {}
+
+        def json(self):
+            return {"access_token": "new-token-xyz"}
+
+    def fake_post(url, **k):
+        calls.append(("post", k.get("headers", {}).get("Authorization")))
+        return Resp(responses[min(len(calls) - 1, len(responses) - 1)])
+
+    def fake_get(url, **k):
+        calls.append(("token", None))
+        return Resp(200)
+
+    import types
+    fake = types.SimpleNamespace(post=fake_post, get=fake_get)
+    monkeypatch.setitem(__import__("sys").modules, "requests", fake)
+    monkeypatch.setattr("time.sleep", lambda s: None)
+    monkeypatch.setattr("aist.announce.retry.time.sleep", lambda s: None)
+
+    s = Secrets()
+    s.naver_access_token = token
+    s.naver_client_id = "cid"
+    s.naver_client_secret = "sec"
+    s.naver_refresh_token = "rt"
+    ann = nc.NaverCafeAnnouncer(
+        NaverCafeAnnounce(enabled=True, cafe_id="1", menu_id="2"), s)
+    return ann, calls
+
+
+def test_naver_retries_server_error(monkeypatch):
+    """네이버가 잠깐 흔들린 것뿐인데 그날 공지를 통째로 거르면 안 된다."""
+    import asyncio
+
+    ann, calls = _naver(monkeypatch, [500, 200])
+    assert asyncio.run(ann.post("본문", title="제목")) is True
+    assert [c[0] for c in calls] == ["post", "post"]
+
+
+def test_naver_does_not_retry_permission_error(monkeypatch):
+    """403 은 설정 문제 — 다시 보내도 똑같이 실패한다."""
+    import asyncio
+
+    ann, calls = _naver(monkeypatch, [403])
+    assert asyncio.run(ann.post("본문", title="제목")) is False
+    assert len(calls) == 1
+
+
+def test_naver_refreshes_token_on_401_then_posts(monkeypatch):
+    """토큰 만료는 그 자리에서 갱신하고 다시 보낸다."""
+    import asyncio
+
+    ann, calls = _naver(monkeypatch, [401, 200])
+    assert asyncio.run(ann.post("본문", title="제목")) is True
+    assert [c[0] for c in calls] == ["post", "token", "post"]
+    assert calls[-1][1] == "Bearer new-token-xyz"
