@@ -194,6 +194,9 @@ def cmd_check(args) -> int:
     proxy_ok, proxy_msg = preflight.core_proxy_ready()
     files_ok, files_msg = preflight.core_startup_files_ready()
     llm_ok, llm_msg = preflight.core_llm_config()
+    # 목소리 경로. 코어는 TTS 가 실패해도 자막만 내보내며 계속 돈다 —
+    # 그래서 '도는 것처럼' 보이고 시청자만 목소리를 못 듣는다.
+    tts_ok, tts_msg = preflight.core_tts_config()
     persona_missing = any("페르소나 파일이 없습니다" in n
                           for n in getattr(persona, "problems", []))
     if persona_missing:
@@ -254,6 +257,7 @@ def cmd_check(args) -> int:
     print(f"    코어 프록시    : {'OK (enable_proxy 켜짐)' if proxy_ok else '[X] ' + proxy_msg}")
     print(f"    페르소나 반영  : {'OK' if persona_ok else '[X] ' + persona_msg}")
     print(f"    방송인 두뇌(LLM): {('OK ' + llm_msg) if llm_ok else '[X] ' + llm_msg}")
+    print(f"    방송인 목소리(TTS): {('OK ' + tts_msg) if tts_ok else '[X] ' + tts_msg}")
     print(f"    웹UI 접속경로  : {'OK (/proxy-ws)' if fe_proxy_ok else '[X] ' + fe_proxy_msg}")
 
     print()
@@ -376,6 +380,10 @@ def cmd_doctor(args) -> int:
     if not deps_ok:
         ok = False
         print(f"  [X] 코어 의존성: {deps_msg}\n")
+    tts_ok, tts_msg = preflight.core_tts_config()
+    if not tts_ok:
+        ok = False
+        print(f"  [X] 방송인 목소리(TTS): {tts_msg}\n")
     py_ok, py_msg = preflight.core_python_ok()
     if not py_ok:
         ok = False

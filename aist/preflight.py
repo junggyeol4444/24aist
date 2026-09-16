@@ -343,6 +343,86 @@ def core_llm_config(root: Path | None = None) -> tuple[bool, str]:
     return True, f"{provider} ({model or '모델 미지정'})"
 
 
+# TTS 모델별로 '반드시 채워야 하는 값'과 '떠 있어야 하는 로컬 서버'.
+# 안 채우면 코어는 조용히 실패한다 — 발화는 자막만 나가고 소리가 없다.
+_TTS_LOCAL_SERVER = {
+    "gpt_sovits_tts": ("api_url", ["ref_audio_path"]),
+    "x_tts": ("api_url", []),
+    "coqui_tts": (None, []),
+    "melo_tts": (None, []),
+    "cosyvoice_tts": ("client_url", []),
+    "cosyvoice2_tts": ("client_url", []),
+    "fish_api_tts": (None, ["api_key"]),
+    "azure_tts": (None, ["api_key", "region"]),
+}
+
+
+def core_tts_config(root: Path | None = None) -> tuple[bool, str]:
+    """방송인의 '목소리'(코어 TTS)가 실제로 날 수 있는 상태인지.
+
+    코어는 TTS 합성에 실패해도 발화를 멈추지 않는다 — audio 를 빈 채로
+    자막만 내보낸다(실제 코어에서 확인). 그래서 설정이 비어 있어도
+    방송은 '도는 것처럼' 보이고, 시청자만 목소리를 못 듣는다.
+    기본값인 gpt_sovits_tts 는 별도 서버(보통 127.0.0.1:9880)와
+    ref_audio_path 가 필요한데, 윈도우 설치 순서 어디에도 그걸 켜는
+    단계가 없다 — 운영자가 손으로 채워야 한다.
+    """
+    root = root or repo_root()
+    core = root / "Open-LLM-VTuber"
+    conf = core / "conf.yaml"
+    if not conf.is_file():
+        conf = core / "conf.korean.yaml"
+    if not conf.is_file():
+        return False, "코어 설정이 없어 확인 못 함 — " + hint(*CMD_CORE_SETUP)
+    try:
+        import yaml
+        data = yaml.safe_load(conf.read_text(encoding="utf-8", errors="replace")) or {}
+    except Exception as e:  # noqa: BLE001
+        return False, f"코어 설정을 못 읽었습니다({conf.name}): {e}"
+
+    tts_cfg = (data.get("character_config") or {}).get("tts_config") or {}
+    model = str(tts_cfg.get("tts_model") or "")
+    if not model:
+        return False, f"코어 {conf.name} 에 tts_model 이 없습니다 — 목소리가 안 납니다"
+    settings = tts_cfg.get(model) or {}
+    url_key, required = _TTS_LOCAL_SERVER.get(model, (None, []))
+
+    missing = [k for k in required if not str(settings.get(k, "") or "").strip()]
+    if missing:
+        return False, (f"{model} 의 {', '.join(missing)} 이(가) 비어 있습니다 — "
+                       f"{conf.name} 에서 채우세요. 안 채우면 자막만 나가고 "
+                       "목소리가 안 납니다.")
+
+    url = str(settings.get(url_key, "") or "") if url_key else ""
+    if not url:
+        return True, f"{model}"
+    ok, why = _port_open(url)
+    if ok:
+        return True, f"{model} ({url})"
+    return False, (f"{model} 이(가) 쓰는 서버가 안 떠 있습니다 ({url}: {why}) — "
+                   "TTS 서버를 먼저 켜세요. 안 켜면 자막만 나가고 목소리가 안 납니다.")
+
+
+def _port_open(url: str) -> tuple[bool, str]:
+    """url 의 host:port 가 열려 있는지 빠르게 본다."""
+    import socket
+    from urllib.parse import urlparse
+    try:
+        u = urlparse(url if "://" in url else "http://" + url)
+        host = u.hostname or "127.0.0.1"
+        port = u.port or (443 if u.scheme == "https" else 80)
+    except Exception as e:  # noqa: BLE001
+        return False, f"주소를 못 읽음: {e}"
+    s = socket.socket()
+    s.settimeout(1.5)
+    try:
+        return (True, "") if s.connect_ex((host, port)) == 0 else (False, "연결 거부")
+    except OSError as e:
+        return False, str(e)
+    finally:
+        s.close()
+
+
 def core_python_ok(root: Path | None = None) -> tuple[bool, str]:
     """지금 파이썬이 코어가 지원하는 범위인지.
 

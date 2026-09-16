@@ -145,3 +145,56 @@ def test_core_python_ok_when_core_absent(monkeypatch, tmp_path):
     """코어 pyproject 가 없으면 막지 않는다(판단 근거가 없다)."""
     ok, msg = preflight.core_python_ok(tmp_path)
     assert ok is True
+
+
+# ------------------- 방송인 목소리(코어 TTS) 점검 -------------------
+def _core_conf(tmp_path, tts_block: str):
+    core = tmp_path / "Open-LLM-VTuber"
+    core.mkdir(parents=True, exist_ok=True)
+    (core / "conf.yaml").write_text(
+        "character_config:\n  tts_config:\n" + tts_block, encoding="utf-8")
+    return tmp_path
+
+
+def test_tts_check_catches_empty_ref_audio(tmp_path):
+    """기본으로 실려 있는 gpt_sovits 는 ref_audio_path 가 비어 있다.
+
+    그대로 방송하면 코어가 조용히 실패해서 자막만 나가고 목소리가 안 난다
+    (실제 코어에서 audio=0바이트로 확인). 켜기 전에 잡아야 한다.
+    """
+    from aist.preflight import core_tts_config
+    root = _core_conf(tmp_path,
+                      "    tts_model: 'gpt_sovits_tts'\n"
+                      "    gpt_sovits_tts:\n"
+                      "      api_url: 'http://127.0.0.1:9880/tts'\n"
+                      "      ref_audio_path: ''\n")
+    ok, msg = core_tts_config(root)
+    assert ok is False and "ref_audio_path" in msg
+
+
+def test_tts_check_catches_dead_local_server(tmp_path):
+    from aist.preflight import core_tts_config
+    root = _core_conf(tmp_path,
+                      "    tts_model: 'gpt_sovits_tts'\n"
+                      "    gpt_sovits_tts:\n"
+                      "      api_url: 'http://127.0.0.1:9880/tts'\n"
+                      "      ref_audio_path: 'voice/ref.wav'\n")
+    ok, msg = core_tts_config(root)
+    assert ok is False and "서버" in msg
+
+
+def test_tts_check_passes_for_server_less_model(tmp_path):
+    """별도 서버가 필요 없는 TTS 면 통과해야 한다(오탐 방지)."""
+    from aist.preflight import core_tts_config
+    root = _core_conf(tmp_path,
+                      "    tts_model: 'edge_tts'\n"
+                      "    edge_tts:\n"
+                      "      voice: 'ko-KR-SunHiNeural'\n")
+    assert core_tts_config(root) == (True, "edge_tts")
+
+
+def test_tts_check_reports_missing_model(tmp_path):
+    from aist.preflight import core_tts_config
+    root = _core_conf(tmp_path, "    azure_tts:\n      api_key: ''\n")
+    ok, msg = core_tts_config(root)
+    assert ok is False and "tts_model" in msg
