@@ -89,6 +89,11 @@ class NaverCafeAnnouncer(Announcer):
         if not (self.cfg.cafe_id and self.cfg.menu_id and self._access_token):
             log.warning("네이버 카페 cafe_id/menu_id/access_token 미설정 → 생략")
             return False
+        from ..safety import token_problem
+        problem = token_problem("NAVER_ACCESS_TOKEN", self._access_token)
+        if problem:
+            log.error("%s 공지는 건너뜁니다.", problem)
+            return False
         url = _ARTICLE_API.format(cafe_id=self.cfg.cafe_id, menu_id=self.cfg.menu_id)
         # 네이버 카페 글쓰기 API 는 subject/content 를 EUC-KR 로 인코딩해야 함
         body = (

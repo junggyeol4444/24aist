@@ -131,3 +131,30 @@ class StopFlag:
             return self.path.read_text(encoding="utf-8").strip()
         except OSError:
             return ""
+
+
+def header_safe(value: str) -> bool:
+    """이 값이 HTTP 헤더에 실릴 수 있는지(latin-1).
+
+    토큰에 한글이나 따옴표가 섞이면(메모장에서 라벨까지 같이 붙여넣는
+    실수가 흔하다) 요청이 나가지도 못하고
+      'latin-1' codec can't encode characters in position ...
+    만 반복된다. 운영자가 그 메시지로 고칠 방법은 없다.
+    """
+    try:
+        (value or "").encode("latin-1")
+        return True
+    except UnicodeEncodeError:
+        return False
+
+
+def token_problem(name: str, value: str) -> Optional[str]:
+    """토큰 값이 못 쓸 모양이면 사람이 읽는 사유를 돌려준다."""
+    if not value:
+        return None
+    if not header_safe(value):
+        return (f"{name} 에 보낼 수 없는 문자가 섞여 있습니다(한글·따옴표 등) — "
+                f".env 에서 토큰 값만 남도록 다시 붙여넣으세요.")
+    if value != value.strip():
+        return f"{name} 앞뒤에 공백이 있습니다 — 값만 남도록 다시 붙여넣으세요."
+    return None

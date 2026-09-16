@@ -48,12 +48,10 @@ class DiscordAnnouncer(Announcer):
         못하고 "'latin-1' codec can't encode characters" 만 세 번 반복된다.
         운영자가 그 메시지로 고칠 방법은 없다.
         """
-        try:
-            self.token.encode("latin-1")
-        except UnicodeEncodeError:
-            log.error("디스코드 토큰에 보낼 수 없는 문자가 섞여 있습니다"
-                      "(한글·따옴표 등) — .env 의 DISCORD_BOT_TOKEN 을 "
-                      "토큰 값만 남도록 다시 붙여넣으세요. 공지는 건너뜁니다.")
+        from ..safety import token_problem
+        problem = token_problem("DISCORD_BOT_TOKEN", self.token)
+        if problem:
+            log.error("%s 공지는 건너뜁니다.", problem)
             return False
         return True
 

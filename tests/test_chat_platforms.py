@@ -113,7 +113,7 @@ def test_twitcasting_suppresses_first_poll_then_emits_new():
     from aist.chat.twitcasting import TwitcastingChat
 
     async def run():
-        tc = TwitcastingChat("user", "token", poll_interval=0.01)
+        tc = TwitcastingChat("user", "abcdef123", poll_interval=0.01)
         state = {"n": 0}
         seqs = [
             [{"id": "1", "message": "old", "from_user": {"name": "a"}}],
@@ -123,9 +123,10 @@ def test_twitcasting_suppresses_first_poll_then_emits_new():
         tc._current_movie_id = lambda: "m1"
 
         def fetch(mid):
+            # (코멘트 목록, 방송이 끝났는지) — 방송이 끝나면 새 movie 를 찾는다
             i = min(state["n"], len(seqs) - 1)
             state["n"] += 1
-            return seqs[i]
+            return seqs[i], False
         tc._fetch_comments = fetch
 
         got = []

@@ -203,6 +203,22 @@ def cmd_check(args) -> int:
     fe_proxy_ok, fe_proxy_msg = preflight.frontend_proxy_ready()
     blockers = [n for n in miss if n.blocking]
 
+    from .safety import token_problem
+    token_notes = [
+        n for n in (
+            token_problem("DISCORD_BOT_TOKEN", s.discord_bot_token),
+            token_problem("TWITCASTING_ACCESS_TOKEN", s.twitcasting_access_token),
+            token_problem("TWITCH_OAUTH_TOKEN", s.twitch_oauth_token),
+            token_problem("NAVER_ACCESS_TOKEN", s.naver_access_token),
+            token_problem("OBS_PASSWORD", cfg.obs.password),
+        ) if n
+    ]
+    if token_notes:
+        # 토큰에 한글·공백이 섞이면 요청이 나가지도 못한다. 방송 전에 잡는다.
+        print("\n  키/토큰 값 문제:")
+        for n in token_notes:
+            print(f"    [X] {n}")
+
     if getattr(persona, "problems", None):
         # 페르소나가 조용히 망가지면 캐릭터 자체가 달라진다.
         print("\n  페르소나 파일 문제 (그대로 두면 캐릭터가 달라집니다):")
@@ -241,7 +257,7 @@ def cmd_check(args) -> int:
     print()
     if (blockers or not fe_ok or not conf_ok or not deps_ok or not py_ok
             or not proxy_ok or not fe_proxy_ok or not files_ok or not persona_ok
-            or hard_problems):
+            or token_notes or hard_problems):
         print("지금 상태로는 방송이 안 됩니다. 아래를 먼저 해결하세요:")
         if hard_problems:
             print("  - 위 '설정값 문제' 부터 고치세요 (config.yaml)")
@@ -257,6 +273,8 @@ def cmd_check(args) -> int:
                   f" {preflight.hint(*preflight.CMD_SETUP_ALL)}")
         if not files_ok:
             print(f"  - 코어 시작 파일 채우기: {preflight.hint(*preflight.CMD_CORE_SETUP)}")
+        if token_notes:
+            print("  - 위 '키/토큰 값 문제' 를 .env 에서 고치세요")
         if not persona_ok:
             print(f"  - 페르소나 코어에 반영: {preflight.hint(*preflight.CMD_PERSONA)}")
         if not proxy_ok:
