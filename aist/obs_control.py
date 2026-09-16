@@ -45,7 +45,8 @@ class ObsController:
         except Exception as first_err:  # noqa: BLE001 - 연결 실패 사유는 다양
             # OBS 자동 실행(2-2③): 안 떠 있으면 직접 켜고 기다렸다 재시도
             if not (self.cfg.launch_if_not_running and self.cfg.launch_command):
-                raise ObsError(f"OBS 연결 실패: {first_err}") from first_err
+                raise ObsError(
+                    f"OBS 연결 실패: {first_err}{self._why(first_err)}") from first_err
             if not self._launch_obs():
                 raise ObsError(f"OBS 연결 실패(자동 실행도 실패): {first_err}") from first_err
             deadline = time.monotonic() + max(5, self.cfg.launch_wait_sec)
@@ -59,6 +60,25 @@ class ObsController:
                 except Exception as e:  # noqa: BLE001
                     last = e
             raise ObsError(f"OBS 자동 실행 후에도 연결 실패: {last}") from last
+
+    def _why(self, err: Exception) -> str:
+        """연결 실패 사유를 운영자 말로 덧붙인다.
+
+        라이브러리 메시지는 영어라 "failed to identify client with the server"
+        만 보면 무엇을 고쳐야 할지 알 수 없다. 이건 대부분 비밀번호 문제다.
+        """
+        text = str(err).lower()
+        if "identify" in text or "authentication" in text or "4009" in text:
+            if self.cfg.password:
+                return ("\n  → 비밀번호가 틀린 것 같습니다. OBS 의 [도구] - "
+                        "[obs-websocket 설정] 의 비밀번호와 .env 의 OBS_PASSWORD "
+                        "가 같은지 확인하세요.")
+            return ("\n  → OBS 쪽에 비밀번호가 설정돼 있는데 여기는 비어 있습니다. "
+                    ".env 에 OBS_PASSWORD 를 넣으세요.")
+        if "refused" in text or "timed out" in text or "timeout" in text:
+            return ("\n  → OBS 가 켜져 있는지, [도구] - [obs-websocket 설정] 에서 "
+                    "'웹소켓 서버 활성화' 가 켜져 있는지, 포트가 맞는지 확인하세요.")
+        return ""
 
     @staticmethod
     def _split_command(cmd: str):
