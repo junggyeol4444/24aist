@@ -193,6 +193,7 @@ def cmd_check(args) -> int:
     # 방송은 '도는 것처럼' 보이면서 화면에는 아무것도 안 나온다.
     proxy_ok, proxy_msg = preflight.core_proxy_ready()
     files_ok, files_msg = preflight.core_startup_files_ready()
+    llm_ok, llm_msg = preflight.core_llm_config()
     persona_missing = any("페르소나 파일이 없습니다" in n
                           for n in getattr(persona, "problems", []))
     if persona_missing:
@@ -252,12 +253,13 @@ def cmd_check(args) -> int:
     print(f"    코어 시작 파일 : {'OK' if files_ok else '[X] ' + files_msg}")
     print(f"    코어 프록시    : {'OK (enable_proxy 켜짐)' if proxy_ok else '[X] ' + proxy_msg}")
     print(f"    페르소나 반영  : {'OK' if persona_ok else '[X] ' + persona_msg}")
+    print(f"    방송인 두뇌(LLM): {('OK ' + llm_msg) if llm_ok else '[X] ' + llm_msg}")
     print(f"    웹UI 접속경로  : {'OK (/proxy-ws)' if fe_proxy_ok else '[X] ' + fe_proxy_msg}")
 
     print()
     if (blockers or not fe_ok or not conf_ok or not deps_ok or not py_ok
             or not proxy_ok or not fe_proxy_ok or not files_ok or not persona_ok
-            or token_notes or hard_problems):
+            or token_notes or not llm_ok or hard_problems):
         print("지금 상태로는 방송이 안 됩니다. 아래를 먼저 해결하세요:")
         if hard_problems:
             print("  - 위 '설정값 문제' 부터 고치세요 (config.yaml)")
@@ -275,6 +277,9 @@ def cmd_check(args) -> int:
             print(f"  - 코어 시작 파일 채우기: {preflight.hint(*preflight.CMD_CORE_SETUP)}")
         if token_notes:
             print("  - 위 '키/토큰 값 문제' 를 .env 에서 고치세요")
+        if not llm_ok:
+            print("  - 코어 conf.yaml 의 LLM 설정을 채우세요 (안 채우면 방송인이 "
+                  "대답을 못 합니다)")
         if not persona_ok:
             print(f"  - 페르소나 코어에 반영: {preflight.hint(*preflight.CMD_PERSONA)}")
         if not proxy_ok:

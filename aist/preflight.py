@@ -294,6 +294,55 @@ def persona_applied_to_core(persona_prompt: str,
                    "(방송인 성격은 코어 설정에 박혀 있습니다) — " + hint(*CMD_PERSONA))
 
 
+# 키 자리에 예시 문구가 그대로 남아 있는 경우(운영자가 안 채운 상태)
+_PLACEHOLDER_KEYS = {
+    "your api key here", "your open ai api key", "your gemini api key",
+    "your zhipu ai api key", "your deepseek api key", "your mistral api key",
+    "your groq api key", "somethingelse", "", "sk-xxx", "your_api_key",
+}
+
+
+def core_llm_config(root: Path | None = None) -> tuple[bool, str]:
+    """방송인의 '두뇌'(코어 LLM)가 쓸 수 있게 설정돼 있는지.
+
+    이건 우리 config.yaml 이 아니라 코어 conf.yaml 에 있다. 안 채우면
+    방송은 정상으로 도는데 방송인이 "Error connecting chat endpoint" 만
+    반복한다 — 시청자에게는 그게 그대로 나간다.
+    """
+    root = root or repo_root()
+    core = root / "Open-LLM-VTuber"
+    conf = core / "conf.yaml"
+    if not conf.is_file():
+        conf = core / "conf.korean.yaml"
+    if not conf.is_file():
+        return False, "코어 설정이 없어 확인 못 함 — " + hint(*CMD_CORE_SETUP)
+    try:
+        import yaml
+        data = yaml.safe_load(conf.read_text(encoding="utf-8", errors="replace")) or {}
+    except Exception as e:  # noqa: BLE001
+        return False, f"코어 설정을 못 읽었습니다({conf.name}): {e}"
+
+    agent = ((data.get("character_config") or {}).get("agent_config") or {})
+    provider = ((agent.get("agent_settings") or {})
+                .get("basic_memory_agent") or {}).get("llm_provider")
+    if not provider:
+        return False, "코어 conf.yaml 에 llm_provider 가 없습니다"
+    settings = (agent.get("llm_configs") or {}).get(provider) or {}
+    key = str(settings.get("llm_api_key", "") or "")
+    base_url = str(settings.get("base_url", "") or "")
+    model = str(settings.get("model", "") or "")
+
+    local = any(h in base_url for h in ("localhost", "127.0.0.1"))
+    if local:
+        return True, (f"{provider} ({model or '모델 미지정'}) — 로컬 서버 "
+                      f"{base_url} 가 떠 있어야 합니다")
+    if key.strip().lower() in _PLACEHOLDER_KEYS:
+        return False, (f"{provider} 의 API 키가 예시 그대로입니다 — "
+                       f"{conf.name} 의 llm_configs.{provider}.llm_api_key 를 "
+                       "채우세요. 안 채우면 방송인이 대답을 못 합니다.")
+    return True, f"{provider} ({model or '모델 미지정'})"
+
+
 def core_python_ok(root: Path | None = None) -> tuple[bool, str]:
     """지금 파이썬이 코어가 지원하는 범위인지.
 

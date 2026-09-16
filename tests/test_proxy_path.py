@@ -184,3 +184,60 @@ def test_core_trims_conversation_memory():
     limit = (conf["character_config"]["agent_config"]["agent_settings"]
              ["basic_memory_agent"]["max_memory_messages"])
     assert isinstance(limit, int) and limit > 0, f"상한이 꺼져 있습니다: {limit}"
+
+
+def test_core_llm_placeholder_key_is_caught(tmp_path):
+    """방송인의 '두뇌' 설정은 코어 conf.yaml 에 있다.
+
+    안 채우면 방송은 정상으로 도는데 방송인이 "Error connecting chat
+    endpoint" 만 반복한다 — 그게 시청자에게 그대로 나간다.
+    """
+    from aist.preflight import core_llm_config
+
+    core = tmp_path / "Open-LLM-VTuber"
+    core.mkdir()
+    conf = core / "conf.yaml"
+
+    conf.write_text(
+        "character_config:\n"
+        "  agent_config:\n"
+        "    agent_settings:\n"
+        "      basic_memory_agent:\n"
+        "        llm_provider: openai_llm\n"
+        "    llm_configs:\n"
+        "      openai_llm:\n"
+        "        llm_api_key: 'Your Open AI API key'\n"
+        "        model: gpt-4o\n", encoding="utf-8")
+    ok, msg = core_llm_config(tmp_path)
+    assert ok is False and "API 키" in msg
+
+    conf.write_text(
+        "character_config:\n"
+        "  agent_config:\n"
+        "    agent_settings:\n"
+        "      basic_memory_agent:\n"
+        "        llm_provider: openai_llm\n"
+        "    llm_configs:\n"
+        "      openai_llm:\n"
+        "        llm_api_key: 'sk-real-looking-key'\n"
+        "        model: gpt-4o\n", encoding="utf-8")
+    assert core_llm_config(tmp_path)[0] is True
+
+
+def test_local_llm_is_reported_as_needing_a_running_server(tmp_path):
+    from aist.preflight import core_llm_config
+
+    core = tmp_path / "Open-LLM-VTuber"
+    core.mkdir()
+    (core / "conf.yaml").write_text(
+        "character_config:\n"
+        "  agent_config:\n"
+        "    agent_settings:\n"
+        "      basic_memory_agent:\n"
+        "        llm_provider: ollama_llm\n"
+        "    llm_configs:\n"
+        "      ollama_llm:\n"
+        "        base_url: 'http://localhost:11434/v1'\n"
+        "        model: qwen2.5:latest\n", encoding="utf-8")
+    ok, msg = core_llm_config(tmp_path)
+    assert ok is True and "떠 있어야" in msg
