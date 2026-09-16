@@ -110,6 +110,10 @@ def generate_report(
         lines.append(f"  - (그 외 {len(scs) - _MAX_LISTED}건 — 전체는 트랜스크립트에)")
 
     events = s.get("events", [])
+    # 사고는 목록 속에 묻히면 안 된다 — 맨 위에 따로 적는다.
+    if any(e.get("kind") == "tts_silent" for e in events):
+        lines.append("- ⚠ 이번 방송은 **목소리가 나가지 않았습니다**(자막만). "
+                     "코어 설정의 tts_model 과 TTS 서버를 확인하세요.")
     if events:
         lines.append(f"- 기록된 이벤트: {len(events)}건")
         for e in events[:20]:

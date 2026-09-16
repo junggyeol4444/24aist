@@ -44,6 +44,7 @@ class ChatPipeline:
         on_source_ended: Optional[Callable[[], None]] = None,
         on_core_mute: Optional[Callable[[], None]] = None,
         on_core_brain_dead: Optional[Callable[[str], None]] = None,
+        on_tts_silent: Optional[Callable[[], None]] = None,
     ):
         self.bridge = bridge
         self.cfg = cfg
@@ -60,6 +61,8 @@ class ChatPipeline:
         self.on_core_mute = on_core_mute
         # 코어가 LLM 오류 문구를 그대로 읽어버릴 때 알린다.
         self.on_core_brain_dead = on_core_brain_dead
+        # 자막은 나가는데 소리가 비어 있을 때 알린다(TTS 죽음).
+        self.on_tts_silent = on_tts_silent
         # 같은 전송 오류를 매 채팅마다 트레이스백으로 찍으면 로그가 폭발한다.
         self._send_fail_streak = 0
         # 종료판단(채팅 저조/눈치 종료)에 쓰는 공유 상태. tz-aware UTC.
@@ -75,6 +78,8 @@ class ChatPipeline:
         self._llm_error_streak = 0        # LLM 오류로 끝난 대화가 연속 몇 번인지
         self._chain_had_error = False     # 지금 대화에 오류 문구가 있었나
         self._last_llm_error = ""
+        self._silent_streak = 0           # 소리 없이 나간 발화가 연속 몇 번인지
+        self._silent_reported = False
         self._brain_reported = False
         self._pending: List[ChatMessage] = []
         self._include_platform = False    # 동출일 때만 플랫폼 표기
@@ -92,6 +97,7 @@ class ChatPipeline:
             self._busy_since = time.monotonic()
         if data.get("type") == "audio":
             self._watch_llm_error(data)
+            self._watch_silent_audio(data)
         if data.get("type") != "control":
             return
         text = data.get("text")
@@ -126,6 +132,38 @@ class ChatPipeline:
             log.error("방송인이 LLM 오류 문구를 그대로 읽었습니다: %s",
                       text.strip()[:160])
         self._last_llm_error = text.strip()[:200]
+
+    def _watch_silent_audio(self, data: dict) -> None:
+        """자막은 나가는데 소리가 비어 있으면 TTS 가 죽은 것이다.
+
+        코어는 TTS 합성에 실패해도 발화를 멈추지 않는다 — audio 필드만 빈
+        채로 자막을 내보낸다(실제 코어에서 확인: audio=0바이트).
+        시청자에게는 목소리 없이 자막만 흐르는 방송이 되는데, 로그에는
+        아무 것도 안 남아서 운영자가 알 길이 없다.
+        """
+        limit = self.cfg.tts_silent_max_strikes
+        if not limit:
+            return
+        if data.get("audio"):
+            self._silent_streak = 0
+            return
+        dt = data.get("display_text") or {}
+        if not (dt.get("text") if isinstance(dt, dict) else ""):
+            return                      # 자막도 없으면 발화로 치지 않는다
+        self._silent_streak += 1
+        if self._silent_streak < limit or self._silent_reported:
+            return
+        self._silent_reported = True
+        log.error("발화 %d개가 연속으로 소리 없이(자막만) 나갔습니다 — TTS 가 "
+                  "죽은 것으로 봅니다. 코어 설정의 tts_model 과 TTS 서버를 "
+                  "확인하세요. 방송은 계속하지만 시청자에게 목소리가 안 갑니다.",
+                  self._silent_streak)
+        if self.on_tts_silent is None:
+            return
+        try:
+            self.on_tts_silent()
+        except Exception as e:  # noqa: BLE001
+            log.debug("on_tts_silent 콜백 실패: %s", e)
 
     def _close_chain(self) -> None:
         """대화 한 덩어리가 끝났다 — 오류였는지 아닌지로 연속 횟수를 센다."""

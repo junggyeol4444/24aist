@@ -257,11 +257,23 @@ class Orchestrator:
                 # 방송인이 LLM 오류 문구(영어)를 계속 읽고 있는 상태.
                 self._core_brain_dead = text
 
+            def on_tts_silent():
+                # 자막만 나가고 목소리가 없는 상태. 방송을 내리지는 않는다
+                # (일부러 자막만 쓰는 운영자도 있다). 대신 리포트에 남겨
+                # 운영자가 방송 뒤에 반드시 보게 한다.
+                self.memory.record_event("tts_silent")
+                if transcript is not None:
+                    try:
+                        transcript.log_event("tts_silent")
+                    except Exception:  # noqa: BLE001
+                        log.debug("트랜스크립트 기록 실패", exc_info=True)
+
             pipeline = ChatPipeline(bridge, cfg.broadcast, on_message=on_chat,
                                     safety=cfg.safety, on_send_error=on_send_error,
                                     on_source_ended=on_source_ended,
                                     on_core_mute=on_core_mute,
-                                    on_core_brain_dead=on_core_brain_dead)
+                                    on_core_brain_dead=on_core_brain_dead,
+                                    on_tts_silent=on_tts_silent)
 
             # 코어가 보내오는 메시지(자막·오디오·control 등)를 계속 읽는다.
             # 안 읽으면 websockets 수신 버퍼가 무한정 쌓여 장시간 방송에서

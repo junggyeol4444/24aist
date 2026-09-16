@@ -329,3 +329,54 @@ def test_normal_korean_speech_is_not_mistaken_for_error():
     for t in ("에러 났대요 ㅋㅋ", "error 라는 게임 알아?", "그 채팅 봤어"):
         _chain(p, t)
     assert seen == []
+
+
+# --------- TTS 가 죽으면 자막만 나가고 목소리가 없다 ----------
+def test_silent_audio_detected():
+    """소리 없는 발화가 연속으로 나가면 TTS 가 죽은 것으로 보고 알려야 한다.
+
+    실제 코어에서 확인: TTS 합성이 실패해도 코어는 발화를 멈추지 않고
+    audio 필드만 빈 채로(0바이트) 자막을 내보낸다.
+    """
+    from aist.chat_pipeline import ChatPipeline
+    from aist.config import BroadcastConfig
+
+    fired = []
+    p = ChatPipeline(object(), BroadcastConfig(tts_silent_max_strikes=3),
+                     on_tts_silent=lambda: fired.append(1))
+    for _ in range(2):
+        p.on_core_message(_audio("안녕하세요"))
+    assert fired == []
+    p.on_core_message(_audio("반가워요"))
+    assert fired == [1]
+    p.on_core_message(_audio("또 왔네"))
+    assert fired == [1]          # 한 번만 알린다
+
+
+def test_silent_streak_resets_when_voice_comes_back():
+    from aist.chat_pipeline import ChatPipeline
+    from aist.config import BroadcastConfig
+
+    fired = []
+    p = ChatPipeline(object(), BroadcastConfig(tts_silent_max_strikes=3),
+                     on_tts_silent=lambda: fired.append(1))
+    p.on_core_message(_audio("하나"))
+    p.on_core_message(_audio("둘"))
+    ok = _audio("셋"); ok["audio"] = "UklGRi4AAABXQVZF"   # 소리 있음
+    p.on_core_message(ok)
+    p.on_core_message(_audio("넷"))
+    p.on_core_message(_audio("다섯"))
+    assert fired == []
+
+
+def test_display_only_message_without_text_is_not_counted():
+    """자막도 없는 메시지는 발화로 치지 않는다(오탐 방지)."""
+    from aist.chat_pipeline import ChatPipeline
+    from aist.config import BroadcastConfig
+
+    fired = []
+    p = ChatPipeline(object(), BroadcastConfig(tts_silent_max_strikes=2),
+                     on_tts_silent=lambda: fired.append(1))
+    for _ in range(5):
+        p.on_core_message({"type": "audio", "display_text": {"text": ""}})
+    assert fired == []

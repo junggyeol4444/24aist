@@ -185,3 +185,24 @@ def test_bits_amounts_do_not_break_the_total(tmp_path):
 
     assert _won_total([{"amount": "5,000원"}, {"amount": "100 bits"},
                        {"amount": ""}]) == 5000
+
+
+def test_report_flags_silent_broadcast(tmp_path):
+    """목소리가 안 나간 방송은 리포트 맨 위에 경고로 보여야 한다.
+
+    이벤트 목록 속에 묻히면 운영자가 못 본다 — 방송 하나를 통째로
+    자막만 내보낸 사고다.
+    """
+    from aist.config import MemoryConfig
+    from aist.memory import Memory
+    from aist.report import generate_report
+
+    m = Memory(MemoryConfig(path=str(tmp_path / "mem")))
+    m.start_session()
+    m.record_event("tts_silent")
+    m.end_session()
+    path = generate_report(m, str(tmp_path / "reports"))
+    body = path.read_text(encoding="utf-8")
+    assert "목소리가 나가지 않았습니다" in body
+    # 통계 앞(머리말)에 있어야 한다
+    assert body.index("목소리가 나가지 않았습니다") < body.index("## 점검 메모")
