@@ -279,6 +279,8 @@ def test_check_does_not_declare_failure_for_non_blocking_only(tmp_path, monkeypa
     monkeypatch.setattr(pf, "frontend_proxy_ready", lambda: (True, "설정됨"))
     monkeypatch.setattr(pf, "core_startup_files_ready", lambda: (True, "있음"))
     monkeypatch.setattr(pf, "persona_applied_to_core", lambda prompt: (True, "반영됨"))
+    monkeypatch.setattr(pf, "core_llm_config", lambda: (True, "ok"))
+    monkeypatch.setattr(pf, "core_tts_config", lambda: (True, "ok"))
 
     rc = cli.cmd_check(argparse.Namespace(config="x", persona="y"))
     out = capsys.readouterr().out
@@ -328,3 +330,39 @@ def test_renamed_setting_points_at_the_new_name(tmp_path):
     p.write_text("broadcast:\n  idle_speak_min_sec: 5\n", encoding="utf-8")
     cfg = load_config(str(p))
     assert any("idle_gap_min_sec" in n for n in cfg.unknown_keys), cfg.unknown_keys
+
+
+def test_check_declares_failure_when_only_tts_is_broken(tmp_path, monkeypatch, capsys):
+    """목소리가 안 나는 것도 '방송이 안 됩니다' 다.
+
+    화면에는 [X] 로 찍으면서 결론에서는 빼놓고 있었다. 그러면 운영자는
+    빨간 줄을 보고도 "그래도 점검은 통과네" 로 읽는다.
+    """
+    import argparse
+
+    import aist.cli as cli
+    import aist.preflight as pf
+    from aist.persona import Persona
+
+    c = Config()
+    c.announce.discord.enabled = False
+    monkeypatch.setattr(cli, "_load", lambda args, file_log=False: (c, Persona()))
+    for fn, val in (("core_frontend_ready", (True, "")),
+                    ("core_conf_ready", (True, "")),
+                    ("core_deps_ready", (True, "ok")),
+                    ("core_python_ok", (True, "3.12")),
+                    ("core_proxy_ready", (True, "켜짐")),
+                    ("frontend_proxy_ready", (True, "설정됨")),
+                    ("core_startup_files_ready", (True, "있음")),
+                    ("core_llm_config", (True, "ok"))):
+        monkeypatch.setattr(pf, fn, lambda v=val: v)
+    monkeypatch.setattr(pf, "missing", lambda cfg: [])
+    monkeypatch.setattr(pf, "persona_applied_to_core", lambda prompt: (True, "반영됨"))
+    monkeypatch.setattr(pf, "core_tts_config",
+                        lambda: (False, "ref_audio_path 이(가) 비어 있습니다"))
+
+    rc = cli.cmd_check(argparse.Namespace(config="c.yaml", persona="p.yaml"))
+    out = capsys.readouterr().out
+    assert rc == 1
+    assert "지금 상태로는 방송이 안 됩니다" in out
+    assert "TTS" in out

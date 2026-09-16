@@ -334,8 +334,16 @@ def core_llm_config(root: Path | None = None) -> tuple[bool, str]:
 
     local = any(h in base_url for h in ("localhost", "127.0.0.1"))
     if local:
-        return True, (f"{provider} ({model or '모델 미지정'}) — 로컬 서버 "
-                      f"{base_url} 가 떠 있어야 합니다")
+        # 로컬 LLM(ollama 등)은 운영자가 따로 설치해서 따로 띄워야 한다.
+        # 안 떠 있으면 방송인은 대답 대신 영어 오류 문구를 읽는다 — 그걸
+        # "떠 있어야 합니다" 한 줄로만 알리고 OK 로 넘기면, 운영자는
+        # 점검을 통과한 줄 알고 방송을 켠다.
+        ok, why = _port_open(base_url)
+        if ok:
+            return True, f"{provider} ({model or '모델 미지정'}) — {base_url}"
+        return False, (f"{provider} 가 쓰는 로컬 서버가 안 떠 있습니다 "
+                       f"({base_url}: {why}) — 먼저 켜세요. 안 켜면 방송인이 "
+                       "대답 대신 영어 오류 문구를 읽습니다.")
     if key.strip().lower() in _PLACEHOLDER_KEYS:
         return False, (f"{provider} 의 API 키가 예시 그대로입니다 — "
                        f"{conf.name} 의 llm_configs.{provider}.llm_api_key 를 "

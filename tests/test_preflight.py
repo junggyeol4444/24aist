@@ -198,3 +198,49 @@ def test_tts_check_reports_missing_model(tmp_path):
     root = _core_conf(tmp_path, "    azure_tts:\n      api_key: ''\n")
     ok, msg = core_tts_config(root)
     assert ok is False and "tts_model" in msg
+
+
+def test_llm_check_catches_dead_local_server(tmp_path):
+    """로컬 LLM(ollama 등)이 안 떠 있으면 점검이 잡아야 한다.
+
+    저장소에 실린 코어 설정은 ollama(localhost:11434)를 쓴다. 그런데
+    윈도우 설치 순서 어디에도 ollama 를 설치·실행하는 단계가 없다.
+    예전에는 "떠 있어야 합니다" 한 줄과 함께 OK 로 넘겼다 — 운영자는
+    점검을 통과한 줄 알고 방송을 켜고, 방송인은 대답 대신 영어 오류
+    문구를 읽는다(실제 코어에서 확인한 동작).
+    """
+    from aist.preflight import core_llm_config
+
+    core = tmp_path / "Open-LLM-VTuber"
+    core.mkdir(parents=True)
+    (core / "conf.yaml").write_text(
+        "character_config:\n"
+        "  agent_config:\n"
+        "    agent_settings:\n"
+        "      basic_memory_agent:\n"
+        "        llm_provider: 'ollama_llm'\n"
+        "    llm_configs:\n"
+        "      ollama_llm:\n"
+        "        base_url: 'http://127.0.0.1:11434/v1'\n"
+        "        model: 'qwen2.5:latest'\n", encoding="utf-8")
+    ok, msg = core_llm_config(tmp_path)
+    assert ok is False and "안 떠 있습니다" in msg
+
+
+def test_llm_check_passes_for_a_filled_cloud_key(tmp_path):
+    """클라우드 LLM 은 키만 채워져 있으면 통과한다(네트워크는 안 본다)."""
+    from aist.preflight import core_llm_config
+
+    core = tmp_path / "Open-LLM-VTuber"
+    core.mkdir(parents=True)
+    (core / "conf.yaml").write_text(
+        "character_config:\n"
+        "  agent_config:\n"
+        "    agent_settings:\n"
+        "      basic_memory_agent:\n"
+        "        llm_provider: 'openai_llm'\n"
+        "    llm_configs:\n"
+        "      openai_llm:\n"
+        "        llm_api_key: 'sk-real-looking-key'\n"
+        "        model: 'gpt-4o-mini'\n", encoding="utf-8")
+    assert core_llm_config(tmp_path)[0] is True

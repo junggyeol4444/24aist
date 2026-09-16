@@ -239,5 +239,8 @@ def test_local_llm_is_reported_as_needing_a_running_server(tmp_path):
         "      ollama_llm:\n"
         "        base_url: 'http://localhost:11434/v1'\n"
         "        model: qwen2.5:latest\n", encoding="utf-8")
+    # 안 떠 있으면 '통과'가 아니다. 예전에는 "떠 있어야 합니다" 한 줄과
+    # 함께 OK 로 넘겼는데, 운영자는 점검을 통과한 줄 알고 방송을 켜고
+    # 방송인은 대답 대신 영어 오류 문구를 읽는다(실제 코어에서 확인).
     ok, msg = core_llm_config(tmp_path)
-    assert ok is True and "떠 있어야" in msg
+    assert ok is False and "안 떠 있습니다" in msg and "11434" in msg

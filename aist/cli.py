@@ -276,7 +276,7 @@ def cmd_check(args) -> int:
     print()
     if (blockers or not fe_ok or not conf_ok or not deps_ok or not py_ok
             or not proxy_ok or not fe_proxy_ok or not files_ok or not persona_ok
-            or token_notes or not llm_ok or hard_problems):
+            or token_notes or not llm_ok or not tts_ok or hard_problems):
         print("지금 상태로는 방송이 안 됩니다. 아래를 먼저 해결하세요:")
         if hard_problems:
             print("  - 위 '설정값 문제' 부터 고치세요 (config.yaml)")
@@ -297,6 +297,9 @@ def cmd_check(args) -> int:
         if not llm_ok:
             print("  - 코어 conf.yaml 의 LLM 설정을 채우세요 (안 채우면 방송인이 "
                   "대답을 못 합니다)")
+        if not tts_ok:
+            print("  - 코어 conf.yaml 의 TTS 설정/서버를 확인하세요 (안 하면 "
+                  "자막만 나가고 목소리가 안 납니다)")
         if not persona_ok:
             print(f"  - 페르소나 코어에 반영: {preflight.hint(*preflight.CMD_PERSONA)}")
         if not proxy_ok:
