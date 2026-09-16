@@ -248,6 +248,12 @@ class Memory:
         """직전 방송 한 줄 요약. 시작 공지/오프닝의 "저번에~" 재료."""
         # 지금 방송 중인 세션도 _sessions 에 들어 있다. 그건 '저번' 이 아니다.
         past = [s for s in self._sessions if s is not self._cur]
+        # 사고로 몇십 초 만에 끝난 회차(재시도 전 시도)도 세션으로 남는다.
+        # 그걸 "저번 방송" 으로 집으면 오프닝에서 "저번엔 아무도 없었어" 가
+        # 나간다. 아무도 안 온 방송은 회상할 거리도 없으므로 건너뛴다.
+        worth = [s for s in past if s.get("viewers") or s.get("superchats")
+                 or s.get("summary")]
+        past = worth or past
         if not past:
             return ""
         last = past[-1]

@@ -454,7 +454,7 @@ class Orchestrator:
                 obs, bridge, pipeline, pipeline_task, chat_stop,
                 start_dt, drain_task=drain_task,
                 transcript=transcript, game_task=game_task,
-                aborted=aborted, skip_end_announce=will_retry))
+                aborted=aborted, will_retry=will_retry))
         if aborted:
             return "aborted"
         return "retry" if will_retry else "normal"
@@ -470,7 +470,7 @@ class Orchestrator:
     async def _teardown(self, obs, bridge, pipeline, pipeline_task, chat_stop,
                         start_dt, drain_task=None, transcript=None,
                         game_task=None, aborted: bool = False,
-                        skip_end_announce: bool = False):
+                        will_retry: bool = False):
         # 채팅 파이프라인 정지 (취소 후 반드시 회수해서 태스크 누수 방지)
         if chat_stop is not None:
             chat_stop.set()
@@ -522,8 +522,11 @@ class Orchestrator:
         except Exception:
             log.exception("세션 기억 저장 실패(방송 종료는 계속)")
 
-        # 방송 후 리포트(다시보기 학습) — 실패해도 조용히 넘어감
-        if not aborted and self.cfg.logging.auto_report:
+        # 방송 후 리포트(다시보기 학습) — 실패해도 조용히 넘어감.
+        # 다시 켤 회차면 만들지 않는다. 15초 만에 끝난 시도마다 리포트와
+        # 컨텐츠 팩이 쌓이면, "하루 점검이 파일 하나로 끝나게" 한다는
+        # 목적이 그대로 깨진다(실제로 한 슬롯에 리포트 3개가 생겼다).
+        if not aborted and not will_retry and self.cfg.logging.auto_report:
             try:
                 generate_report(
                     self.memory, self.cfg.logging.reports_dir,
@@ -535,7 +538,7 @@ class Orchestrator:
                 log.exception("리포트 생성 실패(방송에는 영향 없음)")
 
         # 종료 후 컨텐츠 제작(2-2⑦): 하이라이트 후보·제목 초안
-        if not aborted and self.cfg.logging.auto_content:
+        if not aborted and not will_retry and self.cfg.logging.auto_content:
             try:
                 from .content import generate_content_pack
                 await asyncio.to_thread(
@@ -545,7 +548,7 @@ class Orchestrator:
             except Exception:
                 log.exception("컨텐츠 팩 생성 실패(방송에는 영향 없음)")
 
-        if not aborted and not skip_end_announce:
+        if not aborted and not will_retry:
             end_dt = _now(self.cfg.scheduler.timezone)
             await self._announce("end", end_dt)
         log.info("=== 방송 종료 ===")

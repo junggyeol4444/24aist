@@ -123,3 +123,23 @@ def test_checkpoint_writes_only_current_session(tmp_path):
     # 체크포인트가 전체 파일을 건드리지 않았어야 한다.
     assert m.sessions_file.stat().st_mtime_ns == before
     assert m.current_file.exists()
+
+
+def test_recent_summary_skips_failed_short_attempt(tmp_path):
+    """사고로 몇십 초 만에 끝난 회차를 "저번 방송" 으로 집으면 안 된다.
+
+    재시도가 생기면서 한 슬롯에 15초짜리 세션이 여러 개 남는다. 그걸
+    회상하면 오프닝에서 "저번엔 아무도 없었어" 가 나간다.
+    """
+    from aist.chat.base import ChatMessage
+    from aist.config import MemoryConfig
+    from aist.memory import Memory
+
+    m = Memory(MemoryConfig(path=str(tmp_path / "mem")))
+    m.start_session()                       # 제대로 된 방송
+    for who in ("가", "나", "다"):
+        m.note_chat(ChatMessage(who, "안녕", "chzzk"))
+    m.end_session()
+    m.start_session()                       # 15초 만에 끝난 시도
+    m.end_session()
+    assert "3명" in m.recent_summary()
