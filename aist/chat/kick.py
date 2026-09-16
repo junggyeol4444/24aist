@@ -72,10 +72,20 @@ class KickChat(ChatSource):
             try:
                 async with websockets.connect(_WS_URL, max_size=None) as ws:
                     self._ws = ws
-                    await ws.send(json.dumps({
-                        "event": "pusher:subscribe",
-                        "data": {"auth": "", "channel": f"chatrooms.{cid}.v2"},
-                    }))
+                    # Pusher 는 연결되면 먼저 pusher:connection_established 를
+                    # 보낸다. 그 전에 구독을 보내면 서버가 무시할 수 있고,
+                    # 그러면 연결은 멀쩡한데 채팅이 한 건도 안 들어온다.
+                    # 그래서 인사를 기다렸다가 구독한다(못 받으면 그냥 보낸다).
+                    subscribed = False
+                    try:
+                        first = await asyncio.wait_for(ws.recv(), timeout=5)
+                        if json.loads(first).get("event") == "pusher:connection_established":
+                            await self._subscribe(ws, cid)
+                            subscribed = True
+                    except (asyncio.TimeoutError, json.JSONDecodeError, TypeError):
+                        pass
+                    if not subscribed:
+                        await self._subscribe(ws, cid)
                     log.info("kick 채팅 연결됨 (channel=%s, chatroom=%s)", self.channel, cid)
                     async for raw in ws:
                         evt = json.loads(raw)
@@ -83,6 +93,10 @@ class KickChat(ChatSource):
                         if name == "pusher:ping":
                             await ws.send(json.dumps({"event": "pusher:pong", "data": {}}))
                             continue
+                        if name == "pusher:error":
+                            log.error("kick(Pusher) 오류: %s — 재연결합니다",
+                                      str(evt.get("data"))[:200])
+                            break
                         if name.endswith("ChatMessageEvent"):
                             parsed = _parse_chat_event(evt.get("data", ""))
                             if parsed and parsed[1]:
@@ -93,6 +107,13 @@ class KickChat(ChatSource):
                     break
                 log.warning("kick 연결 끊김: %s (재연결)", e)
                 await asyncio.sleep(3)
+
+    @staticmethod
+    async def _subscribe(ws, chatroom_id) -> None:
+        await ws.send(json.dumps({
+            "event": "pusher:subscribe",
+            "data": {"auth": "", "channel": f"chatrooms.{chatroom_id}.v2"},
+        }))
 
     async def probe(self) -> ProbeResult:
         if self.chatroom_id:
