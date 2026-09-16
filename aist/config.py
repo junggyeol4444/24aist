@@ -85,6 +85,10 @@ class ObsConfig:
     stream_check_sec: float = 60.0
     # 송출이 내려가 있으면 몇 번까지 다시 켜볼지. 0 이면 바로 방송 종료.
     stream_restart_max: int = 2
+    # OBS 자체가 응답하지 않을 때(프로그램이 죽었거나 꺼졌을 때)
+    # 몇 번까지 다시 붙어볼지. 다 실패하면 이번 방송을 내린다 —
+    # OBS 가 없으면 송출도 없다.
+    unreachable_max: int = 3
 
 
 @dataclass

@@ -97,11 +97,21 @@ def test_status_query_failure_does_not_block_stop():
 
 
 def test_not_connected_raises_obserror():
+    """켤 때는 반드시 실패로 알려야 한다 — 송출 없이 방송이 나가면 안 된다."""
     c = ObsController(ObsConfig())
     with pytest.raises(ObsError):
-        c.stop_stream()
-    with pytest.raises(ObsError):
         c.start_stream()
+
+
+def test_stop_stream_without_connection_is_not_an_error():
+    """내릴 때는 조용히 넘어간다 — 끌 게 없는 걸 사고로 보고할 일이 아니다.
+
+    OBS 가 죽어서 방송을 내리는 길에서 stop_stream 이 예외를 던지면,
+    뒷정리가 "OBS 에 먼저 connect() 해야 합니다" 를 ERROR 로 찍는다.
+    운영자에게는 프로그램이 잘못된 것처럼 보인다(실제 로그에서 그랬다).
+    """
+    c = ObsController(ObsConfig())
+    c.stop_stream()
 
 
 def test_start_stream_false_touches_nothing():

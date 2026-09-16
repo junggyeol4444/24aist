@@ -96,6 +96,7 @@ class Orchestrator:
         self._core_brain_dead = ""
         self._next_obs_check = 0.0
         self._obs_restarts = 0
+        self._obs_unreachable = 0
 
     def request_stop(self):
         self._stop.set()
@@ -228,6 +229,7 @@ class Orchestrator:
         self._core_brain_dead = ""
         self._next_obs_check = 0.0
         self._obs_restarts = 0
+        self._obs_unreachable = 0
         # 이전 방송이 남긴 중단 스위치가 있으면 지우고 시작한다(안 지우면
         # 다음 방송이 켜지자마자 다시 꺼진다).
         self.stop_flag.clear()
@@ -716,13 +718,31 @@ class Orchestrator:
             return True
         self._next_obs_check = now + oc.stream_check_sec
         try:
-            live = await asyncio.to_thread(obs.is_streaming)
+            state = await asyncio.to_thread(obs.stream_state)
         except Exception as e:  # noqa: BLE001 - 조회 실패는 치명적이지 않다
             log.debug("송출 상태 조회 실패(무시): %s", e)
             return True
-        if live is not False:
-            # True(정상) 또는 None(알 수 없음) — 모르는 걸로 방송을 내리지 않는다.
+        if state == "live":
             self._obs_restarts = 0
+            self._obs_unreachable = 0
+            return True
+        if state == "unreachable":
+            # OBS 가 아예 대답을 안 한다 = 프로그램이 죽었거나 꺼졌다.
+            # 인코더가 없으니 송출도 확실히 끊겼다. 다시 붙어보고,
+            # 계속 안 되면 내린다.
+            self._obs_unreachable += 1
+            if await asyncio.to_thread(obs.reconnect):
+                log.warning("OBS 가 대답이 없어 다시 붙었습니다(%d번째).",
+                            self._obs_unreachable)
+                self._obs_unreachable = 0
+                return True
+            if self._obs_unreachable >= max(1, oc.unreachable_max):
+                log.error("OBS 가 %d번 연속으로 대답이 없습니다 — 꺼졌거나 죽은 "
+                          "것으로 봅니다. OBS 가 없으면 송출도 없습니다 "
+                          "→ 이번 방송 종료", self._obs_unreachable)
+                return False
+            log.warning("OBS 가 대답이 없습니다(%d/%d) — 다시 붙는 중.",
+                        self._obs_unreachable, oc.unreachable_max)
             return True
         if self._obs_restarts >= oc.stream_restart_max:
             log.error("OBS 송출이 또 내려갔습니다(%d번 다시 켜봤습니다) — 스트림 키와 "

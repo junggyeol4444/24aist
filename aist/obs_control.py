@@ -145,6 +145,36 @@ class ObsController:
         """지금 송출 중인지(외부용). 알 수 없으면 None."""
         return self._is_streaming()
 
+    def stream_state(self) -> str:
+        """송출 상태를 세 가지로 구분한다: live | down | unreachable.
+
+        '못 물어봤다'와 '안 하고 있다'는 다르다. OBS 프로그램이 죽으면
+        물어볼 수조차 없는데, 그건 '모르겠다'가 아니라 '송출이 확실히
+        끊겼다'는 뜻이다(인코더가 없으니까). 예전에는 둘을 같이 None 으로
+        묶어서, OBS 를 꺼도 방송이 아무 말 없이 계속 돌았다.
+        """
+        if self._client is None:
+            return "unreachable"
+        try:
+            status = self._client.get_stream_status()
+        except Exception:  # noqa: BLE001 - 끊김·타임아웃 등 사유는 다양
+            return "unreachable"
+        return "live" if getattr(status, "output_active", False) else "down"
+
+    def reconnect(self) -> bool:
+        """끊긴 OBS 에 다시 붙어본다(꺼져 있으면 설정에 따라 켜기도 한다)."""
+        try:
+            self.close()
+        except Exception:  # noqa: BLE001
+            pass
+        self._client = None
+        try:
+            self.connect()
+            return True
+        except ObsError as e:
+            log.debug("OBS 재연결 실패: %s", e)
+            return False
+
     def start_stream(self):
         """스트림 시작. start_stream=false 면 (테스트 단계) 건너뛴다.
 
@@ -171,6 +201,12 @@ class ObsController:
     def stop_stream(self):
         if not self.cfg.start_stream:
             log.info("obs.start_stream=false → 스트림 종료도 운영자 수동(건너뜀)")
+            return
+        if self._client is None:
+            # OBS 가 죽어서 방송을 내리는 길로 들어온 경우다. 여기서
+            # "먼저 connect() 해야 합니다" 를 ERROR 로 찍으면 운영자에게는
+            # 프로그램이 잘못된 것처럼 보인다. 이미 아는 사실을 조용히 넘긴다.
+            log.info("OBS 연결이 이미 끊겨 있습니다 → 스트림 종료 생략")
             return
         cl = self._require()
         self._simulcast(start=False)
