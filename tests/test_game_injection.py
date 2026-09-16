@@ -107,3 +107,44 @@ def test_ordinary_words_about_games_are_fine():
     """'게임' 이라는 단어 자체를 막으면 안 된다 — 게임 방송이다."""
     text, _ = sanitize_incoming("오늘 게임 재밌었어요", "닉")
     assert text == "오늘 게임 재밌었어요"
+
+
+def test_repeated_game_events_do_not_drown_out_chat():
+    """health_low 같은 이벤트는 사이드카가 초당 여러 번 보낼 수 있다.
+
+    게임 상황 안내는 채팅 파이프라인('입 하나')을 거치지 않고 코어로 바로
+    가기 때문에, 막지 않으면 AI 가 게임 안내에 파묻혀 시청자 채팅에 반응을
+    못 한다. 실제로 50번 밀어넣어 보면 예전에는 50번 다 나갔다.
+    """
+    import asyncio
+
+    from aist.config import GameConfig
+    from aist.game.minecraft import MinecraftFeed
+
+    class _Bridge:
+        def __init__(self):
+            self.said = []
+
+        async def say_to_ai(self, text, source=None, platform=None, donation=None):
+            self.said.append(text)
+
+    async def run(cooldown):
+        bridge = _Bridge()
+        feed = MinecraftFeed(bridge, GameConfig(enabled=True,
+                                                event_cooldown_sec=cooldown))
+        for _ in range(50):
+            await feed._handle({"event": "health_low", "health": 3})
+        for _ in range(5):
+            await feed._handle({"event": "chat", "username": "Steve",
+                                "message": "안녕"})
+        cues = [t for t in bridge.said if "게임 상황" in t]
+        chats = [t for t in bridge.said if "안녕" in t]
+        return len(cues), len(chats)
+
+    cues, chats = asyncio.run(run(20.0))
+    assert cues == 1, f"같은 게임 이벤트가 {cues}번 나갔습니다"
+    assert chats == 5, "게임 채팅은 그대로 전달돼야 한다"
+
+    # 운영자가 0 으로 두면 예전처럼 전부 나간다(선택은 운영자 몫)
+    cues0, _ = asyncio.run(run(0))
+    assert cues0 == 50

@@ -46,6 +46,7 @@ class MinecraftFeed:
         self.on_event = on_event      # 트랜스크립트/기억 기록용 콜백(선택)
         self._closed = False
         self._ws = None
+        self._last_cue = {}          # 이벤트별 마지막 반응 시각(도배 방지)
 
     async def run(self, stop_event: asyncio.Event):
         """사이드카에 붙어 이벤트를 소비. stop_event 로 종료."""
@@ -105,6 +106,8 @@ class MinecraftFeed:
             return
 
         if event in self.cfg.react_events:
+            if not self._cue_allowed(event):
+                return
             cue = _EVENT_CUES.get(event)
             if cue is None:
                 # 모르는 이벤트 이름도 외부 입력이다 — 그대로 큐에 넣으면
@@ -112,6 +115,25 @@ class MinecraftFeed:
                 safe_event, _ = sanitize_incoming(str(event), "")
                 cue = f"(게임 상황: {safe_event})"
             await self._safe_say(cue)
+
+    def _cue_allowed(self, event: str) -> bool:
+        """같은 이벤트에 너무 자주 반응하지 않게 한다.
+
+        health_low 같은 이벤트는 사이드카가 초당 여러 번 보낼 수 있다.
+        게임 상황 안내는 채팅 파이프라인('입 하나')을 거치지 않고 코어로
+        바로 가기 때문에, 막지 않으면 AI 가 게임 안내에 파묻혀 시청자
+        채팅에 반응을 못 한다. 간격은 운영자가 정한다(0 이면 제한 없음).
+        """
+        cooldown = float(getattr(self.cfg, "event_cooldown_sec", 0) or 0)
+        if cooldown <= 0:
+            return True
+        import time as _t
+        now = _t.monotonic()
+        last = self._last_cue.get(event)
+        if last is not None and now - last < cooldown:
+            return False
+        self._last_cue[event] = now
+        return True
 
     async def _safe_say(self, text: str, source: Optional[str] = None,
                         platform: Optional[str] = None):

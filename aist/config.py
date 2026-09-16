@@ -334,6 +334,10 @@ class GameConfig:
     react_events: List[str] = field(default_factory=lambda: [
         "death", "respawn", "kicked", "health_low",
     ])
+    # 같은 게임 이벤트에 다시 반응하기까지의 최소 간격(초).
+    # health_low 같은 건 사이드카가 초당 여러 번 보낼 수 있는데, 그대로
+    # 흘리면 AI 가 게임 상황 안내에 파묻혀 시청자 채팅에 반응을 못 한다.
+    event_cooldown_sec: float = 20.0
 
 
 @dataclass
