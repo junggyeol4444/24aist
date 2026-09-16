@@ -168,3 +168,42 @@ def test_disk_full_checkpoint_does_not_flood_the_log(tmp_path, caplog, monkeypat
         for _ in range(40):
             m._save_current()
     assert len(caplog.records) == 5          # 1·3·10·20·40 회째만
+
+
+def test_broken_memory_file_is_kept_not_overwritten(tmp_path):
+    """깨진 기억 파일을 덮어쓰면 그동안 쌓인 기록이 통째로 사라진다.
+
+    예전에는 경고 한 줄 남기고 빈 상태로 시작한 뒤, 다음 저장에서 그 파일을
+    그대로 덮어썼다. 단골·후원·회차 기록을 되살릴 방법이 없어진다.
+    """
+    from aist.config import MemoryConfig
+    from aist.memory import Memory
+
+    mem = tmp_path / "mem"
+    mem.mkdir()
+    broken_text = '[{"start": "2026-01-01T00:00:00+00:00", "viewers": ["단골A"'
+    (mem / "sessions.json").write_text(broken_text, encoding="utf-8")
+
+    m = Memory(MemoryConfig(path=str(mem)))
+    assert m._sessions == []
+    m.start_session()
+    m.end_session()
+
+    spares = [p for p in mem.iterdir() if "깨짐" in p.name]
+    assert len(spares) == 1, sorted(p.name for p in mem.iterdir())
+    assert spares[0].read_text(encoding="utf-8") == broken_text
+    # 새 기억은 정상으로 쌓인다
+    assert len(Memory(MemoryConfig(path=str(mem)))._sessions) == 1
+
+
+def test_memory_file_with_wrong_shape_is_also_kept(tmp_path):
+    """문법은 맞는데 목록이 아닌 경우(예: 통째로 dict)도 마찬가지다."""
+    from aist.config import MemoryConfig
+    from aist.memory import Memory
+
+    mem = tmp_path / "mem"
+    mem.mkdir()
+    (mem / "sessions.json").write_text('{"세션": "아님"}', encoding="utf-8")
+    m = Memory(MemoryConfig(path=str(mem)))
+    assert m._sessions == []
+    assert any("깨짐" in p.name for p in mem.iterdir())

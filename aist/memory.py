@@ -68,13 +68,36 @@ class Memory:
             log.warning("chroma 초기화 실패(%s) → 키워드 검색으로 대체", e)
             return None
 
+    def _set_aside(self, path: Path, why: str) -> None:
+        """읽을 수 없게 된 파일을 덮어쓰지 말고 옆으로 치워둔다.
+
+        예전에는 못 읽으면 경고 한 줄 남기고 빈 상태로 시작했는데, 다음
+        저장에서 그 파일을 그대로 덮어썼다 — 그동안 쌓인 단골·후원·회차
+        기록이 통째로 사라지고 되살릴 방법도 없었다. 파일이 깨지는 건
+        드물지만(정전 중 쓰기·디스크 오류·메모장으로 열었다 저장) 한 번
+        일어나면 되돌릴 수 없는 손실이다.
+        """
+        stamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+        spare = path.with_name(f"{path.name}.깨짐-{stamp}")
+        try:
+            path.replace(spare)
+            log.error("%s: %s → %s 로 옮겨뒀습니다. 지우지 마세요 — "
+                      "안에 지난 기록이 남아 있을 수 있습니다.", path.name, why, spare.name)
+        except OSError as e:
+            log.error("%s: %s (옮겨두지도 못했습니다: %s)", path.name, why, e)
+
     def _load(self) -> List[Dict]:
-        if self.sessions_file.exists():
-            try:
-                return json.loads(self.sessions_file.read_text(encoding="utf-8"))
-            except (json.JSONDecodeError, OSError):
-                log.warning("기억 파일 읽기 실패 → 새로 시작")
-        return []
+        if not self.sessions_file.exists():
+            return []
+        try:
+            data = json.loads(self.sessions_file.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError) as e:
+            self._set_aside(self.sessions_file, f"기억 파일을 읽지 못했습니다({e})")
+            return []
+        if not isinstance(data, list):
+            self._set_aside(self.sessions_file, "기억 파일 형식이 목록이 아닙니다")
+            return []
+        return data
 
     def _load_current(self) -> Optional[Dict]:
         """비정상 종료로 남은 '진행 중이던 세션' 파일을 읽는다."""
@@ -82,8 +105,9 @@ class Memory:
             return None
         try:
             data = json.loads(self.current_file.read_text(encoding="utf-8"))
-        except (json.JSONDecodeError, OSError):
-            log.warning("진행 중이던 기억 파일을 읽지 못했습니다 → 무시")
+        except (json.JSONDecodeError, OSError) as e:
+            self._set_aside(self.current_file,
+                            f"진행 중이던 기억 파일을 읽지 못했습니다({e})")
             return None
         return data if isinstance(data, dict) and data.get("start") else None
 
