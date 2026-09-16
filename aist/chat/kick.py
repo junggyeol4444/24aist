@@ -16,7 +16,8 @@ import json
 import logging
 from typing import AsyncIterator, Optional
 
-from .base import ChatMessage, ChatSource, ProbeResult, probe_fail, probe_ok, probe_warn
+from .base import (ChatMessage, ChatSource, ProbeResult, RetryLog,
+                   import_problem, probe_fail, probe_ok, probe_warn)
 
 log = logging.getLogger("aist.chat.kick")
 
@@ -50,6 +51,8 @@ class KickChat(ChatSource):
         self.chatroom_id = chatroom_id
         self._ws = None
         self._closed = False
+        self._reconnect = RetryLog(log, "kick 연결 끊김", base=3.0)
+        self._retry = RetryLog(log, "kick chatroom id 획득 실패")
 
     def _fetch_chatroom_id(self) -> int:
         import requests
@@ -66,8 +69,12 @@ class KickChat(ChatSource):
             try:
                 cid = self.chatroom_id or await asyncio.to_thread(self._fetch_chatroom_id)
             except Exception as e:
-                log.error("kick chatroom id 획득 실패: %s (5초 후 재시도)", e)
-                await asyncio.sleep(5)
+                fatal = import_problem(e, "requests")
+                if fatal:
+                    log.error("%s", fatal)
+                    self.fatal = fatal
+                    return
+                await asyncio.sleep(self._retry.failure(e))
                 continue
             try:
                 async with websockets.connect(_WS_URL, max_size=None) as ws:
@@ -87,6 +94,8 @@ class KickChat(ChatSource):
                     if not subscribed:
                         await self._subscribe(ws, cid)
                     log.info("kick 채팅 연결됨 (channel=%s, chatroom=%s)", self.channel, cid)
+                    self._reconnect.success()
+                    self._retry.success()
                     async for raw in ws:
                         evt = json.loads(raw)
                         name = evt.get("event", "")
@@ -105,8 +114,9 @@ class KickChat(ChatSource):
             except Exception as e:
                 if self._closed:
                     break
-                log.warning("kick 연결 끊김: %s (재연결)", e)
-                await asyncio.sleep(3)
+                # 플랫폼이 점검 중이면 이 자리가 3초마다 영원히 돈다.
+                # 같은 사유는 간격을 늘리고 로그도 줄인다(회전 로그 보호).
+                await asyncio.sleep(self._reconnect.failure(e))
 
     @staticmethod
     async def _subscribe(ws, chatroom_id) -> None:

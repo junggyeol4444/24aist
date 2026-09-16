@@ -16,7 +16,8 @@ import asyncio
 import logging
 from typing import AsyncIterator, List, Optional, Tuple
 
-from .base import ChatMessage, ChatSource, ProbeResult, probe_fail, probe_ok, probe_warn
+from .base import (ChatMessage, ChatSource, ProbeResult, RetryLog,
+                   import_problem, probe_fail, probe_ok, probe_warn)
 
 log = logging.getLogger("aist.chat.soop")
 
@@ -85,6 +86,8 @@ class SoopChat(ChatSource):
         self.bj_id = bj_id
         self._ws = None
         self._closed = False
+        self._reconnect = RetryLog(log, "SOOP 연결 끊김", base=3.0)
+        self._retry = RetryLog(log, "SOOP 라이브 정보 획득 실패")
 
     def _fetch_live_info(self) -> dict:
         import requests
@@ -107,8 +110,12 @@ class SoopChat(ChatSource):
                 chatno = str(ch["CHATNO"])
                 url = f"{_WS_SCHEME}://{domain}:{port}/Websocket/{self.bj_id}"
             except Exception as e:
-                log.error("SOOP 라이브 정보 획득 실패: %s (5초 후 재시도)", e)
-                await asyncio.sleep(5)
+                fatal = import_problem(e, "requests")
+                if fatal:
+                    log.error("%s", fatal)
+                    self.fatal = fatal
+                    return
+                await asyncio.sleep(self._retry.failure(e))
                 continue
             try:
                 async with websockets.connect(url, subprotocols=["chat"],
@@ -118,6 +125,8 @@ class SoopChat(ChatSource):
                     await asyncio.sleep(0.3)
                     await ws.send(_join_packet(chatno))
                     log.info("SOOP 채팅 연결됨 (bj=%s, %s)", self.bj_id, url)
+                    self._reconnect.success()
+                    self._retry.success()
                     async for raw in ws:
                         text = raw.decode("utf-8", "ignore") if isinstance(raw, bytes) else raw
                         for frame in text.split(ESC):
@@ -130,8 +139,9 @@ class SoopChat(ChatSource):
             except Exception as e:
                 if self._closed:
                     break
-                log.warning("SOOP 연결 끊김: %s (재연결)", e)
-                await asyncio.sleep(3)
+                # 플랫폼이 점검 중이면 이 자리가 3초마다 영원히 돈다.
+                # 같은 사유는 간격을 늘리고 로그도 줄인다(회전 로그 보호).
+                await asyncio.sleep(self._reconnect.failure(e))
 
     async def probe(self) -> ProbeResult:
         try:

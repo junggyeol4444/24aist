@@ -97,6 +97,9 @@ class Orchestrator:
         self._next_obs_check = 0.0
         self._obs_restarts = 0
         self._obs_unreachable = 0
+        self._chat_source = None
+        self._chat_restarts = 0
+        self._chat_gave_up = False
 
     def request_stop(self):
         self._stop.set()
@@ -230,6 +233,9 @@ class Orchestrator:
         self._next_obs_check = 0.0
         self._obs_restarts = 0
         self._obs_unreachable = 0
+        self._chat_source = None
+        self._chat_restarts = 0
+        self._chat_gave_up = False
         # 이전 방송이 남긴 중단 스위치가 있으면 지우고 시작한다(안 지우면
         # 다음 방송이 켜지자마자 다시 꺼진다).
         self.stop_flag.clear()
@@ -273,6 +279,9 @@ class Orchestrator:
                 return
 
             def on_chat(msg):
+                # 채팅이 실제로 들어왔다 = 정말로 복구된 것이다.
+                # (소스를 만든 것만으로 '복구됨' 이라고 하면 안 된다)
+                self._chat_restarts = 0
                 self.memory.note_chat(msg)
                 if transcript is not None:
                     transcript.log_chat(msg)
@@ -328,6 +337,7 @@ class Orchestrator:
 
             try:
                 source = make_chat_source(cfg)
+                self._chat_source = source
                 pipeline_task = asyncio.create_task(pipeline.run(source, chat_stop))
             except Exception as e:
                 log.error("채팅 소스 시작 실패: %s — 채팅 없이 진행", e)
@@ -791,19 +801,40 @@ class Orchestrator:
         코어와 달리 채팅이 없어도 방송 자체는 굴러간다(혼잣말). 그래서
         실패해도 방송을 내리지 않는다. 대신 조용히 두지 않는다 —
         채팅 없는 방송은 이 기획의 핵심이 빠진 상태다.
+
+        다만 '다시 붙여본다'를 몇 초마다 영원히 하면 안 된다. 플랫폼이
+        점검 중이거나 채널 ID 가 틀리면 소스는 만들어지자마자 죽고, 그
+        자리가 8초마다 도는 무한 루프가 된다(실제 실행에서 90초에 로그
+        49줄이 쌓였다). 간격을 늘리고 로그는 줄인다.
         """
-        log.error("채팅 연결이 끊겼습니다 — 다시 붙여봅니다.")
         if pipeline_task is not None:
             pipeline_task.cancel()
             await asyncio.gather(pipeline_task, return_exceptions=True)
-        await self._sleep_or_stop(3)
+
+        # 재시도해도 안 고쳐지는 이유(패키지 미설치 등)로 죽었으면 그만둔다.
+        dead = getattr(self._chat_source, "fatal", "")
+        if dead:
+            if not self._chat_gave_up:
+                self._chat_gave_up = True
+                log.error("채팅을 살릴 수 없습니다: %s 방송은 혼잣말로 "
+                          "계속합니다.", dead)
+            return None
+
+        self._chat_restarts += 1
+        wait = min(60.0, 3.0 * (2 ** (self._chat_restarts - 1)))
+        if self._chat_restarts in (1, 3, 10) or self._chat_restarts % 20 == 0:
+            log.error("채팅 연결이 끊겼습니다 — %.0f초 뒤 다시 붙여봅니다"
+                      "(%d번째).", wait, self._chat_restarts)
+        await self._sleep_or_stop(wait)
         if self._stop.is_set():
             return None
         try:
             source = make_chat_source(cfg)
-            task = asyncio.create_task(pipeline.run(source, chat_stop))
-            log.info("채팅 연결 복구됨 (%s)", source.platform)
-            return task
+            self._chat_source = source
+            # 여기서 "복구됨" 이라고 쓰면 안 된다 — 소스를 만들었을 뿐,
+            # 채팅이 실제로 들어오는지는 아직 모른다. 실제로 못 붙는
+            # 상태에서도 "복구됨" 이 8초마다 찍혔다.
+            return asyncio.create_task(pipeline.run(source, chat_stop))
         except Exception as e:  # noqa: BLE001 - 플랫폼 사유 다양
             log.error("채팅 재연결 실패: %s — 채팅 없이 방송을 계속합니다"
                       "(혼잣말로 진행). 채팅이 필요하면 방송을 내리고 "

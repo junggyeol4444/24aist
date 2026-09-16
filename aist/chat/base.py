@@ -53,6 +53,10 @@ class ChatSource(abc.ABC):
     """
 
     platform: str = "base"
+    # 재시도해도 절대 안 고쳐지는 이유로 포기했을 때, 그 이유를 여기 남긴다.
+    # (예: 패키지 미설치) 오케스트레이터는 이게 차 있으면 다시 만들지
+    # 않는다 — 안 그러면 몇 초마다 같은 실패를 영원히 반복한다.
+    fatal: str = ""
 
     @abc.abstractmethod
     async def messages(self) -> AsyncIterator[ChatMessage]:
@@ -67,3 +71,54 @@ class ChatSource(abc.ABC):
         기본은 구성만 확인. 도달성 확인이 싼 플랫폼은 하위 클래스에서 override.
         """
         return probe_ok("구성됨(실제 연결은 broadcast-now 에서 확인)")
+
+
+class RetryLog:
+    """같은 실패가 반복될 때 로그와 재시도 간격을 알아서 줄인다.
+
+    플랫폼이 점검 중이거나 채널 ID 가 틀리면 연결은 영영 안 된다. 그런데
+    5초마다 같은 ERROR 를 찍으면 3시간 방송에서 같은 줄이 2천 개 넘게
+    쌓이고, 회전 로그가 밀려 정작 필요한 기록이 사라진다. 플랫폼 API 를
+    5초마다 3시간 두드리는 것도 좋은 일이 아니다(차단당한다).
+
+    - 간격은 base 에서 시작해 두 배씩, cap 까지만 늘린다.
+    - 같은 사유가 이어지면 1·3·10회째, 그 뒤로는 20회마다만 남긴다.
+    - 사유가 바뀌면 처음부터 다시 센다(새 정보니까 바로 알린다).
+    """
+
+    def __init__(self, log, what: str, base: float = 5.0, cap: float = 60.0):
+        self._log = log
+        self._what = what
+        self._base = max(0.5, base)
+        self._cap = max(self._base, cap)
+        self._n = 0
+        self._last = None
+
+    def failure(self, err: Exception) -> float:
+        """실패 한 번을 기록하고, 다음 시도까지 기다릴 초를 돌려준다."""
+        reason = f"{type(err).__name__}: {err}"
+        if reason != self._last:
+            self._last, self._n = reason, 0
+        self._n += 1
+        wait = min(self._cap, self._base * (2 ** (self._n - 1)))
+        if self._n in (1, 3, 10) or self._n % 20 == 0:
+            extra = f" — 같은 오류 {self._n}번째" if self._n > 1 else ""
+            self._log.error("%s: %s (%.0f초 후 재시도%s)",
+                            self._what, err, wait, extra)
+        return wait
+
+    def success(self) -> None:
+        self._n = 0
+        self._last = None
+
+
+def import_problem(err: Exception, package: str) -> Optional[str]:
+    """재시도해도 절대 안 고쳐지는 실패(패키지 미설치)인지.
+
+    문제면 운영자가 할 일이 적힌 문장을, 아니면 None 을 돌려준다.
+    """
+    if not isinstance(err, ImportError):
+        return None
+    return (f"{package} 가 설치되어 있지 않습니다 — `pip install {package}`. "
+            "다시 시도해도 고쳐지지 않으므로 이 채팅은 포기합니다 "
+            "(윈도우: windows\\설치.bat).")

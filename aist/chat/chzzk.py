@@ -16,7 +16,8 @@ import json
 import logging
 from typing import AsyncIterator, Optional
 
-from .base import ChatMessage, ChatSource, ProbeResult, probe_fail, probe_ok, probe_warn
+from .base import (ChatMessage, ChatSource, ProbeResult, RetryLog,
+                   import_problem, probe_fail, probe_ok, probe_warn)
 
 log = logging.getLogger("aist.chat.chzzk")
 
@@ -80,6 +81,8 @@ class ChzzkChat(ChatSource):
         self.channel_id = channel_id
         self._ws = None
         self._closed = False
+        self._reconnect = RetryLog(log, "치지직 연결 끊김", base=3.0)
+        self._retry = RetryLog(log, "치지직 토큰 획득 실패")
 
     def _fetch_tokens(self):
         """(chatChannelId, accessToken) 획득 — 블로킹(requests)."""
@@ -107,8 +110,12 @@ class ChzzkChat(ChatSource):
             try:
                 cid, token = await asyncio.to_thread(self._fetch_tokens)
             except Exception as e:
-                log.error("치지직 토큰 획득 실패: %s (5초 후 재시도)", e)
-                await asyncio.sleep(5)
+                fatal = import_problem(e, "requests")
+                if fatal:
+                    log.error("%s", fatal)
+                    self.fatal = fatal
+                    return
+                await asyncio.sleep(self._retry.failure(e))
                 continue
             try:
                 async with websockets.connect(_WS_URL, max_size=None) as ws:
@@ -120,6 +127,8 @@ class ChzzkChat(ChatSource):
                                 "accTkn": token, "auth": "READ"},
                     }))
                     log.info("치지직 채팅 연결됨 (channel=%s)", self.channel_id)
+                    self._reconnect.success()
+                    self._retry.success()
                     async for raw in ws:
                         data = json.loads(raw)
                         cmd = data.get("cmd")
@@ -139,8 +148,9 @@ class ChzzkChat(ChatSource):
             except Exception as e:
                 if self._closed:
                     break
-                log.warning("치지직 연결 끊김: %s (재연결)", e)
-                await asyncio.sleep(3)
+                # 플랫폼이 점검 중이면 이 자리가 3초마다 영원히 돈다.
+                # 같은 사유는 간격을 늘리고 로그도 줄인다(회전 로그 보호).
+                await asyncio.sleep(self._reconnect.failure(e))
 
     async def probe(self) -> ProbeResult:
         try:
