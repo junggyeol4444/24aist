@@ -50,6 +50,14 @@ obs:
   # 예(리눅스/맥): "obs --disable-shutdown-check"
   launch_command: ""
   launch_wait_sec: 20
+  # 방송 중 송출이 살아 있는지 확인하는 간격(초). 0 이면 끄기.
+  # OBS 는 스트림 키 오류·네트워크 문제로 혼자 송출을 내린다 — 그러면
+  # 방송인은 아무도 안 보는 데서 몇 시간을 떠든다.
+  stream_check_sec: 60
+  stream_restart_max: 2     # 내려가 있으면 몇 번까지 다시 켜볼지(0=바로 종료)
+  # OBS 자체가 대답을 안 할 때(프로그램이 죽었거나 꺼졌을 때) 몇 번까지
+  # 다시 붙어볼지. 다 실패하면 이번 방송을 내린다 — OBS 가 없으면 송출도 없다.
+  unreachable_max: 3
   # 영상 동출(다중 RTMP). obs-multi-rtmp 같은 플러그인이 있다는 가정.
   simulcast:
     enabled: false
@@ -84,6 +92,12 @@ scheduler:
   # 집 PC 는 절전에 든다. 깨어나 보니 예정보다 한참 지난 경우,
   # 그대로 시작하면 새벽에 "저녁 방송" 이 나간다. 0 이면 무조건 시작.
   late_start_grace_min: 30
+  # 방송이 사고로 일찍 끝났을 때(코어 유실·송출 내려감·두뇌 죽음) 같은
+  # 슬롯을 몇 번까지 다시 켤지. 0 이면 그날 방송은 그걸로 끝.
+  # 정상 종료(종료 판단이 내린 것)는 재시도하지 않는다.
+  retry_max: 3
+  retry_backoff_sec: 60      # 다시 켜기 전 대기(초)
+  retry_min_left_min: 20     # 원래 예정 종료까지 최소 이만큼 남아야 다시 켠다
 
 # --- 방송 진행 (핵심 루프) — 3단계. 채팅 처리 = '입 하나' 모델 ---
 # 말 안 하는 중이면 즉답, 말하는 중이면 쌓아뒀다가 말 끝나는 순간 전부
@@ -93,6 +107,17 @@ broadcast:
   artificial_delay_sec: 0          # 기본 0. 인위적 딜레이 넣지 않음.
   opening_greeting: true           # 방송 켜지면 방송인처럼 여는 인사로 시작
   core_busy_timeout_sec: 90        # 말 끝 신호 유실 시 잠금 해제 폴백(초)
+  # 아래 셋은 "방송은 도는데 시청자에게는 아무것도 안 가는" 상태를 잡는다.
+  # 전부 0 이면 끄기(음수는 넣지 마세요 — 점검에서 잡아줍니다).
+  #  - core_mute:  말 끝 신호가 연속으로 이만큼 안 오면 웹UI(OBS 브라우저
+  #                소스)가 코어에 안 붙은 것으로 보고 방송을 내린다.
+  #  - core_error: 코어가 LLM 오류 문구("Error calling the chat endpoint...")를
+  #                그대로 읽은 대화가 연속 이만큼이면 방송인의 두뇌가 죽은 것.
+  #  - tts_silent: 발화가 연속 이만큼 소리 없이(자막만) 나가면 TTS 가 죽은 것.
+  #                이건 알리기만 하고 방송은 계속한다(자막만 쓰는 운영자도 있다).
+  core_mute_max_strikes: 3
+  core_error_max_strikes: 3
+  tts_silent_max_strikes: 5
   # 혼잣말(진행자 모드): 방송인은 손님이 아니라 진행자다. 채팅이 없을수록
   # 조용해지는 게 아니라, 짧은 공백만 생겨도 말을 걸어 방송을 끌고 간다.
   idle_proactive_speak: true
@@ -143,6 +168,7 @@ announce:
   avoid_late_night: true            # 새벽 게시 회피
   late_night_window: ["01:00", "08:00"]
   style: "varied"                   # varied(매번 다르게) | fixed(고정 문구)
+  history_size: 8                   # 최근 이만큼의 문구는 피해서 다시 뽑는다
   fixed_start_template: "방송 시작했어요! {link}"
   fixed_end_template: "오늘 방송 끝! 다음에 또 봐요."
   link: ""                          # 방송 링크 (자동으로 못 채우면 여기)

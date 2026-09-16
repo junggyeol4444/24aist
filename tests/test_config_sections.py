@@ -95,3 +95,48 @@ def test_example_config_has_no_unknown_keys():
     example = Path(__file__).resolve().parents[1] / "config" / "config.example.yaml"
     cfg = load_config(example)
     assert cfg.unknown_keys == [], cfg.unknown_keys
+
+
+def test_every_setting_appears_in_the_example_file():
+    """운영자가 만지는 값은 전부 예시 파일에 있어야 한다.
+
+    config.py 첫 줄의 원칙이 그렇다("운영자가 만지는 모든 값은 YAML 에
+    있다"). 새 설정을 코드에만 추가하면 운영자는 그런 게 있는 줄도
+    모르고, 점검 메시지에 나오는 키를 자기 설정 파일에서 찾지 못한다.
+    (실제로 이번에 추가한 9개가 그 상태였다)
+
+    secrets.* 는 .env 에 들어가므로 제외한다.
+    """
+    import dataclasses
+    from pathlib import Path
+
+    from aist.config import Config
+
+    text = Path("config/config.example.yaml").read_text(encoding="utf-8")
+
+    def walk(cls, prefix=""):
+        names = []
+        for f in dataclasses.fields(cls):
+            full = f"{prefix}{f.name}"
+            if dataclasses.is_dataclass(f.type):
+                names += walk(f.type, full + ".")
+            else:
+                names.append(full)
+        return names
+
+    skip = {"unknown_keys"}
+    missing = [n for n in walk(Config)
+               if not n.startswith("secrets.") and n not in skip
+               and n.rsplit(".", 1)[-1] not in text]
+    assert not missing, f"예시 파일에 안 적힌 설정: {missing}"
+
+
+def test_example_config_still_loads():
+    """예시 파일을 고치다 형식이 깨지면 안 된다."""
+    from aist.config import load_config
+
+    cfg = load_config("config/config.example.yaml")
+    assert cfg.obs.stream_check_sec > 0
+    assert cfg.scheduler.retry_max >= 0
+    assert cfg.broadcast.core_mute_max_strikes >= 0
+    assert not cfg.unknown_keys, cfg.unknown_keys
