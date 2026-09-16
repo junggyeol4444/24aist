@@ -35,8 +35,27 @@ class DiscordAnnouncer(Announcer):
         if not self.token or not self.cfg.channel_id:
             log.warning("디스코드 토큰/채널ID 미설정 → 공지 생략")
             return False
+        if not self._token_ok():
+            return False
         payload = self.build_payload(text, title)
         return await asyncio.to_thread(self._post_sync, payload)
+
+    def _token_ok(self) -> bool:
+        """토큰이 HTTP 헤더에 실릴 수 있는 값인지.
+
+        헤더는 latin-1 로만 보낼 수 있다. 토큰에 한글이나 특수문자가 섞이면
+        (메모장에서 라벨까지 같이 붙여넣는 실수가 흔하다) 요청이 나가지도
+        못하고 "'latin-1' codec can't encode characters" 만 세 번 반복된다.
+        운영자가 그 메시지로 고칠 방법은 없다.
+        """
+        try:
+            self.token.encode("latin-1")
+        except UnicodeEncodeError:
+            log.error("디스코드 토큰에 보낼 수 없는 문자가 섞여 있습니다"
+                      "(한글·따옴표 등) — .env 의 DISCORD_BOT_TOKEN 을 "
+                      "토큰 값만 남도록 다시 붙여넣으세요. 공지는 건너뜁니다.")
+            return False
+        return True
 
     def build_payload(self, text: str, title: str = "") -> dict:
         """게시 페이로드 구성 — 일반 텍스트 or 임베드(카드형)+이미지."""
@@ -67,6 +86,8 @@ class DiscordAnnouncer(Announcer):
             import requests  # noqa: F401 - 미설치 확인용
         except ImportError:
             log.error("requests 미설치: `pip install requests`")
+            return False
+        if not self._token_ok():
             return False
         return post_with_retry(lambda: self._post_once(payload), what="디스코드 공지")
 
