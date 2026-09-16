@@ -140,6 +140,13 @@ class EndJudge:
         pre_at = effective_end - timedelta(minutes=wd.pre_notice_minutes_before_end)
         if pre_at < self.min_end:
             pre_at = self.min_end
+        # 짧은 방송에서는 "종료 N분 전" 이 시작보다도 앞선다. 그대로 두면
+        # 방송 시작하자마자 "슬슬 마무리하자" 귓속말이 나가서, 남은 시간
+        # 내내 마무리 분위기로 돈다(10분 방송인데 1분 만에 마무리 인사).
+        # 예고는 아무리 일러도 방송 절반은 지나서 나가게 한다.
+        half = self.start + (effective_end - self.start) / 2
+        if pre_at < half:
+            pre_at = half
         if pre_at >= effective_end:
             span = (effective_end - self.start).total_seconds()
             gap = max(60.0, span * 0.2)          # 최소 1분, 보통 방송의 20%

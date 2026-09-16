@@ -162,3 +162,38 @@ def test_plan_preview_pre_notice_normal_config():
     pre = ej.pre_notice_at()
     # 보통 설정에서는 그대로 "종료 N분 전"
     assert (ej.planned_end - pre).total_seconds() / 60 == cfg.wind_down.pre_notice_minutes_before_end
+
+
+def test_short_broadcast_does_not_start_in_wind_down():
+    """10분 방송인데 시작하자마자 '슬슬 마무리하자' 가 나가면 안 된다.
+
+    기본 예고 시각은 '종료 20분 전' 이라, 20분보다 짧은 방송에서는 그 시각이
+    시작보다 앞선다. 그대로 두면 방송 내내 마무리 분위기로 돈다.
+    """
+    from datetime import datetime, timezone
+
+    from aist.config import EndJudgeConfig
+    from aist.end_judge import EndJudge, Phase
+
+    start = datetime(2026, 9, 16, 19, 0, tzinfo=timezone.utc)
+    ej = EndJudge(EndJudgeConfig(min_minutes=0, max_minutes=10, end_jitter_min=0), start)
+
+    assert ej.evaluate(start).phase is Phase.LIVE, "시작하자마자 마무리 예고였다"
+    pre = ej.pre_notice_at()
+    half = start + (ej.planned_end - start) / 2
+    assert pre >= half, f"예고가 방송 절반보다 이릅니다: {pre}"
+    assert ej.evaluate(pre).phase is Phase.PRE_NOTICE
+
+
+def test_normal_broadcast_keeps_the_configured_notice():
+    """보통 설정(60/180분)에서는 예고 시각이 그대로 '종료 20분 전' 이어야 한다."""
+    from datetime import datetime, timezone
+
+    from aist.config import EndJudgeConfig
+    from aist.end_judge import EndJudge
+
+    start = datetime(2026, 9, 16, 19, 0, tzinfo=timezone.utc)
+    cfg = EndJudgeConfig(min_minutes=60, max_minutes=180, end_jitter_min=0)
+    ej = EndJudge(cfg, start)
+    gap = (ej.planned_end - ej.pre_notice_at()).total_seconds() / 60
+    assert gap == cfg.wind_down.pre_notice_minutes_before_end
