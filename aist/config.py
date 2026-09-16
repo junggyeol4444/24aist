@@ -546,12 +546,36 @@ def _build(cls, data: Any, path: str = "", unknown: Any = None):
     return cls(**kwargs)
 
 
+def suggest_key(name: str, known) -> str:
+    """오타로 보이는 이름에 가장 그럴듯한 정답 하나를 돌려준다(없으면 "").
+
+    difflib 만 쓰면 'speech_style' → 'speech_habits' 같은, 운영자가 실제로
+    많이 내는 오타를 놓친다(기본 cutoff 0.7 에서 안 걸린다). 그렇다고 더
+    낮추면 'age' → 'name' 처럼 엉뚱한 걸 자신 있게 알려준다.
+    그래서 0.6 까지만 낮추고, 대신 앞부분이 겹치는 이름을 따로 본다
+    ('age' → 'age_range', 'habits' → 'speech_habits').
+    """
+    import difflib
+    known = list(known)
+    close = difflib.get_close_matches(str(name), known, n=1, cutoff=0.6)
+    if close:
+        return close[0]
+    low = str(name).lower()
+    if len(low) < 3:
+        return ""
+    for k in known:
+        kl = k.lower()
+        if kl.startswith(low) or low.startswith(kl) or low in kl.split("_"):
+            return k
+    return ""
+
+
 def _unknown_note(full_key: str, known) -> str:
     """모르는 키 한 줄 안내(비슷한 이름이 있으면 같이 알려준다)."""
     name = full_key.rsplit(".", 1)[-1]
-    close = difflib.get_close_matches(name, list(known), n=1, cutoff=0.7)
+    close = suggest_key(name, known)
     if close:
-        return f"{full_key} (혹시 {close[0]} 인가요?)"
+        return f"{full_key} (혹시 {close} 인가요?)"
     return full_key
 
 

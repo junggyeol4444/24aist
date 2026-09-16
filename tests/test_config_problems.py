@@ -285,3 +285,46 @@ def test_check_does_not_declare_failure_for_non_blocking_only(tmp_path, monkeypa
     assert "방송이 안 됩니다" not in out, out
     assert "channel_id" in out          # 알리기는 한다
     assert rc == 0
+
+
+# --------------- 오타 난 키에 정답을 알려주기 ---------------
+def test_suggests_the_right_key_for_common_typos():
+    """difflib 기본값(0.7)만으로는 실제로 많이 내는 오타를 놓친다.
+
+    운영자는 이 파일들을 메모장으로 직접 고친다. 'speech_style' 이라고
+    적어놓고 왜 말투가 반영이 안 되는지 모르는 상태가 제일 나쁘다.
+    """
+    from aist.config import suggest_key
+
+    keys = ["name", "age_range", "gender", "personality", "speech_habits",
+            "likes", "dislikes", "taboos", "background", "concept",
+            "reaction_directions", "example_lines"]
+    assert suggest_key("speech_style", keys) == "speech_habits"
+    assert suggest_key("age", keys) == "age_range"       # 앞부분 겹침
+    assert suggest_key("habits", keys) == "speech_habits"
+    assert suggest_key("tabu", keys) == "taboos"
+    assert suggest_key("dislike", keys) == "dislikes"
+
+
+def test_suggestion_stays_quiet_when_it_would_be_a_wild_guess():
+    """짐작이 안 되면 엉뚱한 답을 자신 있게 말하지 않는다."""
+    from aist.config import suggest_key
+
+    keys = ["name", "age_range", "personality", "taboos"]
+    assert suggest_key("never_say", keys) == ""
+    assert suggest_key("xyzzy", keys) == ""
+    assert suggest_key("ab", keys) == ""                  # 너무 짧으면 접두사 금지
+
+
+def test_renamed_setting_points_at_the_new_name(tmp_path):
+    """이 프로젝트가 직접 바꾼 이름도 알려줘야 한다.
+
+    idle_speak_min_sec → idle_gap_min_sec 로 바뀌었는데, 예전 설정을
+    그대로 쓰면 값이 조용히 무시된다.
+    """
+    from aist.config import load_config
+
+    p = tmp_path / "c.yaml"
+    p.write_text("broadcast:\n  idle_speak_min_sec: 5\n", encoding="utf-8")
+    cfg = load_config(str(p))
+    assert any("idle_gap_min_sec" in n for n in cfg.unknown_keys), cfg.unknown_keys

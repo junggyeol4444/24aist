@@ -101,8 +101,9 @@ class Persona:
         notes: List[str] = []
         for key, value in data.items():
             if key not in types:
-                close = difflib.get_close_matches(str(key), list(types), n=1, cutoff=0.7)
-                hint = f" (혹시 {close[0]}?)" if close else ""
+                from .config import suggest_key
+                close = suggest_key(str(key), types)
+                hint = f" (혹시 {close}?)" if close else ""
                 notes.append(f"모르는 항목 '{key}' 는 무시됩니다{hint}")
                 continue
             default = types[key].default_factory() if callable(
