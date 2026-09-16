@@ -128,3 +128,53 @@ def test_stop_stream_is_quiet_when_obs_already_gone(caplog):
     with caplog.at_level(logging.INFO, logger="aist.obs"):
         o.stop_stream()          # 예외도, ERROR 도 없어야 한다
     assert not [r for r in caplog.records if r.levelno >= logging.WARNING]
+
+
+def test_no_obs_connection_when_operator_runs_the_stream(tmp_path, monkeypatch):
+    """송출도 안 하고 OBS 를 켜지도 않는 설정이면 OBS 에 붙지 않는다.
+
+    "OBS 를 건드리지 않는다" 고 적힌 리허설 첫 화면에 빨간
+    "OBS 시작 실패: Connection refused" 가 떴다. 처음 켜보는 운영자는
+    뭐가 크게 망가진 줄 안다.
+    """
+    import asyncio
+
+    import aist.orchestrator as orch_mod
+    from aist.config import Config, MemoryConfig, SafetyConfig
+    from aist.orchestrator import Orchestrator
+    from aist.persona import Persona
+
+    cfg = Config(memory=MemoryConfig(path=str(tmp_path / "m")),
+                 safety=SafetyConfig(stop_flag_path=str(tmp_path / "STOP")))
+    cfg.obs.start_stream = False
+    cfg.obs.launch_if_not_running = False
+    cfg.vtuber.reconnect = False          # 코어 연결 재시도로 테스트가 느려지지 않게
+    cfg.vtuber.connect_timeout_sec = 0.1
+    cfg.announce.on_start = cfg.announce.on_end = False
+    cfg.logging.dir = str(tmp_path / "logs")
+    cfg.logging.transcript = False
+    cfg.logging.auto_report = cfg.logging.auto_content = False
+
+    touched = []
+
+    class _Obs:
+        def __init__(self, _cfg):
+            pass
+
+        def connect(self):
+            touched.append("connect")
+
+        def start_stream(self):
+            touched.append("start")
+
+        def stop_stream(self):
+            pass
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr(orch_mod, "ObsController", _Obs)
+    o = Orchestrator(cfg, Persona())
+    o.request_stop()                 # 방송은 바로 접는다 — OBS 만 본다
+    asyncio.run(o._run_broadcast())
+    assert touched == []

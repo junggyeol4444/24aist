@@ -256,11 +256,20 @@ class Orchestrator:
                 await self._announce("start", start_dt)
 
             # 2) OBS 시작
-            try:
-                obs.connect()
-                obs.start_stream()
-            except ObsError as e:
-                log.error("OBS 시작 실패: %s (start_stream=false 면 정상)", e)
+            #
+            # 송출도 안 하고 OBS 를 켜지도 않는 설정(리허설·테스트 단계)이면
+            # 애초에 붙지 않는다. 예전에는 무조건 붙어보고 실패해서, "OBS 를
+            # 건드리지 않는다"고 적힌 리허설 첫 화면에 빨간 ERROR 가 떴다 —
+            # 처음 켜보는 운영자는 뭐가 크게 망가진 줄 안다.
+            if not cfg.obs.start_stream and not cfg.obs.launch_if_not_running:
+                log.info("obs.start_stream=false → OBS 에 붙지 않습니다"
+                         "(송출은 운영자 수동).")
+            else:
+                try:
+                    obs.connect()
+                    obs.start_stream()
+                except ObsError as e:
+                    log.error("OBS 시작 실패: %s", e)
             # 송출 감시의 첫 확인은 조금 뒤에 한다. StartStream 이 돌아와도
             # OBS 가 실제로 '송출 중'으로 바뀌는 데는 몇 초가 걸린다 —
             # 곧바로 물어보면 멀쩡한 방송을 '내려갔다'고 오해한다.

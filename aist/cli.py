@@ -94,18 +94,31 @@ def _setup_file_logging(log_cfg) -> None:
         handler.setFormatter(logging.Formatter(
             "%(asctime)s %(levelname)s %(name)s: %(message)s"))
         root = logging.getLogger()
-        # 중복 부착 방지(명령 여러 번 호출 시)
-        if not any(isinstance(h, RotatingFileHandler) for h in root.handlers):
-            root.addHandler(handler)
+        # 이미 붙어 있으면 떼고 새로 붙인다. 리허설처럼 로그 경로를 나중에
+        # 바꾸는 경우가 있는데, 그냥 두면 리허설 로그가 실제 방송 로그
+        # 파일에 섞여 들어간다(실제로 그랬다).
+        for h in list(root.handlers):
+            if isinstance(h, RotatingFileHandler):
+                root.removeHandler(h)
+                h.close()
+        root.addHandler(handler)
     except OSError as e:
         logging.getLogger("aist").warning("파일 로그 설정 실패: %s", e)
 
 
-def _load(args):
+def _load(args, file_log: bool = False):
+    """설정·페르소나를 읽는다.
+
+    file_log 는 '이 명령이 방송을 돌리는가' 다. 점검·미리보기 같은 명령이
+    방송 로그 파일에 끼어들면, 방송 기록을 되짚을 때 그 줄들이 섞여서
+    무슨 일이 있었는지 알 수 없게 된다(실제로 방송 중에 aist check 를
+    돌렸더니 그 줄이 방송 로그 한가운데에 남았다).
+    """
     from .config import load_config
     from .persona import Persona
     cfg = load_config(args.config)
-    _setup_file_logging(cfg.logging)
+    if file_log:
+        _setup_file_logging(cfg.logging)
     if Path(args.persona).exists():
         persona = Persona.load(args.persona)
     else:
@@ -674,16 +687,28 @@ async def _run_with_signals(orch, coro_name: str) -> None:
                 pass
 
 
-def _acquire_single(cfg):
+def _acquire_single(cfg, rehearsal: bool = False):
     """중복 실행 잠금. 이미 돌고 있으면 None 을 돌려준다(그리고 안내 출력).
 
     같은 방송을 두 번 켜면 AI 가 채팅마다 두 번 말하고, 먼저 끝난 쪽이
     OBS 송출을 내려 아직 방송 중인 쪽 화면이 꺼진다.
+
+    리허설도 같은 잠금을 쓴다. 리허설은 송출·공지를 안 하니 안전해
+    보이지만, 코어에는 진짜로 붙어서 가짜 채팅을 밀어 넣는다 — 방송
+    중에 돌리면 시청자 화면에서 방송인이 보이지도 않는 시청자에게
+    떠들기 시작한다. 실제로 재보니 발화 수가 두 배가 됐다.
     """
     from .single_instance import InstanceLock, lock_path_for
     lock = InstanceLock(lock_path_for(cfg.safety.stop_flag_path))
     if lock.acquire():
         return lock
+    if rehearsal:
+        print("지금 방송이 돌고 있어서 리허설을 시작하지 않습니다.")
+        print("  리허설은 송출은 안 하지만 코어에는 진짜로 붙어서 가짜 채팅을")
+        print("  밀어 넣습니다 — 방송 중이면 방송인이 보이지도 않는 시청자에게")
+        print("  떠드는 게 시청자 화면에 그대로 나갑니다.")
+        print("  방송이 끝난 뒤에 다시 하세요 (지금 끝내려면: aist stop).")
+        return None
     print("이미 방송 프로그램이 돌고 있습니다 — 이 창은 그냥 닫으세요.")
     print("  같은 방송을 두 번 켜면 AI 가 채팅마다 두 번 말하고,")
     print("  먼저 끝나는 쪽이 OBS 송출을 내려 화면이 꺼집니다.")
@@ -693,7 +718,7 @@ def _acquire_single(cfg):
 
 def cmd_broadcast_now(args) -> int:
     from .orchestrator import Orchestrator
-    cfg, persona = _load(args)
+    cfg, persona = _load(args, file_log=True)
     if not _gate(cfg, getattr(args, "force", False)):
         return 1
     lock = _acquire_single(cfg)
@@ -782,7 +807,7 @@ def cmd_rehearse(args) -> int:
     송출은 하지 않는다(OBS 를 건드리지 않고 공지도 보내지 않는다).
     """
     from .orchestrator import Orchestrator
-    cfg, persona = _load(args)
+    cfg, persona = _load(args, file_log=True)
 
     # 리허설은 '진짜로 나가는 것'을 전부 끈다. 실수로 송출/공지가 나가면 안 된다.
     cfg.platform = "rehearsal"
@@ -813,7 +838,10 @@ def cmd_rehearse(args) -> int:
     cfg.logging.dir = str(reh / "logs")
     cfg.logging.reports_dir = str(reh / "reports")
     cfg.logging.content_dir = str(reh / "content")
-    print(f"  산출물(기억/리포트/트랜스크립트)은 {reh}/ 에만 씁니다 — "
+    # 로그 파일도 리허설 폴더로 옮긴다. _load 가 이미 실제 로그 경로로
+    # 붙여놨는데, 그냥 두면 리허설 기록이 실제 방송 로그에 섞여 들어간다.
+    _setup_file_logging(cfg.logging)
+    print(f"  산출물(기억/리포트/트랜스크립트/로그)은 {reh}/ 에만 씁니다 — "
           "실제 기억은 건드리지 않습니다.")
 
     # 코어 연결만은 진짜여야 의미가 있다.
@@ -823,6 +851,12 @@ def cmd_rehearse(args) -> int:
         print('  pip install -e ".[vtuber]"')
         return 1
 
+    # 리허설도 방송과 같은 잠금을 잡는다 — 방송 중에 끼어들면 시청자
+    # 화면에 그대로 나간다(잠금 경로는 리허설 폴더가 아니라 실제 설정 것).
+    lock = _acquire_single(cfg, rehearsal=True)
+    if lock is None:
+        return 1
+
     print(f"리허설 시작 — 약 {args.minutes}분 + 마무리 약 1분. 송출/공지 없음, 가짜 채팅.")
     print(f"  코어: {cfg.vtuber.ws_url} (먼저 띄워두세요)\n")
     orch = Orchestrator(cfg, persona)
@@ -830,13 +864,15 @@ def cmd_rehearse(args) -> int:
         asyncio.run(_run_with_signals(orch, "run_one_now"))
     except KeyboardInterrupt:
         print("\n중단됨")
+    finally:
+        lock.release()
     print("\n리허설 끝. 위 흐름이 어색하면 persona.yaml / config.yaml 을 다듬으세요.")
     return 0
 
 
 def cmd_run(args) -> int:
     from .orchestrator import Orchestrator
-    cfg, persona = _load(args)
+    cfg, persona = _load(args, file_log=True)
     if not _gate(cfg, getattr(args, "force", False)):
         return 1
     lock = _acquire_single(cfg)
