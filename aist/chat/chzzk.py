@@ -21,6 +21,8 @@ from .base import ChatMessage, ChatSource, ProbeResult, probe_fail, probe_ok, pr
 log = logging.getLogger("aist.chat.chzzk")
 
 _CMD = {"ping": 0, "pong": 10000, "connect": 100, "chat": 93101, "donation": 93102}
+# 채팅 서버 주소(테스트에서 바꿔 끼울 수 있게 상수로 둔다)
+_WS_URL = "wss://kr-ss1.chat.naver.com/chat"
 _UA = {"User-Agent": "Mozilla/5.0", "Accept": "application/json"}
 
 
@@ -109,8 +111,7 @@ class ChzzkChat(ChatSource):
                 await asyncio.sleep(5)
                 continue
             try:
-                async with websockets.connect("wss://kr-ss1.chat.naver.com/chat",
-                                              max_size=None) as ws:
+                async with websockets.connect(_WS_URL, max_size=None) as ws:
                     self._ws = ws
                     await ws.send(json.dumps({
                         "ver": "2", "cmd": _CMD["connect"], "svcid": "game",
