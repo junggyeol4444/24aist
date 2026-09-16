@@ -42,6 +42,7 @@ class ChatPipeline:
         safety: Optional[SafetyConfig] = None,
         on_send_error: Optional[Callable[[Exception], None]] = None,
         on_source_ended: Optional[Callable[[], None]] = None,
+        on_core_mute: Optional[Callable[[], None]] = None,
     ):
         self.bridge = bridge
         self.cfg = cfg
@@ -53,6 +54,9 @@ class ChatPipeline:
         # 채팅이 '안 오는 것'과 소스가 '죽은 것'은 다르다 — 전자는 정상이고
         # (혼잣말로 방송을 끌고 간다) 후자는 사고다.
         self.on_source_ended = on_source_ended
+        # 코어가 '말을 끝냈다'는 신호를 연속으로 못 줄 때 알린다.
+        # = 시청자에게 소리·자막이 안 나가는 상태(웹UI 미접속).
+        self.on_core_mute = on_core_mute
         # 같은 전송 오류를 매 채팅마다 트레이스백으로 찍으면 로그가 폭발한다.
         self._send_fail_streak = 0
         # 종료판단(채팅 저조/눈치 종료)에 쓰는 공유 상태. tz-aware UTC.
@@ -63,6 +67,8 @@ class ChatPipeline:
         self._core_busy = False
         self._busy_since = 0.0
         self._busy_timeouts = 0           # 말 끝 신호가 안 온 횟수(진단용)
+        self._busy_streak = 0             # 그 중 '연속으로' 안 온 횟수
+        self._mute_reported = False       # 벙어리 상태를 이미 알렸는지
         self._pending: List[ChatMessage] = []
         self._include_platform = False    # 동출일 때만 플랫폼 표기
         # 진행자 혼잣말: 이번 조용한 구간에 말 걸 목표 시각(발화/채팅 후 재설정)
@@ -85,6 +91,8 @@ class ChatPipeline:
             self._busy_since = time.monotonic()
         elif text == "conversation-chain-end":
             self._core_busy = False
+            # 한 번이라도 제대로 끝났으면 '연속 실패'는 끊긴 것이다.
+            self._busy_streak = 0
 
     def core_reconnected(self) -> None:
         """코어에 다시 붙었다 — '말하는 중' 상태를 푼다.
@@ -99,6 +107,7 @@ class ChatPipeline:
             log.info("코어 재연결 — 끊기기 전 발화는 끝난 것으로 보고 채팅을 다시 흘립니다.")
         self._core_busy = False
         self._busy_since = 0.0
+        self._busy_streak = 0
 
     def is_speaking(self) -> bool:
         return self._core_busy
@@ -186,6 +195,7 @@ class ChatPipeline:
             # 즉 이게 계속 나면 웹UI(OBS 브라우저 소스)가 코어에 안 붙어
             # 있다는 뜻이고, 그건 시청자에게 소리·자막이 안 나간다는 뜻이다.
             self._busy_timeouts += 1
+            self._busy_streak += 1
             if self._busy_timeouts in (1, 5) or self._busy_timeouts % 20 == 0:
                 log.warning(
                     "말이 끝났다는 신호가 %.0f초 동안 안 왔습니다(%d번째). "
@@ -200,6 +210,22 @@ class ChatPipeline:
             # 끼어들기 신호를 보내면 코어가 그 대화를 취소하고 큐가 풀린다.
             self._unstick_core()
             self._core_busy = False
+            # 끼어들기로 큐만 풀어주고 계속 도는 건 반쪽짜리다. 웹UI 가 안
+            # 붙어 있으면 그 뒤로도 영영 소리가 안 나가는데, 방송은 조용한
+            # 화면만 몇 시간씩 내보내게 된다. 연속으로 이 지경이면 끊긴
+            # 코어와 똑같이 취급한다 — 조용히 송출하느니 내리는 게 낫다.
+            limit = self.cfg.core_mute_max_strikes
+            if (limit and self._busy_streak >= limit
+                    and not self._mute_reported and self.on_core_mute):
+                self._mute_reported = True
+                log.error(
+                    "말 끝 신호가 %d번 연속으로 안 왔습니다 — 시청자에게 소리·자막이 "
+                    "나가지 않는 상태로 봅니다. 이번 방송을 내립니다.",
+                    self._busy_streak)
+                try:
+                    self.on_core_mute()
+                except Exception as e:  # noqa: BLE001 - 콜백 사고가 방송을 깨지 않게
+                    log.debug("on_core_mute 콜백 실패: %s", e)
             return False
         return True
 

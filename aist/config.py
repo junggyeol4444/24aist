@@ -123,6 +123,9 @@ class BroadcastConfig:
     opening_greeting: bool = True
     # 코어의 말 끝(chain-end) 신호가 유실됐을 때 잠금 해제 폴백(초)
     core_busy_timeout_sec: float = 90.0
+    # 말 끝 신호가 연속으로 이만큼 안 오면 "코어가 입만 벙긋하고 있다"로
+    # 본다 — 웹UI(OBS 브라우저 소스)가 안 붙은 상태. 0 이면 끄기.
+    core_mute_max_strikes: int = 3
     # 혼잣말(진행자 모드): 방송인은 손님이 아니라 진행자다. 채팅이 없으면
     # 오히려 말을 더 걸어 방송을 끌고 간다. 말하는 중엔 안 하고, 마지막
     # 발화/채팅 이후 idle_min~idle_max 사이 짧은 공백만 생겨도 말을 잇는다.

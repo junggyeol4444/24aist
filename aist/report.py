@@ -80,8 +80,11 @@ def generate_report(
     s = memory._sessions[-1]
 
     lines: List[str] = []
-    start = _to_local(s.get("start", "?"), tz_name)
-    end = _to_local(s.get("end", "?"), tz_name)
+    start = _to_local(s.get("start") or "?", tz_name)
+    # 종료 시각이 비어 있다 = 종료 절차를 못 밟고 프로세스가 죽었다는 뜻.
+    # (정전·강제 재부팅·무인운영 재시작) 운영자가 알아야 하는 사실이다.
+    raw_end = s.get("end")
+    end = _to_local(raw_end, tz_name) if raw_end else "기록 없음 — 방송이 비정상 종료된 것으로 보입니다"
     lines.append(f"# 방송 리포트 — {start[:16]}")
     lines.append("")
     lines.append(f"- 시작: {start}")

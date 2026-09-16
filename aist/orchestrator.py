@@ -88,6 +88,7 @@ class Orchestrator:
         # 방송 한 사이클 안에서만 쓰는 상태
         self._core_lost = False
         self._chat_source_dead = False
+        self._core_mute = False
 
     def request_stop(self):
         self._stop.set()
@@ -193,6 +194,7 @@ class Orchestrator:
         aborted = False
         self._core_lost = False
         self._chat_source_dead = False
+        self._core_mute = False
         # 이전 방송이 남긴 중단 스위치가 있으면 지우고 시작한다(안 지우면
         # 다음 방송이 켜지자마자 다시 꺼진다).
         self.stop_flag.clear()
@@ -244,9 +246,15 @@ class Orchestrator:
                 # 전자는 정상(혼잣말로 끌고 감), 후자는 사고다.
                 self._chat_source_dead = True
 
+            def on_core_mute():
+                # 코어는 붙어 있는데 말이 시청자에게 안 나가는 상태
+                # (웹UI/OBS 브라우저 소스 미접속). 재연결로는 안 고쳐진다.
+                self._core_mute = True
+
             pipeline = ChatPipeline(bridge, cfg.broadcast, on_message=on_chat,
                                     safety=cfg.safety, on_send_error=on_send_error,
-                                    on_source_ended=on_source_ended)
+                                    on_source_ended=on_source_ended,
+                                    on_core_mute=on_core_mute)
 
             # 코어가 보내오는 메시지(자막·오디오·control 등)를 계속 읽는다.
             # 안 읽으면 websockets 수신 버퍼가 무한정 쌓여 장시간 방송에서
@@ -294,6 +302,16 @@ class Orchestrator:
                 # 코어가 죽었는지 확인하고, 살릴 수 있으면 살린다.
                 # 못 살리면 이번 방송을 내린다(끊긴 채 무음으로 계속 송출되는
                 # 것을 막는다. 프로세스가 끝나야 무인운영 재시작도 걸린다).
+                # 코어는 살아 있는데 말이 밖으로 안 나가는 상태 —
+                # 재연결로는 안 고쳐진다. 조용한 화면만 몇 시간 내보내느니
+                # 내리고, 무인운영 재시작이 운영자에게 보이게 한다.
+                if self._core_mute:
+                    log.error(
+                        "코어가 말을 해도 시청자에게 나가지 않는 상태입니다. "
+                        "웹UI(OBS 브라우저 소스)가 코어에 붙어 있는지, 코어 설정의 "
+                        "enable_proxy 가 켜져 있는지 확인하세요 → 이번 방송 종료")
+                    core_gone = True
+                    break
                 if self._core_lost:
                     if await self._recover_core(bridge):
                         self._core_lost = False

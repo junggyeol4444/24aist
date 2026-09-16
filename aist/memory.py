@@ -10,6 +10,7 @@ chroma 백엔드는 의미검색용 확장 자리(미연결 시 JSON 으로 동�
 
 import json
 import logging
+import time
 from collections import Counter
 from datetime import datetime, timezone
 from pathlib import Path
@@ -19,6 +20,10 @@ from .chat.base import ChatMessage
 from .config import MemoryConfig
 
 log = logging.getLogger("aist.memory")
+
+# 방송 중 기억을 디스크에 다시 쓰는 최소 간격(초). 너무 잦으면 긴 방송
+# 후반에 매 채팅마다 수백 KB 를 다시 쓰게 된다.
+_CHECKPOINT_SEC = 30.0
 
 
 def _now_iso() -> str:
@@ -33,6 +38,7 @@ class Memory:
         self.sessions_file = self.dir / "sessions.json"
         self._sessions: List[Dict] = self._load()
         self._cur: Optional[Dict] = None
+        self._last_save = 0.0
         # chroma 백엔드(선택): 의미검색용 색인. 실패하면 키워드 검색으로 대체.
         self._chroma = self._init_chroma() if cfg.backend == "chroma" else None
 
@@ -83,6 +89,14 @@ class Memory:
 
     # --- 세션 라이프사이클 --------------------------------------------------
     def start_session(self) -> None:
+        """방송 세션을 연다. 열자마자 디스크에도 남긴다.
+
+        예전에는 end_session() 에서만 저장해서, 방송 중에 프로세스가 죽으면
+        (정전·윈도우 강제 재부팅·무인운영 재시작) 그날 방송의 기억이 통째로
+        사라졌다. 24시간 무인 운영에서 크래시는 예외가 아니라 일상이다.
+        그래서 '시작 시점에 한 번 + 진행 중 주기적으로' 저장한다.
+        _cur 는 _sessions 안의 바로 그 객체라, 이후 변경은 저장만 하면 남는다.
+        """
         self._cur = {
             "start": _now_iso(),
             "end": None,
@@ -91,11 +105,23 @@ class Memory:
             "superchats": [],
             "summary": "",
         }
+        self._sessions.append(self._cur)
+        self._save()
+        self._last_save = time.monotonic()
+
+    def _checkpoint(self) -> None:
+        """진행 중인 세션을 가끔 디스크에 반영한다(크래시 대비)."""
+        now = time.monotonic()
+        if now - self._last_save < _CHECKPOINT_SEC:
+            return
+        self._last_save = now
+        self._save()
 
     def record_event(self, kind: str, **data) -> None:
         if self._cur is None:
             return
         self._cur["events"].append({"t": _now_iso(), "kind": kind, **data})
+        self._checkpoint()
 
     def note_chat(self, msg: ChatMessage) -> None:
         """채팅 한 줄을 기억에 반영(단골/슈퍼챗 추적). 파이프라인 콜백용."""
@@ -107,6 +133,7 @@ class Memory:
             self._cur["superchats"].append(
                 {"author": msg.author, "amount": msg.amount, "text": msg.text}
             )
+        self._checkpoint()
 
     def end_session(self, summary: str = "") -> None:
         if self._cur is None:
@@ -115,9 +142,13 @@ class Memory:
         if summary:
             self._cur["summary"] = summary
         session = self._cur
-        self._sessions.append(session)
+        # start_session() 이 이미 _sessions 에 넣어뒀다. 여기서 또 붙이면
+        # 같은 방송이 리포트·단골 집계에 두 번 잡힌다.
+        if not any(x is session for x in self._sessions):
+            self._sessions.append(session)
         self._cur = None
         self._save()
+        self._last_save = time.monotonic()
         self._index(session, len(self._sessions))
 
     def _session_text(self, s: Dict) -> str:
@@ -166,9 +197,11 @@ class Memory:
     # --- 회상 --------------------------------------------------------------
     def recent_summary(self) -> str:
         """직전 방송 한 줄 요약. 시작 공지/오프닝의 "저번에~" 재료."""
-        if not self._sessions:
+        # 지금 방송 중인 세션도 _sessions 에 들어 있다. 그건 '저번' 이 아니다.
+        past = [s for s in self._sessions if s is not self._cur]
+        if not past:
             return ""
-        last = self._sessions[-1]
+        last = past[-1]
         if last.get("summary"):
             return f"저번 방송 때 {last['summary']}"
         parts = []

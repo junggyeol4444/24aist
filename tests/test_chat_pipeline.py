@@ -204,3 +204,42 @@ def test_operator_can_raise_the_cap():
 def test_cap_warns_so_operator_notices(caplog):
     _send_and_get(_big_batch(500))
     assert any("쏟아져" in r.getMessage() for r in caplog.records)
+
+
+# ------------- 웹UI 미접속 = 시청자에게 소리가 안 나가는 상태 -------------
+def test_core_mute_reported_after_consecutive_timeouts():
+    """말 끝 신호가 연속으로 안 오면 '벙어리 방송'으로 보고 알려야 한다.
+
+    코어는 웹UI 가 '재생 끝났다'고 답해야 대화를 닫는다. 웹UI(OBS 브라우저
+    소스)가 안 붙어 있으면 코어는 붙어 있는데 시청자에게는 아무 소리도
+    안 나간다. 실제로 브라우저 없이 돌려보니 조용한 화면만 계속 나갔다.
+    """
+    from aist.chat_pipeline import ChatPipeline
+    from aist.config import BroadcastConfig
+
+    cfg = BroadcastConfig(core_busy_timeout_sec=0.0, core_mute_max_strikes=3)
+    fired = []
+    p = ChatPipeline(object(), cfg, on_core_mute=lambda: fired.append(1))
+    for _ in range(3):
+        p._mark_busy()
+        assert p._busy_now() is False     # 매번 타임아웃 처리
+    assert fired == [1]
+    # 한 번만 알린다(로그 폭발 방지)
+    p._mark_busy(); p._busy_now()
+    assert fired == [1]
+
+
+def test_core_mute_streak_resets_on_healthy_end():
+    """한 번이라도 정상적으로 말이 끝나면 연속 실패는 끊긴 것으로 본다."""
+    from aist.chat_pipeline import ChatPipeline
+    from aist.config import BroadcastConfig
+
+    cfg = BroadcastConfig(core_busy_timeout_sec=0.0, core_mute_max_strikes=3)
+    fired = []
+    p = ChatPipeline(object(), cfg, on_core_mute=lambda: fired.append(1))
+    for _ in range(2):
+        p._mark_busy(); p._busy_now()
+    p.on_core_message({"type": "control", "text": "conversation-chain-end"})
+    for _ in range(2):
+        p._mark_busy(); p._busy_now()
+    assert fired == []                    # 2회씩 끊겨 있으므로 아직 아니다
