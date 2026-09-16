@@ -89,8 +89,41 @@ class DiscordAnnouncer(Announcer):
             return False
         return post_with_retry(lambda: self._post_once(payload), what="디스코드 공지")
 
+    @staticmethod
+    def _retry_after(r) -> float | None:
+        """서버가 알려준 대기 시간(초). 없으면 None.
+
+        디스코드는 헤더 Retry-After(초)와 본문 retry_after(초, 소수)를
+        둘 다 준다. 둘 중 큰 값을 따른다 — 더 짧게 잡았다가 먼저 보내면
+        레이트 리밋 위반으로 세어져 계정·IP 가 더 오래 막힌다.
+        """
+        # 여기서 예외가 나면 안 된다. 응답 객체가 우리가 기대한 모양이
+        # 아니어도(테스트 대역, requests 버전 차이) 그건 '대기 시간을 모른다'
+        # 일 뿐인데, 예외로 터지면 바깥에서 네트워크 오류로 오인해서
+        # 재시도하면 안 될 4xx 까지 다시 보내게 된다.
+        vals = []
+        headers = getattr(r, "headers", None) or {}
+        try:
+            head = headers.get("Retry-After")
+        except Exception:  # noqa: BLE001
+            head = None
+        if head:
+            try:
+                vals.append(float(head))
+            except (TypeError, ValueError):
+                pass
+        try:
+            body = r.json()
+            if isinstance(body, dict) and body.get("retry_after") is not None:
+                vals.append(float(body["retry_after"]))
+        except Exception:  # noqa: BLE001 - 본문이 JSON 이 아닐 수 있다
+            pass
+        return max(vals) if vals else None
+
     def _post_once(self, payload: dict):
-        """(성공여부, 상태코드, 사유). 상태코드 None 이면 네트워크 예외."""
+        """(성공여부, 상태코드, 사유, 서버가 알려준 대기초).
+
+        상태코드 None 이면 네트워크 예외."""
         import requests
         url = f"{_API}/channels/{self.cfg.channel_id}/messages"
         headers = {"Authorization": f"Bot {self.token}"}
@@ -111,7 +144,7 @@ class DiscordAnnouncer(Announcer):
                                   json=payload, timeout=15)
             if r.status_code in (200, 201):
                 log.info("디스코드 공지 게시 완료")
-                return True, r.status_code, ""
-            return False, r.status_code, r.text[:200]
+                return True, r.status_code, "", None
+            return False, r.status_code, r.text[:200], self._retry_after(r)
         except Exception as e:  # noqa: BLE001 - 네트워크 사유 다양
-            return False, None, str(e)
+            return False, None, str(e), None

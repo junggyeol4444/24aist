@@ -148,3 +148,87 @@ def test_discord_does_not_retry_on_bad_channel(monkeypatch):
     ann = DiscordAnnouncer(DiscordAnnounce(channel_id=999), "token")
     assert ann._post_sync({"content": "x"}) is False
     assert calls["n"] == 1, "채널이 없는데 반복 시도했다"
+
+
+# --------- 서버가 "이만큼 기다려라" 고 하면 그 말을 따른다 ---------
+def test_retry_after_is_honored():
+    """레이트 리밋을 먼저 어기면 계정·IP 가 더 오래 막힌다.
+
+    실제로 디스코드 흉내 서버가 Retry-After: 7 을 줬는데 우리는 2초·4초
+    만에 다시 보냈다(측정: 6.1초 만에 세 번). 서버 말을 따라야 한다.
+    """
+    from aist.announce.retry import post_with_retry
+
+    waited = []
+    seq = [(False, 429, "rate", 7.0), (False, 429, "rate", 7.0), (True, 200, "", None)]
+    it = iter(seq)
+    assert post_with_retry(lambda: next(it), what="시험",
+                           sleep=waited.append) is True
+    assert waited == [7.0, 7.0]
+
+
+def test_our_backoff_wins_when_it_is_longer():
+    """서버가 아주 짧게 말해도 우리 간격보다 먼저 보내지는 않는다."""
+    from aist.announce.retry import post_with_retry
+
+    waited = []
+    it = iter([(False, 429, "rate", 0.5), (True, 200, "", None)])
+    post_with_retry(lambda: next(it), what="시험", backoff_sec=2.0,
+                    sleep=waited.append)
+    assert waited == [2.0]
+
+
+def test_gives_up_when_the_wait_would_hold_the_broadcast():
+    """공지 한 줄 때문에 방송 시작을 몇 분씩 붙잡을 수는 없다."""
+    from aist.announce.retry import post_with_retry
+
+    waited = []
+    calls = []
+
+    def send():
+        calls.append(1)
+        return (False, 429, "rate", 600.0)
+
+    assert post_with_retry(send, what="시험", max_wait_sec=30.0,
+                           sleep=waited.append) is False
+    assert calls == [1] and waited == []   # 기다리지도, 먼저 보내지도 않는다
+
+
+def test_three_tuple_send_still_works():
+    """예전 형식(3개짜리)을 돌려주는 곳도 그대로 동작해야 한다."""
+    from aist.announce.retry import post_with_retry
+
+    waited = []
+    it = iter([(False, 500, "서버 오류"), (True, 200, "")])
+    assert post_with_retry(lambda: next(it), what="시험", backoff_sec=1.0,
+                           sleep=waited.append) is True
+    assert waited == [1.0]
+
+
+def test_retry_after_parsing_never_raises():
+    """응답 객체가 기대한 모양이 아니어도 예외가 나면 안 된다.
+
+    여기서 터지면 바깥에서 네트워크 오류로 오인해, 다시 보내면 안 되는
+    4xx 까지 재시도하게 된다(실제로 그렇게 깨졌다).
+    """
+    from aist.announce.discord_bot import DiscordAnnouncer
+
+    class _NoHeaders:
+        status_code = 404
+        text = "no"
+
+    class _WeirdHeaders:
+        headers = object()          # .get 이 없다
+
+        def json(self):
+            raise ValueError("JSON 아님")
+
+    class _BodyOnly:
+        headers = {}
+
+        def json(self):
+            return {"retry_after": 3.5}
+
+    assert DiscordAnnouncer._retry_after(_NoHeaders()) is None
+    assert DiscordAnnouncer._retry_after(_WeirdHeaders()) is None
+    assert DiscordAnnouncer._retry_after(_BodyOnly()) == 3.5
