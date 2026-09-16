@@ -23,6 +23,8 @@ log = logging.getLogger("aist.chat.soop")
 ESC = "\x1b\t"          # 패킷 헤더 태그
 F = "\x0c"              # 필드 구분자 (chr 12)
 _SVC_CHAT = 5
+# 접속 스킴(테스트에서 평문 서버로 바꿔 끼울 수 있게 상수로 둔다)
+_WS_SCHEME = "wss"
 _LIVE_API = "https://live.afreecatv.com/afreeca/player_live_api.php"
 _UA = {"User-Agent": "Mozilla/5.0", "Referer": "https://play.sooplive.co.kr/"}
 
@@ -103,7 +105,7 @@ class SoopChat(ChatSource):
                 domain = ch["CHDOMAIN"].lower()
                 port = int(ch["CHPT"]) + 1            # wss 는 보통 +1
                 chatno = str(ch["CHATNO"])
-                url = f"wss://{domain}:{port}/Websocket/{self.bj_id}"
+                url = f"{_WS_SCHEME}://{domain}:{port}/Websocket/{self.bj_id}"
             except Exception as e:
                 log.error("SOOP 라이브 정보 획득 실패: %s (5초 후 재시도)", e)
                 await asyncio.sleep(5)
