@@ -69,7 +69,15 @@ def _quiet_third_party() -> None:
     for name in ("obsws_python", "obsws_python.baseclient",
                  "websockets", "websockets.client", "websockets.server",
                  "discord", "discord.client", "discord.gateway",
-                 "urllib3", "httpx", "httpcore", "openai", "anthropic"):
+                 "urllib3", "httpx", "httpcore", "openai", "anthropic",
+                 # asyncio 도 같은 이유로 막는다. 채팅 플랫폼에 못 붙으면
+                 # websockets 내부에서 터진 예외가 asyncio 콜백 로거로
+                 # 올라와, 재시도할 때마다 트레이스백 14줄이 찍힌다
+                 # (실제로 확인: AttributeError: 'NoneType' object has no
+                 #  attribute 'status_code'). 바로 위에 우리 한글 안내가
+                 # 있는데도 그것만 묻힌다. 우리 코드의 예외는 각자 자기
+                 # 자리에서 잡아 한국어로 알린다.
+                 "asyncio"):
         logging.getLogger(name).setLevel(logging.CRITICAL)
 
 

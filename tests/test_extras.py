@@ -137,3 +137,39 @@ def test_only_broadcast_commands_write_the_broadcast_log(tmp_path, monkeypatch):
     for h in file_handlers():
         logging.getLogger().removeHandler(h)
         h.close()
+
+
+def test_library_tracebacks_are_kept_off_the_operator_screen():
+    """채팅 플랫폼에 못 붙으면 websockets 내부 예외가 asyncio 로거로 올라온다.
+
+    실제로 트위치 연결이 막힌 상태로 돌려보니, 재시도할 때마다 파이썬
+    트레이스백 14줄이 찍혔다(AttributeError: 'NoneType' object has no
+    attribute 'status_code'). 바로 위에 우리 한글 안내가 있는데도 그것만
+    묻힌다 — 이 프로그램을 쓰는 사람은 코딩을 안 하는 운영자다.
+    --log DEBUG 로는 그대로 볼 수 있어야 한다.
+    """
+    import logging
+
+    from aist.cli import _quiet_third_party
+
+    root = logging.getLogger()
+    before = root.level
+    noisy = ["asyncio", "websockets", "obsws_python"]
+    try:
+        for n in noisy:
+            logging.getLogger(n).setLevel(logging.NOTSET)
+        root.setLevel(logging.INFO)
+        _quiet_third_party()
+        for n in noisy:
+            assert logging.getLogger(n).level == logging.CRITICAL, n
+
+        for n in noisy:
+            logging.getLogger(n).setLevel(logging.NOTSET)
+        root.setLevel(logging.DEBUG)
+        _quiet_third_party()
+        for n in noisy:
+            assert logging.getLogger(n).level == logging.NOTSET, n
+    finally:
+        root.setLevel(before)
+        for n in noisy:
+            logging.getLogger(n).setLevel(logging.NOTSET)
