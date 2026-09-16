@@ -364,8 +364,12 @@ class ChatPipeline:
                 await self.bridge.proactive_speak()
                 self._mark_busy()
                 self._reset_idle_gap()
-            except Exception:
-                log.exception("혼잣말 트리거 실패")
+            except Exception as e:  # noqa: BLE001 - 코어가 끊겼을 수 있다
+                # 실패해도 목표 시각을 다시 잡는다. 안 그러면 눈치 루프가
+                # 0.3초마다 다시 시도하면서 트레이스백을 초당 몇 번씩 찍는다
+                # — 회전 로그가 순식간에 밀려 정작 필요한 기록이 사라진다.
+                self._reset_idle_gap()
+                self._note_send_error(e, "혼잣말 트리거")
 
     def _should_forward(self) -> bool:
         fh = self.cfg.flood_handling
