@@ -15,6 +15,7 @@
 
 import asyncio
 import logging
+import time
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Optional
@@ -90,6 +91,8 @@ class Orchestrator:
         self._chat_source_dead = False
         self._core_mute = False
         self._core_brain_dead = ""
+        self._next_obs_check = 0.0
+        self._obs_restarts = 0
 
     def request_stop(self):
         self._stop.set()
@@ -197,6 +200,8 @@ class Orchestrator:
         self._chat_source_dead = False
         self._core_mute = False
         self._core_brain_dead = ""
+        self._next_obs_check = 0.0
+        self._obs_restarts = 0
         # 이전 방송이 남긴 중단 스위치가 있으면 지우고 시작한다(안 지우면
         # 다음 방송이 켜지자마자 다시 꺼진다).
         self.stop_flag.clear()
@@ -331,6 +336,12 @@ class Orchestrator:
                         "방송인이 LLM 오류 문구만 반복해서 읽고 있습니다 — "
                         "LLM API 키·요금제·네트워크를 확인하세요 (코어가 읽은 문구: %s) "
                         "→ 이번 방송 종료", self._core_brain_dead)
+                    core_gone = True
+                    break
+                # 송출(OBS)이 혼자 내려가 있지 않은지 본다. 스트림 키 오류나
+                # 네트워크 문제로 OBS 는 실제로 송출을 혼자 끊는다 — 그러면
+                # 방송인은 아무도 안 보는 데서 몇 시간을 떠든다.
+                if not await self._check_stream_alive(obs):
                     core_gone = True
                     break
                 if self._core_mute:
@@ -636,6 +647,44 @@ class Orchestrator:
         except Exception as e:  # noqa: BLE001 - 끊김 사유는 다양
             log.warning("코어 연결 끊김: %s", e)
             self._core_lost = True
+
+    async def _check_stream_alive(self, obs) -> bool:
+        """송출이 살아 있는지 가끔 확인하고, 내려가 있으면 다시 켠다.
+
+        방송을 계속해도 되면 True, 이번 방송을 내려야 하면 False.
+        obs.start_stream=false(운영자가 손으로 켜는 단계)면 확인하지 않는다 —
+        송출 관리가 우리 몫이 아니다.
+        """
+        oc = self.cfg.obs
+        if not oc.start_stream or oc.stream_check_sec <= 0:
+            return True
+        now = time.monotonic()
+        if now < self._next_obs_check:
+            return True
+        self._next_obs_check = now + oc.stream_check_sec
+        try:
+            live = await asyncio.to_thread(obs.is_streaming)
+        except Exception as e:  # noqa: BLE001 - 조회 실패는 치명적이지 않다
+            log.debug("송출 상태 조회 실패(무시): %s", e)
+            return True
+        if live is not False:
+            # True(정상) 또는 None(알 수 없음) — 모르는 걸로 방송을 내리지 않는다.
+            self._obs_restarts = 0
+            return True
+        if self._obs_restarts >= oc.stream_restart_max:
+            log.error("OBS 송출이 또 내려갔습니다(%d번 다시 켜봤습니다) — 스트림 키와 "
+                      "인터넷 연결을 확인하세요. 아무도 안 보는 방송을 계속하지 "
+                      "않습니다 → 이번 방송 종료", self._obs_restarts)
+            return False
+        self._obs_restarts += 1
+        log.error("OBS 송출이 내려가 있습니다 — 다시 켭니다(%d/%d).",
+                  self._obs_restarts, oc.stream_restart_max)
+        try:
+            await asyncio.to_thread(obs.start_stream)
+        except ObsError as e:
+            log.error("송출 재시작 실패: %s → 이번 방송 종료", e)
+            return False
+        return True
 
     async def _recover_core(self, bridge) -> bool:
         """방송 중 끊긴 코어를 다시 붙인다. 살리면 True, 포기면 False.

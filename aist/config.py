@@ -79,6 +79,12 @@ class ObsConfig:
     launch_command: str = ""     # 예: "obs --disable-shutdown-check" (경로는 환경마다)
     launch_wait_sec: int = 20    # 켠 뒤 연결될 때까지 기다리는 최대 시간
     simulcast: SimulcastConfig = field(default_factory=SimulcastConfig)
+    # 방송 중 송출이 살아 있는지 확인하는 간격(초). 0 이면 끄기.
+    # OBS 는 스트림 키 오류·네트워크 문제로 혼자 송출을 내린다 —
+    # 그러면 방송인은 아무도 안 보는 데서 몇 시간을 떠든다.
+    stream_check_sec: float = 60.0
+    # 송출이 내려가 있으면 몇 번까지 다시 켜볼지. 0 이면 바로 방송 종료.
+    stream_restart_max: int = 2
 
 
 @dataclass

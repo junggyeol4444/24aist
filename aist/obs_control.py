@@ -141,6 +141,10 @@ class ObsController:
         except Exception:  # noqa: BLE001 - 상태 조회 실패는 치명적이지 않음
             return None
 
+    def is_streaming(self) -> Optional[bool]:
+        """지금 송출 중인지(외부용). 알 수 없으면 None."""
+        return self._is_streaming()
+
     def start_stream(self):
         """스트림 시작. start_stream=false 면 (테스트 단계) 건너뛴다.
 
