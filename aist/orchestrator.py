@@ -297,6 +297,10 @@ class Orchestrator:
                 if self._core_lost:
                     if await self._recover_core(bridge):
                         self._core_lost = False
+                        # 끊기기 전 발화의 '말 끝' 신호는 옛 연결과 함께
+                        # 사라졌다. 안 풀어주면 채팅이 계속 쌓이기만 한다.
+                        if pipeline is not None:
+                            pipeline.core_reconnected()
                         # 끊긴 수신 루프를 새로 띄운다(안 띄우면 재연결해도
                         # 말 시작/끝 신호를 못 받아 '입 하나' 모델이 멎는다).
                         if drain_task is not None:

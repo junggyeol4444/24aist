@@ -86,6 +86,20 @@ class ChatPipeline:
         elif text == "conversation-chain-end":
             self._core_busy = False
 
+    def core_reconnected(self) -> None:
+        """코어에 다시 붙었다 — '말하는 중' 상태를 푼다.
+
+        끊기기 직전에 보낸 발화의 '말 끝' 신호(conversation-chain-end)는 옛
+        연결과 함께 사라져서 영영 오지 않는다. 그대로 두면 파이프라인이
+        계속 '말하는 중'으로 알고 채팅을 쌓아두기만 한다 — 실제로 코어를
+        죽였다 살려보니 재연결 뒤 약 3분 동안 채팅이 한 건도 안 나갔고,
+        폴백 타이머(기본 90초)가 돌 때까지 방송이 조용했다.
+        """
+        if self._core_busy:
+            log.info("코어 재연결 — 끊기기 전 발화는 끝난 것으로 보고 채팅을 다시 흘립니다.")
+        self._core_busy = False
+        self._busy_since = 0.0
+
     def is_speaking(self) -> bool:
         return self._core_busy
 
@@ -179,9 +193,31 @@ class ChatPipeline:
                     "소리·자막이 안 나갑니다 — 브라우저 화면이 떠 있는지, "
                     "코어 설정의 enable_proxy 가 켜져 있는지 확인하세요.",
                     self.cfg.core_busy_timeout_sec, self._busy_timeouts)
+            # 로컬에서 잠금만 푸는 걸로는 부족하다. 코어 쪽에는 끝나지 않은
+            # 대화가 그대로 걸려 있어서, 이 뒤에 보내는 채팅이 전부 그 뒤에
+            # 줄만 서고 영영 안 나간다(실제로 웹UI 가 대화 도중에 끊겼을 때
+            # 재현됨 — 웹UI 를 다시 붙여도 안 풀렸다).
+            # 끼어들기 신호를 보내면 코어가 그 대화를 취소하고 큐가 풀린다.
+            self._unstick_core()
             self._core_busy = False
             return False
         return True
+
+    def _unstick_core(self) -> None:
+        """코어에 걸려 있는 대화를 끊어 다음 채팅이 나갈 수 있게 한다."""
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:      # 루프 밖(테스트 등)
+            return
+
+        async def _go():
+            try:
+                await self.bridge.interrupt()
+                log.warning("코어에 걸려 있던 발화를 끊었습니다 — 이래야 다음 채팅이 나갑니다.")
+            except Exception as e:  # noqa: BLE001 - 끊겨 있으면 실패할 수 있다
+                log.debug("끼어들기 실패: %s", e)
+
+        loop.create_task(_go())
 
     def _mark_busy(self):
         """입력을 보냈으니 코어가 곧 말한다 — 신호 오기 전 선제 잠금."""
