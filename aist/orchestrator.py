@@ -89,6 +89,7 @@ class Orchestrator:
         self._core_lost = False
         self._chat_source_dead = False
         self._core_mute = False
+        self._core_brain_dead = ""
 
     def request_stop(self):
         self._stop.set()
@@ -195,6 +196,7 @@ class Orchestrator:
         self._core_lost = False
         self._chat_source_dead = False
         self._core_mute = False
+        self._core_brain_dead = ""
         # 이전 방송이 남긴 중단 스위치가 있으면 지우고 시작한다(안 지우면
         # 다음 방송이 켜지자마자 다시 꺼진다).
         self.stop_flag.clear()
@@ -251,10 +253,15 @@ class Orchestrator:
                 # (웹UI/OBS 브라우저 소스 미접속). 재연결로는 안 고쳐진다.
                 self._core_mute = True
 
+            def on_core_brain_dead(text):
+                # 방송인이 LLM 오류 문구(영어)를 계속 읽고 있는 상태.
+                self._core_brain_dead = text
+
             pipeline = ChatPipeline(bridge, cfg.broadcast, on_message=on_chat,
                                     safety=cfg.safety, on_send_error=on_send_error,
                                     on_source_ended=on_source_ended,
-                                    on_core_mute=on_core_mute)
+                                    on_core_mute=on_core_mute,
+                                    on_core_brain_dead=on_core_brain_dead)
 
             # 코어가 보내오는 메시지(자막·오디오·control 등)를 계속 읽는다.
             # 안 읽으면 websockets 수신 버퍼가 무한정 쌓여 장시간 방송에서
@@ -305,6 +312,15 @@ class Orchestrator:
                 # 코어는 살아 있는데 말이 밖으로 안 나가는 상태 —
                 # 재연결로는 안 고쳐진다. 조용한 화면만 몇 시간 내보내느니
                 # 내리고, 무인운영 재시작이 운영자에게 보이게 한다.
+                # 방송인의 '두뇌'(LLM)가 죽어서 영어 오류 문구만 읽고 있다.
+                # 시청자에게는 AI 가 갑자기 영어 에러를 읊는 사고로 보인다.
+                if self._core_brain_dead:
+                    log.error(
+                        "방송인이 LLM 오류 문구만 반복해서 읽고 있습니다 — "
+                        "LLM API 키·요금제·네트워크를 확인하세요 (코어가 읽은 문구: %s) "
+                        "→ 이번 방송 종료", self._core_brain_dead)
+                    core_gone = True
+                    break
                 if self._core_mute:
                     log.error(
                         "코어가 말을 해도 시청자에게 나가지 않는 상태입니다. "

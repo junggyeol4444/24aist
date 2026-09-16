@@ -43,6 +43,7 @@ class ChatPipeline:
         on_send_error: Optional[Callable[[Exception], None]] = None,
         on_source_ended: Optional[Callable[[], None]] = None,
         on_core_mute: Optional[Callable[[], None]] = None,
+        on_core_brain_dead: Optional[Callable[[str], None]] = None,
     ):
         self.bridge = bridge
         self.cfg = cfg
@@ -57,6 +58,8 @@ class ChatPipeline:
         # 코어가 '말을 끝냈다'는 신호를 연속으로 못 줄 때 알린다.
         # = 시청자에게 소리·자막이 안 나가는 상태(웹UI 미접속).
         self.on_core_mute = on_core_mute
+        # 코어가 LLM 오류 문구를 그대로 읽어버릴 때 알린다.
+        self.on_core_brain_dead = on_core_brain_dead
         # 같은 전송 오류를 매 채팅마다 트레이스백으로 찍으면 로그가 폭발한다.
         self._send_fail_streak = 0
         # 종료판단(채팅 저조/눈치 종료)에 쓰는 공유 상태. tz-aware UTC.
@@ -69,6 +72,10 @@ class ChatPipeline:
         self._busy_timeouts = 0           # 말 끝 신호가 안 온 횟수(진단용)
         self._busy_streak = 0             # 그 중 '연속으로' 안 온 횟수
         self._mute_reported = False       # 벙어리 상태를 이미 알렸는지
+        self._llm_error_streak = 0        # LLM 오류로 끝난 대화가 연속 몇 번인지
+        self._chain_had_error = False     # 지금 대화에 오류 문구가 있었나
+        self._last_llm_error = ""
+        self._brain_reported = False
         self._pending: List[ChatMessage] = []
         self._include_platform = False    # 동출일 때만 플랫폼 표기
         # 진행자 혼잣말: 이번 조용한 구간에 말 걸 목표 시각(발화/채팅 후 재설정)
@@ -83,16 +90,62 @@ class ChatPipeline:
         # 유실됐을 때(아무 것도 안 올 때)만 돌아야 한다.
         if self._core_busy and data.get("type") in ("audio", "full-text"):
             self._busy_since = time.monotonic()
+        if data.get("type") == "audio":
+            self._watch_llm_error(data)
         if data.get("type") != "control":
             return
         text = data.get("text")
         if text == "conversation-chain-start":
             self._core_busy = True
             self._busy_since = time.monotonic()
+            self._chain_had_error = False
         elif text == "conversation-chain-end":
             self._core_busy = False
             # 한 번이라도 제대로 끝났으면 '연속 실패'는 끊긴 것이다.
             self._busy_streak = 0
+            self._close_chain()
+
+    # 코어가 LLM 에 실패하면, 그 오류 문구를 방송인이 그대로 읽는다.
+    # 실제로 코어에 429 를 주고 확인한 문구(세 문장으로 나뉘어 온다):
+    #   "Error calling the chat endpoint: Rate limit exceeded."
+    #   "Please try again later."
+    #   "See the logs for details."
+    # 시청자에게는 AI 가 갑자기 영어 에러를 읊는 사고로 보인다.
+    # 접두사는 첫 문장에만 있으므로, 발화 한 줄이 아니라 '대화 한 덩어리'
+    # 단위로 센다 — 줄 단위로 세면 뒤따라오는 문장이 연속 카운터를 리셋해
+    # 영원히 1 에 머문다(실제로 그렇게 나왔다).
+    _LLM_ERROR_PREFIX = "error calling the chat endpoint"
+
+    def _watch_llm_error(self, data: dict) -> None:
+        dt = data.get("display_text") or {}
+        text = (dt.get("text") if isinstance(dt, dict) else "") or ""
+        if not text.strip().lower().startswith(self._LLM_ERROR_PREFIX):
+            return
+        if not self._chain_had_error:
+            self._chain_had_error = True
+            log.error("방송인이 LLM 오류 문구를 그대로 읽었습니다: %s",
+                      text.strip()[:160])
+        self._last_llm_error = text.strip()[:200]
+
+    def _close_chain(self) -> None:
+        """대화 한 덩어리가 끝났다 — 오류였는지 아닌지로 연속 횟수를 센다."""
+        if not self._chain_had_error:
+            self._llm_error_streak = 0
+            return
+        self._chain_had_error = False
+        self._llm_error_streak += 1
+        limit = self.cfg.core_error_max_strikes
+        if not limit or self._llm_error_streak < limit:
+            return
+        if self._brain_reported or not self.on_core_brain_dead:
+            return
+        self._brain_reported = True
+        log.error("LLM 오류 문구만 %d번 연속으로 읽었습니다 — 방송인의 두뇌가 "
+                  "죽은 것으로 봅니다.", self._llm_error_streak)
+        try:
+            self.on_core_brain_dead(self._last_llm_error)
+        except Exception as e:  # noqa: BLE001
+            log.debug("on_core_brain_dead 콜백 실패: %s", e)
 
     def core_reconnected(self) -> None:
         """코어에 다시 붙었다 — '말하는 중' 상태를 푼다.

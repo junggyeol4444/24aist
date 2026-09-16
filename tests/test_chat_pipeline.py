@@ -243,3 +243,89 @@ def test_core_mute_streak_resets_on_healthy_end():
     for _ in range(2):
         p._mark_busy(); p._busy_now()
     assert fired == []                    # 2회씩 끊겨 있으므로 아직 아니다
+
+
+# --------- 코어가 LLM 오류 문구를 그대로 읽는 사고 ----------
+def _audio(text):
+    return {"type": "audio", "display_text": {"text": text}}
+
+
+_CORE_LLM_ERROR = ("Error calling the chat endpoint: Rate limit exceeded. "
+                   "Please try again later. See the logs for details.")
+
+
+def _chain(p, *texts):
+    """대화 한 덩어리를 흉내낸다(시작 → 발화들 → 끝)."""
+    p.on_core_message({"type": "control", "text": "conversation-chain-start"})
+    for t in texts:
+        p.on_core_message(_audio(t))
+    p.on_core_message({"type": "control", "text": "conversation-chain-end"})
+
+
+# 실제 코어가 429 를 만났을 때 내보낸 세 문장 그대로.
+_ERROR_CHAIN = ("Error calling the chat endpoint: Rate limit exceeded.",
+                "Please try again later.",
+                "See the logs for details.")
+
+
+def test_core_llm_error_speech_detected_and_reported():
+    """방송인이 영어 오류 문구를 계속 읽으면 방송을 내려야 한다."""
+    from aist.chat_pipeline import ChatPipeline
+    from aist.config import BroadcastConfig
+
+    seen = []
+    p = ChatPipeline(object(), BroadcastConfig(core_error_max_strikes=3),
+                     on_core_brain_dead=lambda t: seen.append(t))
+    for _ in range(2):
+        _chain(p, *_ERROR_CHAIN)
+    assert seen == []
+    _chain(p, *_ERROR_CHAIN)
+    assert len(seen) == 1 and "Rate limit" in seen[0]
+    _chain(p, *_ERROR_CHAIN)
+    assert len(seen) == 1          # 한 번만 알린다
+
+
+def test_error_followup_sentences_do_not_reset_streak():
+    """오류 문구 뒤에 따라오는 문장이 연속 카운터를 리셋하면 안 된다.
+
+    접두사는 첫 문장에만 있다. 줄 단위로 세면 "Please try again later." 가
+    정상 발화로 보여 카운터가 영원히 1 에 머문다(실제 방송에서 그랬다).
+    """
+    from aist.chat_pipeline import ChatPipeline
+    from aist.config import BroadcastConfig
+
+    seen = []
+    p = ChatPipeline(object(), BroadcastConfig(core_error_max_strikes=2),
+                     on_core_brain_dead=lambda t: seen.append(t))
+    _chain(p, *_ERROR_CHAIN)
+    _chain(p, *_ERROR_CHAIN)
+    assert len(seen) == 1
+
+
+def test_core_llm_error_streak_resets_on_normal_speech():
+    """정상 대화가 한 번이라도 끝나면 연속 오류는 끊긴 것이다."""
+    from aist.chat_pipeline import ChatPipeline
+    from aist.config import BroadcastConfig
+
+    seen = []
+    p = ChatPipeline(object(), BroadcastConfig(core_error_max_strikes=3),
+                     on_core_brain_dead=lambda t: seen.append(t))
+    _chain(p, *_ERROR_CHAIN)
+    _chain(p, *_ERROR_CHAIN)
+    _chain(p, "응 그거 나도 봤어")
+    _chain(p, *_ERROR_CHAIN)
+    _chain(p, *_ERROR_CHAIN)
+    assert seen == []
+
+
+def test_normal_korean_speech_is_not_mistaken_for_error():
+    """평범한 발화를 오류로 잘못 보면 멀쩡한 방송이 내려간다."""
+    from aist.chat_pipeline import ChatPipeline
+    from aist.config import BroadcastConfig
+
+    seen = []
+    p = ChatPipeline(object(), BroadcastConfig(core_error_max_strikes=1),
+                     on_core_brain_dead=lambda t: seen.append(t))
+    for t in ("에러 났대요 ㅋㅋ", "error 라는 게임 알아?", "그 채팅 봤어"):
+        _chain(p, t)
+    assert seen == []
