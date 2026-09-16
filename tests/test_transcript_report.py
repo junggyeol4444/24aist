@@ -118,3 +118,70 @@ def test_youtube_requires_id_or_channel():
     with pytest.raises(ValueError):
         YouTubeChat()
     YouTubeChat(channel="@somebody")   # channel 만으로 생성 가능
+
+
+# ---- 진짜 방송 분량에서 리포트가 읽을 수 있는 물건인지 ----
+def test_report_stays_readable_with_real_volume(tmp_path):
+    """10분 방송 기록으로 만든 리포트가 193줄이었다. 3시간이면 수천 줄이다.
+
+    운영자가 사고 발언을 찾으려고 읽는 문서인데, 같은 줄 수천 개를 그대로
+    쏟으면 정작 이상한 발언이 묻힌다.
+    """
+    import json
+
+    from aist.config import MemoryConfig
+    from aist.memory import Memory
+    from aist.report import generate_report
+
+    mem = Memory(MemoryConfig(path=str(tmp_path / "mem"), backend="json"))
+    mem.start_session()
+    for i in range(35):
+        mem._cur["superchats"].append(
+            {"author": f"시청자{i}", "amount": "5,000원", "text": "감사합니다"})
+    mem.end_session(summary="테스트")
+
+    tr = tmp_path / "t.jsonl"
+    with tr.open("w", encoding="utf-8") as fh:
+        for _ in range(500):
+            fh.write(json.dumps({"who": "ai", "text": "네 알겠어요."},
+                                ensure_ascii=False) + "\n")
+        fh.write(json.dumps({"who": "ai", "text": "이건 다른 말"},
+                            ensure_ascii=False) + "\n")
+
+    path = generate_report(mem, str(tmp_path / "out"), transcript_path=tr)
+    text = path.read_text(encoding="utf-8")
+
+    assert "합계 약 175,000원" in text, "후원 합계를 알려줘야 한다"
+    assert "그 외 15건" in text, "수십 건을 전부 나열하면 못 읽는다"
+    assert "(×500)" in text, "같은 말이 이어지면 묶어야 한다"
+    assert "이건 다른 말" in text, "다른 발언은 그대로 남아야 한다"
+    assert len(text.splitlines()) < 80, f"리포트가 너무 깁니다: {len(text.splitlines())}줄"
+
+
+def test_same_phrase_far_apart_is_not_hidden(tmp_path):
+    """떨어져서 반복된 말은 묶지 않는다 — 사고 발언은 시점이 중요하다."""
+    import json
+
+    from aist.config import MemoryConfig
+    from aist.memory import Memory
+    from aist.report import generate_report
+
+    mem = Memory(MemoryConfig(path=str(tmp_path / "mem"), backend="json"))
+    mem.start_session()
+    mem.end_session()
+    tr = tmp_path / "t.jsonl"
+    with tr.open("w", encoding="utf-8") as fh:
+        for text in ("문제 발언", "보통 말", "문제 발언"):
+            fh.write(json.dumps({"who": "ai", "text": text}, ensure_ascii=False) + "\n")
+
+    text = generate_report(mem, str(tmp_path / "out"),
+                           transcript_path=tr).read_text(encoding="utf-8")
+    assert text.count("- 문제 발언") == 2
+
+
+def test_bits_amounts_do_not_break_the_total(tmp_path):
+    """트위치 치어는 '100 bits' 라서 원 단위가 아니다 — 합계에 섞이면 안 된다."""
+    from aist.report import _won_total
+
+    assert _won_total([{"amount": "5,000원"}, {"amount": "100 bits"},
+                       {"amount": ""}]) == 5000

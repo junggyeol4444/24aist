@@ -8,6 +8,7 @@
 """
 
 import logging
+import re
 from collections import Counter
 from datetime import datetime
 from pathlib import Path
@@ -18,6 +19,34 @@ from .paths import unique_path
 from .transcript import read_transcript
 
 log = logging.getLogger("aist.report")
+
+
+_MAX_LISTED = 20          # 리포트에 직접 나열하는 최대 건수
+
+
+def _won_total(superchats) -> int:
+    """후원 금액 합계(원). 숫자로 읽히는 것만 더한다. 못 읽으면 0."""
+    total = 0
+    for sc in superchats:
+        amount = str(sc.get("amount") or "")
+        digits = re.sub(r"[^0-9]", "", amount)
+        if digits and ("원" in amount or amount.strip().isdigit()):
+            try:
+                total += int(digits)
+            except ValueError:
+                continue
+    return total
+
+
+def _collapse(texts):
+    """연달아 같은 말이면 (말, 횟수) 로 묶는다."""
+    out = []
+    for t in texts:
+        if out and out[-1][0] == t:
+            out[-1][1] += 1
+        else:
+            out.append([t, 1])
+    return [(t, n) for t, n in out]
 
 
 def _to_local(iso: str, tz_name: Optional[str]) -> str:
@@ -66,9 +95,16 @@ def generate_report(
         lines.append(f"- 단골(여러 방송 출석): {', '.join(regulars)}")
 
     scs = s.get("superchats", [])
-    lines.append(f"- 슈퍼챗/후원: {len(scs)}건")
-    for sc in scs:
+    total = _won_total(scs)
+    head = f"- 슈퍼챗/후원: {len(scs)}건"
+    if total:
+        head += f" (합계 약 {total:,}원)"
+    lines.append(head)
+    # 실제 방송에서는 수십~수백 건이 된다. 전부 나열하면 리포트를 못 읽는다.
+    for sc in scs[:_MAX_LISTED]:
         lines.append(f"  - {sc.get('author')} ({sc.get('amount')}): {sc.get('text')}")
+    if len(scs) > _MAX_LISTED:
+        lines.append(f"  - (그 외 {len(scs) - _MAX_LISTED}건 — 전체는 트랜스크립트에)")
 
     events = s.get("events", [])
     if events:
@@ -92,8 +128,11 @@ def generate_report(
         if ai_lines:
             lines.append("")
             lines.append("## AI 발화 전문 (사고 발언 점검용)")
-            for r in ai_lines:
-                lines.append(f"- {r.get('text')}")
+            # 같은 말이 연달아 나오면 한 줄로 묶는다. 3시간 방송이면 수천
+            # 줄이라, 그대로 두면 정작 이상한 발언을 찾을 수가 없다.
+            # (원본은 트랜스크립트 파일에 그대로 있다)
+            for text, count in _collapse([r.get("text") for r in ai_lines]):
+                lines.append(f"- {text}" + (f"  (×{count})" if count > 1 else ""))
 
     if next_stream:
         lines.append("")
