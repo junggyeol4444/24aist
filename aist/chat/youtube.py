@@ -19,6 +19,8 @@ from .base import ChatMessage, ChatSource, ProbeResult, probe_fail, probe_ok, pr
 log = logging.getLogger("aist.chat.youtube")
 
 _UA = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
+# 라이브 페이지 주소(테스트에서 바꿔 끼울 수 있게 상수로 둔다)
+_BASE = "https://www.youtube.com"
 _VIDEO_ID_RE = re.compile(r'"videoId"\s*:\s*"([\w-]{11})"')
 
 
@@ -27,10 +29,10 @@ def resolve_live_video_id(channel: str) -> Optional[str]:
     import requests
     channel = channel.strip()
     if channel.startswith("UC"):
-        url = f"https://www.youtube.com/channel/{channel}/live"
+        url = f"{_BASE}/channel/{channel}/live"
     else:
         handle = channel if channel.startswith("@") else "@" + channel
-        url = f"https://www.youtube.com/{handle}/live"
+        url = f"{_BASE}/{handle}/live"
     r = requests.get(url, headers=_UA, timeout=15)
     if r.status_code != 200:
         return None
