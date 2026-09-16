@@ -394,3 +394,64 @@ def test_pipeline_does_not_report_when_we_stopped_it():
 
     asyncio.run(main())
     assert seen["dead"] == 0
+
+
+# ---- 마무리 인사가 끝나기 전에 스트림을 내리면 말이 잘린다 ----
+def test_closing_greeting_is_not_cut_off():
+    """인사는 방송의 마지막 말이다. 고정 시간만 기다리면 길어질 때 잘린다."""
+    import asyncio
+
+    from aist.config import Config
+    from aist.orchestrator import Orchestrator
+    from aist.persona import Persona
+
+    class _Pipeline:
+        def __init__(self, speak_for):
+            self.speak_for = speak_for
+            self.t0 = None
+
+        def is_speaking(self):
+            loop = asyncio.get_event_loop()
+            if self.t0 is None:
+                self.t0 = loop.time()
+            return loop.time() - self.t0 < self.speak_for
+
+    async def run(speak_for, cap):
+        # asyncio.Event 는 처음 쓴 루프에 묶인다 — 실행마다 새로 만든다
+        o = Orchestrator(Config(), Persona())
+        loop = asyncio.get_event_loop()
+        p = _Pipeline(speak_for)
+        t0 = loop.time()
+        await o._wait_until_done_speaking(p, cap)
+        return loop.time() - t0
+
+    # 말이 3초 걸리면 3초쯤 기다렸다가 넘어간다(45초를 채우지 않는다)
+    waited = asyncio.run(run(speak_for=3, cap=60))
+    assert 2.5 <= waited <= 6, f"인사가 끝난 뒤 바로 넘어가야 합니다: {waited:.1f}초"
+
+    # 끝 신호가 안 오면 상한에서 끊는다(영원히 안 기다린다)
+    waited = asyncio.run(run(speak_for=999, cap=3))
+    assert waited <= 5, f"상한을 넘겨 기다렸습니다: {waited:.1f}초"
+
+
+def test_no_wait_when_ai_never_starts_speaking():
+    """코어가 죽어 말이 시작도 안 하면 오래 붙잡고 있을 이유가 없다."""
+    import asyncio
+
+    from aist.config import Config
+    from aist.orchestrator import Orchestrator
+    from aist.persona import Persona
+
+    class _Silent:
+        def is_speaking(self):
+            return False
+
+    o = Orchestrator(Config(), Persona())
+
+    async def run():
+        loop = asyncio.get_event_loop()
+        t0 = loop.time()
+        await o._wait_until_done_speaking(_Silent(), 60)
+        return loop.time() - t0
+
+    assert asyncio.run(run()) <= 8

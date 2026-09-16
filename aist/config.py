@@ -157,7 +157,11 @@ class WindDown:
     pre_notice_minutes_before_end: int = 20   # "슬슬 마무리할까" 예고 시점
     end_grace_minutes: int = 5                # 틈 못 찾아도 이만큼 지나면 마무리(안전 상한)
     closing_greeting: bool = True
-    closing_wait_sec: int = 45                # 마무리 인사 후 스트림 내리기까지(30~60초)
+    # 마무리 인사를 '끝낼 때까지' 기다리는 상한(초). 인사가 끝나기도 전에
+    # 스트림을 내리면 기획안 4-3 이 금지한 '뚝 끄기' 가 된다. 웹UI 가 안
+    # 붙어 있어 끝 신호가 안 오는 경우를 대비한 상한이다.
+    closing_max_wait_sec: int = 60
+    closing_wait_sec: int = 45                # 마무리 인사가 끝난 뒤 여운(30~60초)
 
 
 @dataclass

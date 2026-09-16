@@ -130,7 +130,10 @@ end_judge:
     pre_notice_minutes_before_end: 20   # "슬슬 마무리할까" 예고(종료 20분 전)
     end_grace_minutes: 5                # 틈 못 잡아도 이만큼 지나면 마무리(안전 상한)
     closing_greeting: true
-    closing_wait_sec: 45                # 마무리 인사 후 스트림 내리기까지(초)
+    # 마무리 인사를 '끝낼 때까지' 기다리는 상한(초).
+    # 인사가 끝나기도 전에 스트림을 내리면 말이 잘린 채 화면이 꺼진다.
+    closing_max_wait_sec: 60
+    closing_wait_sec: 45        # 인사가 끝난 뒤 여운(30~60초)
 
 # --- 공지 자동화 — 6단계 ---
 announce:

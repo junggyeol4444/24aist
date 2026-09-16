@@ -348,6 +348,10 @@ class Orchestrator:
                         and cfg.end_judge.wind_down.closing_greeting):
                     log.info("채팅 유입 차단 → 마무리 인사")
                     await self._safe(bridge.say_to_ai(_CUE_CLOSING))
+                    # 인사가 끝나기도 전에 스트림을 내리면 말이 잘린다.
+                    # 끝난 걸 확인한 뒤에 여운을 준다(기획안 4-3).
+                    await self._wait_until_done_speaking(
+                        pipeline, cfg.end_judge.wind_down.closing_max_wait_sec)
                     await self._sleep_or_stop(cfg.end_judge.wind_down.closing_wait_sec)
         finally:
             # Ctrl+C·예외·코어 유실 어느 경우에도 뒷정리는 반드시 돈다.
@@ -528,6 +532,31 @@ class Orchestrator:
                 log.info("틈을 못 잡음(+%d분) → 마무리 진행", wd.end_grace_minutes)
                 return
             await self._sleep_or_stop(1)
+
+    async def _wait_until_done_speaking(self, pipeline, max_sec: float):
+        """AI 가 지금 하는 말을 끝낼 때까지 기다린다(상한 있음).
+
+        마무리 인사는 방송의 마지막 말이다. 고정 시간만 기다렸다가 스트림을
+        내리면, 인사가 길어질 때 말이 중간에 잘린 채 화면이 꺼진다.
+        끝 신호(chain-end)가 안 오는 경우(웹UI 미접속)를 대비해 상한을 둔다.
+        """
+        if pipeline is None or max_sec <= 0:
+            return
+        loop = asyncio.get_event_loop()
+        deadline = loop.time() + max_sec
+        started = False
+        while not self._stop.is_set() and loop.time() < deadline:
+            if pipeline.is_speaking():
+                started = True
+            elif started:
+                log.info("마무리 인사 끝 — 여운 후 종료")
+                return
+            elif loop.time() > deadline - max_sec + 5:
+                # 5초 안에 말이 시작도 안 했으면 더 기다릴 이유가 없다.
+                return
+            await self._sleep_or_stop(0.5)
+        if started:
+            log.info("마무리 인사가 %.0f초 안에 안 끝나 그대로 진행합니다.", max_sec)
 
     # --------------------------------------------------------------- 유틸
     async def _sleep_or_stop(self, seconds: float):
