@@ -19,6 +19,26 @@ import pytest
 from aist.chat import youtube as Y
 
 
+@pytest.fixture
+def stub_pytchat(monkeypatch):
+    """pytchat 을 흉내내 sys.modules 에 끼운다.
+
+    이 테스트들이 보려는 건 '라이브를 기다리는 루프' 와 '재시도' 지
+    pytchat 자체가 아니다. 실제로 깔려 있는지에 따라 테스트가 달라지면
+    (CI 에는 없다) 통과해도 아무것도 증명하지 못한다 — 실제로 그렇게
+    통과해놓고 CI 에서만 깨졌다.
+    """
+    import types
+
+    def make(chat=None):
+        stub = types.ModuleType("pytchat")
+        stub.create = lambda video_id: (chat or _Chat())
+        monkeypatch.setitem(sys.modules, "pytchat", stub)
+        return stub
+
+    return make
+
+
 async def _drain(src, seconds=0.6):
     """messages() 를 잠깐 돌리고, 밖으로 새어 나온 예외를 돌려준다."""
     out = []
@@ -39,7 +59,9 @@ async def _drain(src, seconds=0.6):
     return out, None
 
 
-def test_자동발견_중_네트워크_오류로_채팅이_끝나지_않는다(monkeypatch):
+def test_자동발견_중_네트워크_오류로_채팅이_끝나지_않는다(monkeypatch, stub_pytchat):
+    stub_pytchat()
+
     def boom(channel):
         raise ConnectionError("Temporary failure in name resolution")
 
@@ -49,7 +71,9 @@ def test_자동발견_중_네트워크_오류로_채팅이_끝나지_않는다(m
     assert err is None, f"예외가 밖으로 샜다: {err!r}"
 
 
-def test_라이브를_기다리는_동안_같은_줄을_도배하지_않는다(monkeypatch, caplog):
+def test_라이브를_기다리는_동안_같은_줄을_도배하지_않는다(monkeypatch, caplog,
+                                            stub_pytchat):
+    stub_pytchat()
     monkeypatch.setattr(Y, "resolve_live_video_id", lambda channel: None)
     real_sleep = asyncio.sleep
 
@@ -119,16 +143,12 @@ class _Chat:
         pass
 
 
-def test_글_없는_후원도_버리지_않는다(monkeypatch):
+def test_글_없는_후원도_버리지_않는다(stub_pytchat):
     """유튜브 슈퍼챗은 글 없이 돈만 보낼 수 있다.
 
     버리면 시청자는 돈을 냈는데 방송인은 모르고 지나간다.
     """
-    import types
-    stub = types.ModuleType("pytchat")
-    stub.create = lambda video_id: _Chat()
-    monkeypatch.setitem(sys.modules, "pytchat", stub)
-
+    stub_pytchat()
     src = Y.YouTubeChat(video_id="abcdefghijk")
     got, err = asyncio.run(_drain(src, 0.3))
     assert err is None
