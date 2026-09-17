@@ -44,6 +44,10 @@ log = logging.getLogger("aist.orchestrator")
 # 송출 시작 직후 첫 확인까지 두는 여유(초).
 _OBS_FIRST_CHECK_SEC = 15.0
 
+# 공지 하나에 방송을 붙잡아 두지 않는다. 재시도(최대 3회)와
+# 셀레늄 브라우저 기동까지 감안한 넉넉한 상한이다.
+_ANNOUNCE_TIMEOUT_SEC = 120.0
+
 # 마무리 단계의 '매니저 귓속말' — 페르소나 무대규칙에 따라 AI 는 이 내용을
 # 입 밖에 내지 않고 행동으로만 반영한다. (운영자가 문구 수정 가능)
 _CUE_WIND_DOWN = ("(매니저 귓속말: 슬슬 마무리 분위기로 가자. 새 주제나 새 판 "
@@ -656,7 +660,17 @@ class Orchestrator:
         announcers = self._announcers()
         for a in announcers:
             try:
-                await a.post(text, title=("방송 시작" if kind == "start" else "방송 종료"))
+                # 공지 하나가 방송을 붙잡지 못하게 한다. 셀레늄으로 카페에
+                # 올리는 경로는 브라우저를 띄우는데, 페이지가 안 열리면
+                # 거기서 멎는다 — 시작 공지에서 멎으면 방송이 아예 안 켜진다.
+                await asyncio.wait_for(
+                    a.post(text,
+                           title=("방송 시작" if kind == "start" else "방송 종료")),
+                    timeout=_ANNOUNCE_TIMEOUT_SEC)
+            except asyncio.TimeoutError:
+                log.error("공지 게시가 %.0f초 안에 안 끝나 넘어갑니다(%s) — "
+                          "이번 공지는 안 나갔습니다. 방송은 그대로 진행합니다.",
+                          _ANNOUNCE_TIMEOUT_SEC, a.name)
             except Exception as e:
                 log.error("공지 게시 실패(%s): %s", a.name, e)
             finally:

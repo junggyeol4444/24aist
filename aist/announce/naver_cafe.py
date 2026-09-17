@@ -214,6 +214,11 @@ class NaverCafeAnnouncer(Announcer):
         driver = None
         try:
             driver = webdriver.Chrome(options=opts)
+            # 페이지가 안 열리면 driver.get() 은 기본적으로 영원히 기다린다.
+            # 이건 방송 시작 직전에 도는 코드다 — 여기서 멎으면 방송이
+            # 아예 안 켜진다(무인 운영에서는 아무도 모른 채 밤이 지나간다).
+            driver.set_page_load_timeout(20)
+            driver.set_script_timeout(20)
             wait = WebDriverWait(driver, 15)
 
             log.info("셀레늄 STEP1: 쿠키 로그인")
@@ -238,7 +243,15 @@ class NaverCafeAnnouncer(Announcer):
             # SmartEditor 본문은 보통 contenteditable 영역 or iframe.
             body_written = self._selenium_type_body(driver, By, content)
             if not body_written:
-                log.warning("셀레늄: 본문 입력 영역을 못 찾음(셀렉터 조정 필요)")
+                # 여기서 그냥 등록을 누르면 제목만 있고 내용이 빈 글이
+                # 카페에 올라간다. 게다가 이 함수는 True 를 돌려줘서
+                # 운영자에게는 "공지 성공" 으로 보인다. 공지를 못 올리는
+                # 것보다 빈 글을 올리는 게 나쁘다 — 여기서 멈춘다.
+                log.error("네이버 카페: 본문 입력 영역을 못 찾아 게시를 "
+                          "중단했습니다(빈 글이 올라가지 않게). 카페 글쓰기 "
+                          "화면 구조가 바뀐 것으로 보입니다 — 셀렉터 조정이 "
+                          "필요합니다. 이번 공지는 안 나갔습니다.")
+                return False
 
             log.info("셀레늄 STEP5: 등록 버튼 클릭")
             btn = wait.until(EC.element_to_be_clickable(
