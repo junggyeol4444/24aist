@@ -667,7 +667,8 @@ class Orchestrator:
         # 통째로 멈춰서 그동안 채팅도, 종료 판단도, 말 끝 신호도 안 돈다.
         text = await asyncio.to_thread(
             compose, self.persona, ctx, cfg, llm=self.llm, now=now,
-            history_path=Path(self.cfg.memory.path) / "announce_history.json")
+            history_path=Path(self.cfg.memory.path) / "announce_history.json",
+            banned=self.cfg.safety.banned_words)
         log.info("[공지/%s] %s", kind, text.replace("\n", " "))
 
         announcers = self._announcers()
