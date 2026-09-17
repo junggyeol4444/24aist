@@ -395,22 +395,32 @@ class ChatPipeline:
             return msg.text, msg.author
         return sanitize_incoming(msg.text, msg.author)
 
-    def _cap_batch(self, lines: List[str]):
+    def _cap_batch(self, lines: List[str], game_flags: Optional[List[bool]] = None):
         """한 번에 넘길 양을 제한한다. (남길 줄, 못 넣은 건수) 를 돌려준다.
 
         최근 것을 남긴다 — 사람이 채팅창을 보면 최근 것이 눈에 들어온다.
         상한에 걸리는 건 정상 방송에선 없는 일이라, 걸리면 로그로 알린다
         (운영자가 폭주를 인지하고 flood_handling 을 켤지 정한다 — 기획안 4-2).
+
+        게임 안 채팅이 섞여 있으면 시청자 줄을 먼저 담는다. 붐비는 게임
+        서버는 방송인이 한 번 말하는 동안 수십 줄을 만들어내는데, 그냥
+        최근 순으로 자르면 그 사이에 올라온 시청자 채팅이 게임 채팅에
+        밀려 잘린다 — 기획 1-2 가 지키려는 건 시청자 쪽이다.
+        넘기는 순서는 원래(시간) 순서 그대로다.
         """
         max_lines = max(1, self.cfg.max_batch_lines)
         max_chars = max(100, self.cfg.max_batch_chars)
-        kept, total = [], 0
-        for line in reversed(lines):          # 최근 것부터
-            if len(kept) >= max_lines or total + len(line) > max_chars:
+        flags = game_flags or [False] * len(lines)
+        # 시청자 먼저, 그 안에서 최근 것부터
+        order = sorted(range(len(lines)), key=lambda i: (flags[i], -i))
+        kept_idx, total = [], 0
+        for i in order:
+            line = lines[i]
+            if len(kept_idx) >= max_lines or total + len(line) > max_chars:
                 break
-            kept.append(line)
+            kept_idx.append(i)
             total += len(line) + 1
-        kept.reverse()
+        kept = [lines[i] for i in sorted(kept_idx)]
         dropped = len(lines) - len(kept)
         if dropped:
             # 폭주는 몇 초에 한 번씩 계속 걸린다. 매번 찍으면 3시간이면
@@ -509,7 +519,8 @@ class ChatPipeline:
                 m.platform if self._include_platform else None,
                 self._donation(m),
             ))
-        lines, dropped = self._cap_batch(lines)
+        lines, dropped = self._cap_batch(
+            lines, [bool(getattr(m, "from_game", False)) for m in batch])
         body = "\n".join(lines)
         if dropped:
             # 버린 게 아니다 — 기록·기억에는 전부 남았다. AI 에게는 감당

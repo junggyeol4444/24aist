@@ -93,3 +93,39 @@ def test_파이프라인이_없으면_예전처럼_코어로_보낸다():
     asyncio.run(feed._handle({"event": "chat", "username": "Alex",
                               "message": "안녕"}))
     assert b.sent == [("Alex", "안녕")]
+
+
+def test_묶음이_넘칠_때_시청자_채팅부터_담는다():
+    """붐비는 게임 서버는 방송인이 한 번 말하는 동안 수십 줄을 만든다.
+
+    그냥 최근 순으로 자르면, 먼저 올라온 시청자 질문이 게임 채팅에
+    밀려 통째로 잘린다(실측: 상한 5줄일 때 시청자 2줄이 전부 사라짐).
+    """
+    cfg = BroadcastConfig()
+    cfg.max_batch_lines = 5
+    b = _Bridge()
+    p = ChatPipeline(b, cfg, safety=SafetyConfig())
+
+    batch = [ChatMessage(author="시청자A", text="질문이요", platform="twitch"),
+             ChatMessage(author="시청자B", text="저도요", platform="twitch")]
+    batch += [_game(f"게임말{i}", f"게임{i}") for i in range(8)]
+
+    asyncio.run(p._send_batch(batch))
+    out = b.sent[0][1]
+    assert "시청자A" in out and "시청자B" in out
+    # 시간 순서는 그대로여야 자연스럽게 읽힌다
+    assert out.index("시청자A") < out.index("게임")
+    # 못 넣은 건수는 그대로 알려준다
+    assert "그 외 5건" in out
+
+
+def test_게임이_없으면_예전처럼_최근_것을_남긴다():
+    cfg = BroadcastConfig()
+    cfg.max_batch_lines = 3
+    b = _Bridge()
+    p = ChatPipeline(b, cfg, safety=SafetyConfig())
+    batch = [ChatMessage(author=f"시청자{i}", text=f"말{i}", platform="twitch")
+             for i in range(6)]
+    asyncio.run(p._send_batch(batch))
+    out = b.sent[0][1]
+    assert "시청자5" in out and "시청자0" not in out
