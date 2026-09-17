@@ -31,6 +31,7 @@ def hint(win: str, posix: str) -> str:
 CMD_SETUP_ALL = (r"windows\설치.bat 더블클릭", "./run.sh setup")
 CMD_FRONTEND = (r"windows\프론트엔드받기.bat 더블클릭", "./scripts/fetch_frontend.sh")
 CMD_CORE_SETUP = (r"windows\코어준비.bat 더블클릭", "bash scripts/setup_openllm_vtuber.sh")
+CMD_CORE_RUN = (r"windows\코어실행.bat 더블클릭", "cd Open-LLM-VTuber && uv run run_server.py")
 
 
 @dataclass

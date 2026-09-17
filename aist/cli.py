@@ -383,6 +383,18 @@ def cmd_doctor(args) -> int:
     cfg, _ = _load(args)
     print("연결 점검 (코어 WS / OBS)\n")
     ok = True
+    # 점검이 [X] 를 줄줄이 찍어놓고 "위 항목을 확인하세요" 로 끝나면,
+    # 운영자는 지금 방송을 켜도 되는지 알 수 없다. 무엇이 안 되는지와
+    # 뭘 하면 되는지를 끝에 사람 말로 모아 준다(check 와 같은 방식).
+    todo: list = []          # (지금 켜면 이렇게 된다, 이렇게 고친다)
+    # '코어가 안 켜진다' 류는 이 폴더의 코어 파일을 보고 하는 말이다.
+    # 코어를 다른 폴더에 설치해 쓰는 운영자도 있고, 그때는 코어가 멀쩡히
+    # 붙어 있는데도 "코어가 안 켜집니다" 가 뜬다. 실제로 붙었는지를 보고
+    # 그 경우에는 말을 바꾼다 — 아니면 점검 결과가 자기 모순이 된다.
+    core_files: list = []
+    first: list = []         # 제일 먼저 고쳐야 하는 것(코어)
+    core_dead = False
+    core_alive = False
 
     # 연결을 시도하기 전에, 애초에 시도할 수 있는 상태인지부터 본다.
     from . import preflight
@@ -396,22 +408,33 @@ def cmd_doctor(args) -> int:
     if not fe_ok:
         ok = False
         print(f"  [X] 코어 웹UI: {fe_msg}\n")
+        todo.append(("OBS 화면에 아바타가 안 나옵니다(웹UI 없음)",
+                     f"코어 웹UI 받기: {preflight.hint(*preflight.CMD_FRONTEND)}"))
     conf_ok, conf_msg = preflight.core_conf_ready()
     if not conf_ok:
         ok = False
         print(f"  [X] 코어 설정: {conf_msg}\n")
+        core_files.append(("코어가 안 켜집니다(conf.yaml 없음)",
+                           f"코어 설정 준비: {preflight.hint(*preflight.CMD_CORE_SETUP)}"))
     deps_ok, deps_msg = preflight.core_deps_ready()
     if not deps_ok:
         ok = False
         print(f"  [X] 코어 의존성: {deps_msg}\n")
+        core_files.append(("코어가 안 켜집니다(의존성 미설치)",
+                           f"코어 의존성 설치: {preflight.hint(*preflight.CMD_CORE_SETUP)}"))
     tts_ok, tts_msg = preflight.core_tts_config()
     if not tts_ok:
         ok = False
         print(f"  [X] 방송인 목소리(TTS): {tts_msg}\n")
+        todo.append(("자막만 나가고 목소리가 안 납니다",
+                     "코어 conf.yaml 의 TTS 설정과 TTS 서버를 확인하세요"))
     py_ok, py_msg = preflight.core_python_ok()
     if not py_ok:
         ok = False
         print(f"  [X] 파이썬 버전: {py_msg}\n")
+        core_files.append(("코어가 안 켜질 수 있습니다(파이썬 버전)",
+                           "위 안내대로 파이썬을 다시 설치하고 .venv 를 지운 뒤 "
+                           f"{preflight.hint(*preflight.CMD_SETUP_ALL)}"))
 
     # 1) 코어 WebSocket (점검은 빠르게 1회만 시도)
     cfg.vtuber.connect_timeout_sec = min(cfg.vtuber.connect_timeout_sec, 3)
@@ -426,12 +449,20 @@ def cmd_doctor(args) -> int:
 
     try:
         _asyncio.run(_check_core())
+        core_alive = True
         print(f"  [OK] 코어 WS 연결됨 — {cfg.vtuber.ws_url}")
     except RuntimeError as e:
         ok = False
+        core_dead = True
         print(f"  [!] 코어 점검 불가: {e}")
+        first.append(("코어를 점검하지 못했습니다",
+                      "위 메시지를 먼저 해결하세요"))
     except Exception as e:  # 연결 실패(코어 미실행 등)
         ok = False
+        core_dead = True
+        first.append(("코어에 못 붙습니다",
+                      "코어(Open-LLM-VTuber)를 먼저 켜세요: "
+                      + preflight.hint(*preflight.CMD_CORE_RUN)))
         print(f"  [X] 코어 WS 연결 실패 ({cfg.vtuber.ws_url}): {e}")
         print("       → Open-LLM-VTuber 가 실행 중인지 확인 (uv run run_server.py)")
         if cfg.vtuber.ws_url.rstrip("/").endswith("/proxy-ws"):
@@ -453,6 +484,11 @@ def cmd_doctor(args) -> int:
             ok = False
             print(f"  [X] OBS 연결 실패: {e}")
             print("       → OBS 실행 + obs-websocket 켜짐 + 포트/비밀번호 확인")
+            todo.append(
+                ("송출을 자동으로 켜고 끄지 못합니다"
+                 if cfg.obs.start_stream else "OBS 를 제어하지 못합니다",
+                 "OBS 를 켜고 [도구]-[obs-websocket 설정] 에서 서버를 켠 뒤 "
+                 "포트·비밀번호를 맞추세요"))
     except Exception as e:  # noqa: BLE001
         ok = False
         print(f"  [!] OBS 점검 불가: {e}")
@@ -466,6 +502,8 @@ def cmd_doctor(args) -> int:
         except Exception as e:  # 식별자 미설정 등
             ok = False
             print(f"    [X] {p:<11}: 구성 실패 — {e}")
+            todo.append((f"{p} 채팅이 안 들어옵니다(설정이 비어 있습니다)",
+                         "채널 ID·토큰을 채우세요 (.env / config.yaml)"))
             continue
 
         async def _probe(s):
@@ -482,11 +520,38 @@ def cmd_doctor(args) -> int:
             if level == "fail":
                 ok = False
             print(f"    {tag} {p:<11}: {status}")
+            if level == "fail":
+                todo.append((f"{p} 채팅이 안 들어옵니다(방송인이 혼잣말만 합니다)",
+                             "채널 ID·토큰을 확인하세요 (.env / config.yaml)"))
         except Exception as e:  # noqa: BLE001
             ok = False
             print(f"    [X] {p:<11}: 점검 실패 — {e}")
+            todo.append((f"{p} 채팅이 들어올지 확인하지 못했습니다",
+                         "방송 전이면 정상입니다. 방송 중인데 이게 뜨면 "
+                         "채널 ID·토큰을 확인하세요"))
 
-    print("\n점검 끝.", "모두 OK." if ok else "위 항목을 확인하세요.")
+    if core_alive and core_files:
+        # 코어는 지금 이 순간 붙어 있다. 그런데 이 폴더의 코어 파일은
+        # 비어 있다 = 다른 폴더의 코어를 쓰고 있다는 뜻이다.
+        print("\n  (참고) 코어는 지금 붙어 있는데 이 폴더의 코어 파일은 비어 "
+              "있습니다 — 코어를 다른 폴더에 설치해 쓰고 있다면 위의 "
+              "'코어 웹UI/설정/의존성' 항목은 그 폴더 기준으로 확인하세요.")
+    elif core_files:
+        todo = core_files + todo
+    todo = first + todo
+    if not todo:
+        print("\n점검 끝. 모두 OK — 지금 켜도 됩니다.")
+        return 0 if ok else 1
+    # 가장 중요한 한 줄부터. 코어가 안 붙으면 나머지는 볼 것도 없다.
+    print()
+    if core_dead:
+        print("지금 켜면 방송이 안 됩니다. 방송인이 한 마디도 못 합니다.")
+    else:
+        print("지금 켜면 이런 상태로 나갑니다:")
+    for what, how in todo:
+        print(f"  - {what}")
+        print(f"      → {how}")
+    print("\n점검 끝.")
     return 0 if ok else 1
 
 
