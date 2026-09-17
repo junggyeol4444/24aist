@@ -207,3 +207,46 @@ def test_memory_file_with_wrong_shape_is_also_kept(tmp_path):
     m = Memory(MemoryConfig(path=str(mem)))
     assert m._sessions == []
     assert any("깨짐" in p.name for p in mem.iterdir())
+
+
+# --------- 방금 끊겼다 돌아온 방송을 "저번 방송" 이라고 부르면 안 된다 ---------
+def test_방금_끊겼다_돌아오면_저번_방송이라고_안_한다(tmp_path):
+    """윈도우 업데이트 재부팅 → 무인운영.bat 재시작 시나리오.
+
+    실제로 kill -9 하고 다시 켜보니, 3분 전까지 그 방송을 보고 있던
+    시청자에게 "저번 방송 땐 5명 정도 왔었고" 라고 인사했다.
+    """
+    from aist.chat.base import ChatMessage
+    from aist.config import MemoryConfig
+    from aist.memory import Memory
+
+    d = tmp_path / "mem"
+    m = Memory(MemoryConfig(path=str(d)))
+    m.start_session()
+    m.note_chat(ChatMessage(author="보던사람", text="ㅎㅇ", platform="t"))
+    # end_session 없이 프로세스가 죽었다 → current_session.json 만 남는다
+    del m
+
+    again = Memory(MemoryConfig(path=str(d)))
+    assert "저번 방송" not in again.recent_summary()
+    assert "끊겨서" in again.recent_summary()
+
+
+def test_한참_전에_끊긴_방송은_그냥_저번_방송이다(tmp_path):
+    import json
+    from datetime import datetime, timedelta, timezone
+    from aist.config import MemoryConfig
+    from aist.memory import Memory
+
+    d = tmp_path / "mem"
+    d.mkdir(parents=True)
+    old = (datetime.now(timezone.utc) - timedelta(hours=5)).isoformat()
+    (d / "current_session.json").write_text(json.dumps({
+        "start": old, "end": None, "events": [],
+        "viewers": ["어제사람", "그저께사람"], "superchats": [], "summary": "",
+    }, ensure_ascii=False), encoding="utf-8")
+
+    m = Memory(MemoryConfig(path=str(d)))
+    # crashed_at 은 파일 mtime(방금)이라 start 로 판단해야 한다
+    m._sessions[-1].pop("crashed_at", None)
+    assert "저번 방송 땐 2명" in m.recent_summary()

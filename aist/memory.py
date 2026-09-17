@@ -24,6 +24,10 @@ log = logging.getLogger("aist.memory")
 # 방송 중 기억을 디스크에 다시 쓰는 최소 간격(초). 너무 잦으면 긴 방송
 # 후반에 매 채팅마다 수백 KB 를 다시 쓰게 된다.
 _CHECKPOINT_SEC = 30.0
+# 사고로 끊긴 방송을 이만큼 안에 다시 켰으면, 그건 '저번 방송'이 아니라
+# '방금 그 방송'이다. 시청자 입장에서는 보고 있던 방송이 끊겼다가
+# 돌아온 것이다(윈도우 업데이트 재부팅 → 무인운영.bat 재시작).
+_JUST_CRASHED_MIN = 30
 
 
 def _now_iso() -> str:
@@ -49,6 +53,13 @@ class Memory:
         self._orphan: Optional[Dict] = self._load_current()
         if self._orphan is not None:
             log.warning("지난 방송이 정상 종료되지 않았습니다 — 중간까지의 기억을 살립니다.")
+            self._orphan["crashed"] = True
+            # 마지막으로 기록이 남은 시각 = 파일이 마지막으로 쓰인 시각.
+            try:
+                self._orphan["crashed_at"] = datetime.fromtimestamp(
+                    self.current_file.stat().st_mtime, timezone.utc).isoformat()
+            except OSError:
+                pass
             self._sessions.append(self._orphan)
         # chroma 백엔드(선택): 의미검색용 색인. 실패하면 키워드 검색으로 대체.
         self._chroma = self._init_chroma() if cfg.backend == "chroma" else None
@@ -309,6 +320,10 @@ class Memory:
         if not past:
             return ""
         last = past[-1]
+        # 방금 끊겼다가 돌아온 거면 "저번 방송 땐~" 이 아니다. 시청자는
+        # 3분 전까지 그 방송을 보고 있었다 — "저번" 이라고 하면 이상하다.
+        if last.get("crashed") and self._crashed_just_now(last):
+            return "아까 방송이 갑자기 끊겨서 다시 켰어"
         if last.get("summary"):
             return f"저번 방송 때 {last['summary']}"
         parts = []
@@ -321,6 +336,19 @@ class Memory:
         if not parts:
             return ""
         return "저번 방송 땐 " + ", ".join(parts)
+
+    @staticmethod
+    def _crashed_just_now(session: Dict) -> bool:
+        """그 사고가 방금 일어난 일인지."""
+        when = session.get("crashed_at") or session.get("start") or ""
+        try:
+            t = datetime.fromisoformat(when)
+        except (TypeError, ValueError):
+            return False
+        if t.tzinfo is None:
+            t = t.replace(tzinfo=timezone.utc)
+        gap = (datetime.now(timezone.utc) - t).total_seconds()
+        return 0 <= gap <= _JUST_CRASHED_MIN * 60
 
     def regulars(self, top: int = 5) -> List[str]:
         """여러 방송에 걸쳐 자주 보인 시청자(단골) 닉네임."""
