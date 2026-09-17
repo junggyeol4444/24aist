@@ -24,6 +24,59 @@ log = logging.getLogger("aist.report")
 _MAX_LISTED = 20          # 리포트에 직접 나열하는 최대 건수
 
 
+
+# 이벤트 이름은 코드용 영어다. 운영자에게는 그대로 보여주면 안 된다 —
+# 실제 실행에서 "tts_silent" 한 줄만 찍힌 리포트를 보고 운영자는 방송이
+# 멀쩡히 끝난 줄 알았는데, 실제로는 코어가 죽었다 살아나고 5분 넘게
+# 소리가 안 나간 방송이었다.
+_EVENT_LABEL = {
+    "tts_silent": "목소리가 안 나감(자막만) — TTS 문제",
+    "core_lost": "코어 연결이 끊김",
+    "core_recovered": "코어에 다시 붙음",
+    "core_gone": "코어에 다시 못 붙어 방송을 내림",
+    "core_mute": "소리·자막이 시청자에게 안 나감 — 방송을 내림",
+    "core_stuck": "발화가 걸림(말 끝 신호가 안 옴)",
+    "core_brain_dead": "AI 가 LLM 오류 문구를 읽음 — 방송을 내림",
+    "web_ui_refresh": "웹UI(OBS 브라우저 소스)를 새로고침함",
+    "chat_lost": "채팅 연결이 끊김",
+    "chat_gave_up": "채팅을 못 살려 혼잣말로 진행",
+    "obs_down": "송출이 내려가 있어 다시 켬",
+    "obs_reconnected": "OBS 에 다시 붙음",
+    "obs_unreachable": "OBS 가 대답이 없어 방송을 내림",
+    "obs_gave_up": "송출이 반복해서 내려가 방송을 내림",
+    "obs_restart_failed": "송출을 다시 못 켜 방송을 내림",
+    "ended_early": "마무리 인사도 못 하고 방송이 끊김",
+    "game": "게임/컨텐츠 진행",
+}
+
+# 이 중 하나라도 있으면 "정상적인 방송이 아니었다".
+_SERIOUS = ("core_lost", "core_gone", "core_mute", "core_stuck",
+            "core_brain_dead", "chat_lost", "chat_gave_up", "obs_down",
+            "obs_unreachable", "obs_gave_up", "obs_restart_failed",
+            "ended_early")
+
+
+def _trouble_lines(events) -> list:
+    """이번 방송에 사고가 있었으면 맨 위에 한 덩어리로 적는다.
+
+    운영자가 다음 날 리포트를 펴서 제일 먼저 보는 자리다. 여기에 없으면
+    로그 파일을 열어 볼 사람은 없다고 봐야 한다(기획안 2-2 "하루 5~10분").
+    """
+    counts = {}
+    for e in events:
+        kind = str(e.get("kind", ""))
+        if kind in _SERIOUS:
+            counts[kind] = counts.get(kind, 0) + 1
+    if not counts:
+        return []
+    parts = [f"{_EVENT_LABEL.get(k, k)} {n}회" for k, n in counts.items()]
+    out = ["- ⚠ **이번 방송은 정상적으로 굴러가지 않았습니다**: " + ", ".join(parts)]
+    if "ended_early" in counts or "core_gone" in counts or "core_mute" in counts:
+        out.append("  - 방송이 예정보다 일찍 스스로 내려갔습니다. "
+                   "`docs/OPERATOR.md` 의 '방송이 스스로 내려갔을 때' 를 보세요.")
+    return out
+
+
 def _won_total(superchats) -> int:
     """후원 금액 합계(원). 숫자로 읽히는 것만 더한다. 못 읽으면 0."""
     total = 0
@@ -114,6 +167,7 @@ def generate_report(
     if any(e.get("kind") == "tts_silent" for e in events):
         lines.append("- ⚠ 이번 방송은 **목소리가 나가지 않았습니다**(자막만). "
                      "코어 설정의 tts_model 과 TTS 서버를 확인하세요.")
+    lines.extend(_trouble_lines(events))
     if events:
         lines.append(f"- 기록된 이벤트: {len(events)}건")
         for e in events[:20]:
@@ -121,7 +175,12 @@ def generate_report(
             # 그대로 두면 02:15 방송 리포트 안에 17:16 이벤트가 찍혀서
             # 트랜스크립트와 맞춰보려던 운영자가 헤맨다.
             when = _to_local(e.get("t", ""), tz_name)[:16]
-            lines.append(f"  - [{when}] {e.get('kind')}")
+            kind = str(e.get("kind", ""))
+            label = _EVENT_LABEL.get(kind)
+            lines.append(f"  - [{when}] {label or kind}"
+                         + (f" ({kind})" if label else ""))
+        if len(events) > 20:
+            lines.append(f"  - (그 외 {len(events) - 20}건)")
 
     # 트랜스크립트 통계 + AI 발화 전문
     if transcript_path:

@@ -19,6 +19,7 @@ import time
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Optional
+from urllib.parse import urlsplit
 
 from .announce.base import Announcer
 from .announce.composer import AnnounceContext, compose, should_post
@@ -93,6 +94,8 @@ class Orchestrator:
         self._core_lost = False
         self._chat_source_dead = False
         self._core_mute = False
+        self._web_refreshes = 0
+        self._bg: set = set()
         self._core_brain_dead = ""
         self._next_obs_check = 0.0
         self._obs_restarts = 0
@@ -230,6 +233,7 @@ class Orchestrator:
         self._core_lost = False
         self._chat_source_dead = False
         self._core_mute = False
+        self._web_refreshes = 0
         self._core_brain_dead = ""
         self._next_obs_check = 0.0
         self._obs_restarts = 0
@@ -244,10 +248,12 @@ class Orchestrator:
 
         # 트랜스크립트(사고발언 점검·다시보기 학습용). 실패해도 방송은 진행.
         transcript = None
+        self._transcript = None
         if cfg.logging.transcript:
             try:
                 transcript = Transcript(str(Path(cfg.logging.dir) / "transcripts"))
                 transcript.open_session(start_dt)
+                self._transcript = transcript
             except Exception as e:
                 log.warning("트랜스크립트 시작 실패(기록 없이 진행): %s", e)
                 transcript = None
@@ -305,31 +311,43 @@ class Orchestrator:
                 # 채팅이 '안 오는 것'과 소스가 '죽은 것'은 다르다.
                 # 전자는 정상(혼잣말로 끌고 감), 후자는 사고다.
                 self._chat_source_dead = True
+                self._event("chat_lost")
 
             def on_core_mute():
+                self._event("core_mute")
                 # 코어는 붙어 있는데 말이 시청자에게 안 나가는 상태
                 # (웹UI/OBS 브라우저 소스 미접속). 재연결로는 안 고쳐진다.
                 self._core_mute = True
 
+            def on_core_stuck(streak):
+                # 말 끝 신호가 안 온다 = 웹UI(OBS 브라우저 소스)가 코어에서
+                # 떨어져 있을 가능성이 크다. 코어를 껐다 켜면(업데이트·크래시)
+                # 우리는 다시 붙지만 브라우저 소스는 끊긴 채 남을 수 있다.
+                # 로그로 "새로고침하세요" 라고 부탁만 하는 건 무인 운영에서
+                # 아무 소용이 없다 — 볼 사람이 없다. 직접 누른다.
+                self._event("core_stuck", streak=streak)
+                if streak == 1 or streak % 3 == 0:
+                    # 태스크 참조를 안 들고 있으면 도중에 수거될 수 있다.
+                    t = asyncio.create_task(self._refresh_web_ui(obs))
+                    self._bg.add(t)
+                    t.add_done_callback(self._bg.discard)
+
             def on_core_brain_dead(text):
                 # 방송인이 LLM 오류 문구(영어)를 계속 읽고 있는 상태.
                 self._core_brain_dead = text
+                self._event("core_brain_dead", text=str(text)[:200])
 
             def on_tts_silent():
                 # 자막만 나가고 목소리가 없는 상태. 방송을 내리지는 않는다
                 # (일부러 자막만 쓰는 운영자도 있다). 대신 리포트에 남겨
                 # 운영자가 방송 뒤에 반드시 보게 한다.
-                self.memory.record_event("tts_silent")
-                if transcript is not None:
-                    try:
-                        transcript.log_event("tts_silent")
-                    except Exception:  # noqa: BLE001
-                        log.debug("트랜스크립트 기록 실패", exc_info=True)
+                self._event("tts_silent")
 
             pipeline = ChatPipeline(bridge, cfg.broadcast, on_message=on_chat,
                                     safety=cfg.safety, on_send_error=on_send_error,
                                     on_source_ended=on_source_ended,
                                     on_core_mute=on_core_mute,
+                                    on_core_stuck=on_core_stuck,
                                     on_core_brain_dead=on_core_brain_dead,
                                     on_tts_silent=on_tts_silent)
 
@@ -453,6 +471,10 @@ class Orchestrator:
             # 하고 나서 새로 들어온 채팅에 계속 답하다가 뚝 끊긴다.
             # 기획안 4-3: "뚝 끄지 말고 예고 → 마무리 인사 → 종료".
             # 인사가 마지막이어야 한다.
+            if core_gone:
+                # 마무리 인사도 못 하고 끝났다 = 시청자에게는 방송이 뚝
+                # 끊긴 것으로 보인다. 리포트에 반드시 남는다.
+                self._event("ended_early", why="코어/웹UI 문제로 방송을 내림")
             if not core_gone:
                 chat_stop.set()
                 if (cfg.end_judge.wind_down.enabled
@@ -718,11 +740,13 @@ class Orchestrator:
             await bridge.recv_loop(on_message=on_message)
             log.warning("코어 수신 루프가 끝났습니다 — 연결이 끊긴 것으로 봅니다.")
             self._core_lost = True
+            self._event("core_lost", why="수신 루프 종료")
         except asyncio.CancelledError:
             raise
         except Exception as e:  # noqa: BLE001 - 끊김 사유는 다양
             log.warning("코어 연결 끊김: %s", e)
             self._core_lost = True
+            self._event("core_lost", why=str(e)[:200])
 
     async def _check_stream_alive(self, obs) -> bool:
         """송출이 살아 있는지 가끔 확인하고, 내려가 있으면 다시 켠다.
@@ -755,9 +779,11 @@ class Orchestrator:
             if await asyncio.to_thread(obs.reconnect):
                 log.warning("OBS 가 대답이 없어 다시 붙었습니다(%d번째).",
                             self._obs_unreachable)
+                self._event("obs_reconnected", tries=self._obs_unreachable)
                 self._obs_unreachable = 0
                 return True
             if self._obs_unreachable >= max(1, oc.unreachable_max):
+                self._event("obs_unreachable", tries=self._obs_unreachable)
                 log.error("OBS 가 %d번 연속으로 대답이 없습니다 — 꺼졌거나 죽은 "
                           "것으로 봅니다. OBS 가 없으면 송출도 없습니다 "
                           "→ 이번 방송 종료", self._obs_unreachable)
@@ -766,19 +792,71 @@ class Orchestrator:
                         self._obs_unreachable, oc.unreachable_max)
             return True
         if self._obs_restarts >= oc.stream_restart_max:
+            self._event("obs_gave_up", restarts=self._obs_restarts)
             log.error("OBS 송출이 또 내려갔습니다(%d번 다시 켜봤습니다) — 스트림 키와 "
                       "인터넷 연결을 확인하세요. 아무도 안 보는 방송을 계속하지 "
                       "않습니다 → 이번 방송 종료", self._obs_restarts)
             return False
         self._obs_restarts += 1
+        self._event("obs_down", restarts=self._obs_restarts)
         log.error("OBS 송출이 내려가 있습니다 — 다시 켭니다(%d/%d).",
                   self._obs_restarts, oc.stream_restart_max)
         try:
             await asyncio.to_thread(obs.start_stream)
         except ObsError as e:
+            self._event("obs_restart_failed", why=str(e)[:200])
             log.error("송출 재시작 실패: %s → 이번 방송 종료", e)
             return False
         return True
+
+    # 브라우저 소스를 무한정 새로고침하지 않는다. 몇 번 눌러도 안 붙으면
+    # 원인이 다른 데(코어 설정 enable_proxy, 주소 오타) 있다는 뜻이고,
+    # 그때는 화면만 계속 깜빡이게 된다.
+    _WEB_REFRESH_MAX = 3
+
+    def _event(self, kind: str, **data) -> None:
+        """이번 방송에 일어난 일을 기억·트랜스크립트에 남긴다.
+
+        로그 파일에만 적으면 아무도 안 본다. 운영자가 다음 날 실제로 펴보는
+        건 리포트다(기획안 2-2 "하루 5~10분 점검"). 실제 실행에서 코어가
+        죽었다 살아나고 5분 넘게 소리가 안 나간 방송인데, 리포트에는 그 말이
+        한 줄도 없었다 — 운영자는 멀쩡히 끝난 줄 알게 된다.
+        """
+        try:
+            self.memory.record_event(kind, **data)
+        except Exception:  # noqa: BLE001 - 기록 실패가 방송을 깨면 안 된다
+            log.debug("사고 기록 실패(%s)", kind, exc_info=True)
+        tr = getattr(self, "_transcript", None)
+        if tr is not None:
+            try:
+                tr.log_event(kind, **data)
+            except Exception:  # noqa: BLE001
+                log.debug("트랜스크립트 기록 실패(%s)", kind, exc_info=True)
+
+    async def _refresh_web_ui(self, obs) -> None:
+        """웹UI 가 코어에서 떨어진 것 같을 때 OBS 브라우저 소스를 새로고침한다."""
+        if not obs.connected():
+            # OBS 에 안 붙은 설정(운영자 수동 단계)이다. 파이프라인이 이미
+            # "브라우저 화면이 떠 있는지 확인하세요" 라고 남겼다.
+            return
+        if self._web_refreshes >= self._WEB_REFRESH_MAX:
+            return
+        self._web_refreshes += 1
+        where = urlsplit(self.cfg.vtuber.ws_url).netloc
+        try:
+            n = await asyncio.to_thread(obs.refresh_browser_sources, where)
+        except Exception as e:  # noqa: BLE001 - OBS 가 그 사이 죽었을 수도 있다
+            log.warning("브라우저 소스 새로고침을 못 했습니다: %s", e)
+            return
+        if n:
+            log.warning("웹UI 가 코어에서 떨어진 것으로 보여 OBS 브라우저 소스 "
+                        "%d개를 새로고침했습니다(%d/%d번째).",
+                        n, self._web_refreshes, self._WEB_REFRESH_MAX)
+            self._event("web_ui_refresh", sources=n)
+        else:
+            log.warning("웹UI 가 코어에서 떨어진 것 같은데, 주소에 %s 가 들어간 "
+                        "OBS 브라우저 소스를 못 찾았습니다 — 브라우저 소스가 코어 "
+                        "웹UI 를 가리키는지 확인하세요.", where)
 
     async def _recover_core(self, bridge) -> bool:
         """방송 중 끊긴 코어를 다시 붙인다. 살리면 True, 포기면 False.
@@ -790,6 +868,7 @@ class Orchestrator:
         vt = self.cfg.vtuber
         if not vt.reconnect_during_broadcast:
             log.error("코어 연결이 끊겼고 방송 중 재연결이 꺼져 있습니다 → 방송 종료")
+            self._event("core_gone", why="reconnect_during_broadcast=false")
             return False
         for i in range(1, max(1, vt.reconnect_max_attempts) + 1):
             if self._stop.is_set():
@@ -801,9 +880,11 @@ class Orchestrator:
             if self._stop.is_set():
                 return False
             if await bridge.reconnect_once():
+                self._event("core_recovered", tries=i)
                 return True
         log.error("코어 재연결 %d회 모두 실패 → 이번 방송을 정상 종료합니다. "
                   "(끊긴 채로 계속 송출하지 않습니다)", vt.reconnect_max_attempts)
+        self._event("core_gone", tries=vt.reconnect_max_attempts)
         return False
 
     async def _restart_chat(self, cfg, pipeline, pipeline_task, chat_stop):
@@ -827,6 +908,7 @@ class Orchestrator:
         if dead:
             if not self._chat_gave_up:
                 self._chat_gave_up = True
+                self._event("chat_gave_up", why=str(dead)[:200])
                 log.error("채팅을 살릴 수 없습니다: %s 방송은 혼잣말로 "
                           "계속합니다.", dead)
             return None

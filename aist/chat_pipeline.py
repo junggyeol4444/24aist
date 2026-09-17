@@ -43,6 +43,7 @@ class ChatPipeline:
         on_send_error: Optional[Callable[[Exception], None]] = None,
         on_source_ended: Optional[Callable[[], None]] = None,
         on_core_mute: Optional[Callable[[], None]] = None,
+        on_core_stuck: Optional[Callable[[int], None]] = None,
         on_core_brain_dead: Optional[Callable[[str], None]] = None,
         on_tts_silent: Optional[Callable[[], None]] = None,
     ):
@@ -59,6 +60,9 @@ class ChatPipeline:
         # 코어가 '말을 끝냈다'는 신호를 연속으로 못 줄 때 알린다.
         # = 시청자에게 소리·자막이 안 나가는 상태(웹UI 미접속).
         self.on_core_mute = on_core_mute
+        # 발화가 한 번 걸릴 때마다(= 말 끝 신호가 안 올 때마다) 알린다.
+        # 방송을 내리기 전에 고쳐볼 기회를 오케스트레이터에 준다.
+        self.on_core_stuck = on_core_stuck
         # 코어가 LLM 오류 문구를 그대로 읽어버릴 때 알린다.
         self.on_core_brain_dead = on_core_brain_dead
         # 자막은 나가는데 소리가 비어 있을 때 알린다(TTS 죽음).
@@ -313,6 +317,14 @@ class ChatPipeline:
             # 끼어들기 신호를 보내면 코어가 그 대화를 취소하고 큐가 풀린다.
             self._unstick_core()
             self._core_busy = False
+            # 큐만 풀고 끝내면 다음 발화도 똑같이 걸린다. 고칠 수단이
+            # 있는 쪽(오케스트레이터 → OBS 브라우저 소스 새로고침)에
+            # 몇 번째인지 알려준다.
+            if self.on_core_stuck is not None:
+                try:
+                    self.on_core_stuck(self._busy_streak)
+                except Exception as e:  # noqa: BLE001 - 콜백 사고가 방송을 깨지 않게
+                    log.debug("on_core_stuck 콜백 실패: %s", e)
             # 끼어들기로 큐만 풀어주고 계속 도는 건 반쪽짜리다. 웹UI 가 안
             # 붙어 있으면 그 뒤로도 영영 소리가 안 나가는데, 방송은 조용한
             # 화면만 몇 시간씩 내보내게 된다. 연속으로 이 지경이면 끊긴
@@ -407,6 +419,20 @@ class ChatPipeline:
     # 재연결을 시도하고, 코어는 멀쩡하니 성공하고, 다음 채팅에서 또 같은
     # 버그가 나서 무한 재연결 루프가 된다. 방송은 그동안 아무 말도 못 한다.
     _BUG_ERRORS = (TypeError, AttributeError, NameError, ImportError)
+    # 반대로, 연결이 끊겨서 못 보낸 건 '이미 아는 일'이다. 오케스트레이터가
+    # 바로 옆에서 재연결을 하고 있다. 여기에 파이썬 트레이스백을 통째로
+    # 쏟으면(실제로 코어를 죽여본 실행에서 17줄이 찍혔다) 운영자가 봐야 할
+    # 한국어 안내가 그 밑에 묻힌다. 게다가 영어 스택은 운영자가 할 수 있는
+    # 일을 하나도 알려주지 않는다.
+    _NET_ERRORS = (ConnectionError, OSError, EOFError, asyncio.TimeoutError)
+
+    @classmethod
+    def _is_net_error(cls, e: Exception) -> bool:
+        if isinstance(e, cls._NET_ERRORS):
+            return True
+        # websockets 는 지연 import 라 클래스로 직접 비교하지 않는다.
+        # (ConnectionClosedError 등은 전부 이 모듈에 있다)
+        return (type(e).__module__ or "").startswith("websockets")
 
     def _note_send_error(self, e: Exception, where: str):
         """전송 실패 로그 — 같은 실패가 이어지면 트레이스백을 반복하지 않는다."""
@@ -415,6 +441,9 @@ class ChatPipeline:
         if self._send_fail_streak == 1:
             if is_bug:
                 log.exception("%s 실패 — 연결 문제가 아니라 코드 문제로 보입니다", where)
+            elif self._is_net_error(e):
+                log.error("%s 실패: 코어와의 연결이 끊겼습니다(%s). "
+                          "다시 붙는 중입니다.", where, type(e).__name__)
             else:
                 log.exception("%s 실패", where)
         elif self._send_fail_streak % 20 == 0:

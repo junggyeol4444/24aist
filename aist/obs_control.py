@@ -161,6 +161,62 @@ class ObsController:
             return "unreachable"
         return "live" if getattr(status, "output_active", False) else "down"
 
+    def connected(self) -> bool:
+        """지금 OBS 에 붙어 있는지(외부용)."""
+        return self._client is not None
+
+    def refresh_browser_sources(self, url_contains: str = "") -> int:
+        """웹UI 를 띄운 브라우저 소스를 새로고침한다. 새로고친 개수를 돌려준다.
+
+        코어가 재시작되거나 순단이 나면 브라우저 소스가 물고 있던 웹소켓이
+        끊긴다. 우리 프로세스는 다시 붙지만 브라우저 소스는 끊긴 채로
+        남을 수 있고, 그러면 AI 가 말을 해도 시청자에게는 아무것도 안
+        나간다(코어는 '재생 끝' 응답을 기다리느라 대화가 영영 안 끝난다).
+        실제로 코어를 죽였다 살린 실행에서, 우리 쪽은 "재연결 성공" 인데
+        그 뒤 90초마다 발화가 걸리고 화면은 조용한 상태가 재현됐다.
+
+        운영자에게 "브라우저 소스를 새로고침하세요" 라고 로그로 부탁만
+        하는 건 무인 운영에서 아무 의미가 없다. OBS 가 우리 손에 있으면
+        우리가 직접 누른다.
+
+        url_contains 가 있으면 그 문자열이 주소에 든 소스만 건드린다
+        (알림창·오버레이 같은 다른 브라우저 소스를 괜히 깜빡이게 하지
+        않기 위해서다).
+        """
+        cl = self._client
+        if cl is None:
+            return 0
+        try:
+            inputs = getattr(cl.get_input_list(), "inputs", []) or []
+        except Exception as e:  # noqa: BLE001 - OBS 가 막 죽었을 수도 있다
+            log.warning("브라우저 소스 목록을 못 읽었습니다: %s", e)
+            return 0
+        done = 0
+        for item in inputs:
+            if not isinstance(item, dict):
+                continue
+            if "browser" not in str(item.get("inputKind", "")).lower():
+                continue
+            name = item.get("inputName") or ""
+            if not name:
+                continue
+            if url_contains:
+                try:
+                    settings = getattr(
+                        cl.get_input_settings(name), "input_settings", {}) or {}
+                except Exception:  # noqa: BLE001 - 소스 하나 때문에 멈추지 않는다
+                    continue
+                if url_contains not in str(settings.get("url", "")):
+                    continue
+            try:
+                cl.press_input_properties_button(name, "refreshnocache")
+            except Exception as e:  # noqa: BLE001 - 버튼 이름은 OBS 버전마다 다를 수 있다
+                log.warning("브라우저 소스 새로고침 실패(%s): %s", name, e)
+                continue
+            log.info("OBS 브라우저 소스 새로고침: %s", name)
+            done += 1
+        return done
+
     def reconnect(self) -> bool:
         """끊긴 OBS 에 다시 붙어본다(꺼져 있으면 설정에 따라 켜기도 한다)."""
         try:

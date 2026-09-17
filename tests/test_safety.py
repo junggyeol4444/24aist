@@ -167,9 +167,28 @@ def test_repeated_send_failure_does_not_spam_traceback(caplog):
     for _ in range(10):
         asyncio.run(pipe._send_single(
             ChatMessage(author="닉", text="안녕", platform="twitch")))
+    # 끊김은 '이미 아는 일'이다 — 오케스트레이터가 바로 옆에서 재연결한다.
+    # 영어 스택을 쏟아 봐야 운영자가 할 수 있는 일이 하나도 없고, 그 밑에
+    # 깔린 한국어 안내만 안 보이게 된다(코어를 죽여본 실행에서 17줄).
     tracebacks = [r for r in caplog.records if r.exc_info]
-    assert len(tracebacks) == 1          # 첫 실패만 트레이스백
+    assert tracebacks == []
+    first = [r for r in caplog.records if r.levelname == "ERROR"][0]
+    assert "연결이 끊겼습니다" in first.getMessage()
     assert len(seen) == 10               # 끊김은 매번 오케스트레이터에 알림
+
+
+def test_code_bug_still_shows_traceback(caplog):
+    """반대로 '코드 문제'는 트레이스백이 유일한 단서다 — 그건 남겨야 한다."""
+    class Broken(_SpyBridge):
+        async def _send(self, payload):
+            raise TypeError("이건 우리 코드 문제")
+
+    pipe = ChatPipeline(Broken(), BroadcastConfig(), safety=SafetyConfig())
+    asyncio.run(pipe._send_single(
+        ChatMessage(author="닉", text="안녕", platform="twitch")))
+    tracebacks = [r for r in caplog.records if r.exc_info]
+    assert len(tracebacks) == 1
+    assert "코드 문제" in tracebacks[0].getMessage()
 
 
 # --------- 닉네임이 비면 시청자 입력이 운영자 지시처럼 보인다 ---------
