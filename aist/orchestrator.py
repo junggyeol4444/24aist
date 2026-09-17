@@ -588,6 +588,12 @@ class Orchestrator:
         if transcript is not None:
             try:
                 transcript_path = transcript.path
+                if getattr(transcript, "write_failed", False):
+                    # 기록이 중간에 끊겼는데 리포트는 그 파일로 만들어진다.
+                    # 그대로 두면 "AI 발화 수: 12" 같은 숫자가 방송 전체인
+                    # 것처럼 보이고, '사고 발언 점검' 이 5%만 덮은 채
+                    # 끝난다. 운영자는 그 사실을 알 방법이 없다.
+                    self._event("transcript_lost")
                 transcript.close()
             except Exception:
                 log.exception("트랜스크립트 마감 실패(방송 종료는 계속)")

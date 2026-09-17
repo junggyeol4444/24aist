@@ -206,3 +206,44 @@ def test_report_flags_silent_broadcast(tmp_path):
     assert "목소리가 나가지 않았습니다" in body
     # 통계 앞(머리말)에 있어야 한다
     assert body.index("목소리가 나가지 않았습니다") < body.index("## 점검 메모")
+
+
+# --------- 기록이 중간에 끊겼는데 리포트는 그 파일로 만들어진다 ---------
+def test_기록이_끊기면_리포트가_그걸_알린다():
+    """디스크가 차면 트랜스크립트 쓰기가 죽는다(24시간 운영에서 실제로 난다).
+
+    리포트의 "AI 발화 수"와 "발화 전문" 은 그 파일로 만들어지므로,
+    끊긴 걸 안 알리면 5%만 담긴 기록이 방송 전체인 것처럼 보인다.
+    '사고 발언 점검' 이라는 그 칸의 존재 이유가 통째로 무너진다.
+    """
+    from aist.report import _EVENT_LABEL, _SERIOUS, _trouble_lines
+    assert "transcript_lost" in _SERIOUS
+    out = _trouble_lines([{"kind": "transcript_lost"}])
+    assert out and "방송 전체가 아님" in out[0]
+    assert "transcript_lost" in _EVENT_LABEL
+
+
+def test_쓰기가_죽으면_표시가_남는다(tmp_path):
+    from datetime import datetime
+    from aist.transcript import Transcript
+
+    t = Transcript(str(tmp_path / "tr"))
+    t.open_session(datetime.now())
+    t.log_ai("정상 발화")
+    assert t.write_failed is False
+
+    class _Full:
+        def write(self, *a):
+            raise OSError(28, "No space left on device")
+
+        def flush(self):
+            pass
+
+        def close(self):
+            pass
+
+    t._fh = _Full()
+    t.log_ai("이건 못 쓴다")
+    assert t.write_failed is True
+    # 방송은 계속 돌아야 한다 — 예외가 밖으로 나가면 안 된다
+    t.log_ai("그 뒤에도 안 터진다")

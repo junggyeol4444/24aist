@@ -57,6 +57,11 @@ class Transcript:
                 log.error("트랜스크립트 기록 실패 — 이번 방송은 기록 없이 진행합니다: %s", e)
             self._fh = None
 
+    @property
+    def write_failed(self) -> bool:
+        """이번 방송 기록이 중간에 끊겼는지(디스크 참·권한 등)."""
+        return self._write_failed
+
     def log_chat(self, msg: ChatMessage) -> None:
         self._write({
             "who": "viewer", "platform": msg.platform, "author": msg.author,
