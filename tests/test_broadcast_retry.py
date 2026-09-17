@@ -49,7 +49,7 @@ def test_retry_loop_stops_after_retry_max():
     o, cfg = _orc(retry_max=2, retry_backoff_sec=0)
     calls = []
 
-    async def fake_run(skip_start_announce=False, retries_left=0):
+    async def fake_run(skip_start_announce=False, retries_left=0, **kw):
         calls.append((skip_start_announce, retries_left))
         return "retry" if retries_left > 0 else "normal"
 

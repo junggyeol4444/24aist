@@ -183,10 +183,12 @@ class Orchestrator:
             # 다음 방송은 내일이었다. 무인 운영에서는 그게 정상일 수 없다.
             left = max(0, self.cfg.scheduler.retry_max)
             skip_announce = pre_announced
+            resuming = False
             while not self._stop.is_set():
                 try:
                     result = await self._run_broadcast(
-                        skip_start_announce=skip_announce, retries_left=left)
+                        skip_start_announce=skip_announce, retries_left=left,
+                        resuming=resuming)
                 except Exception:
                     log.exception("방송 사이클 중 오류 — 루프는 계속 유지")
                     break
@@ -194,6 +196,7 @@ class Orchestrator:
                     break
                 left -= 1
                 skip_announce = True      # 시작 공지는 이미 나갔다
+                resuming = True           # 같은 방송을 이어서 켜는 것이다
                 log.warning("방송이 사고로 일찍 끝났습니다 — %.0f초 뒤 같은 슬롯을 "
                             "다시 켭니다(남은 재시도 %d회).",
                             self.cfg.scheduler.retry_backoff_sec, left)
@@ -205,7 +208,8 @@ class Orchestrator:
 
     # ------------------------------------------------------------ 한 사이클
     async def _run_broadcast(self, skip_start_announce: bool = False,
-                            retries_left: int = 0) -> str:
+                            retries_left: int = 0,
+                            resuming: bool = False) -> str:
         """방송 한 사이클. 어떤 경로로 빠져나가든 뒷정리는 반드시 돈다.
 
         돌려주는 값: "normal"(정상 종료) | "aborted"(시작도 못 함) |
@@ -285,7 +289,10 @@ class Orchestrator:
                 cfg.obs.stream_check_sec, _OBS_FIRST_CHECK_SEC)
 
             # 3) 코어 연결 + 채팅 파이프라인
-            self.memory.start_session()
+            # 같은 슬롯을 다시 켜는 중이면 회차를 새로 열지 않는다
+            # (한 방송이 회차 여러 개로 쪼개지면 단골 집계·"저번에~"·
+            #  리포트가 전부 어긋난다).
+            self.memory.start_session(resume=resuming)
             try:
                 await bridge.connect()
             except asyncio.CancelledError:
@@ -561,11 +568,13 @@ class Orchestrator:
             except Exception:
                 log.exception("트랜스크립트 마감 실패(방송 종료는 계속)")
 
-        # 세션 기억 저장
-        try:
-            self.memory.end_session()
-        except Exception:
-            log.exception("세션 기억 저장 실패(방송 종료는 계속)")
+        # 세션 기억 저장. 다시 켤 회차면 아직 닫지 않는다 — 같은 슬롯의
+        # 재시도는 '같은 방송'이라, 여기서 닫으면 회차가 쪼개진다.
+        if not will_retry:
+            try:
+                self.memory.end_session()
+            except Exception:
+                log.exception("세션 기억 저장 실패(방송 종료는 계속)")
 
         # 방송 후 리포트(다시보기 학습) — 실패해도 조용히 넘어감.
         # 다시 켤 회차면 만들지 않는다. 15초 만에 끝난 시도마다 리포트와
