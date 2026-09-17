@@ -1,5 +1,5 @@
 [build-system]
-requires = ["setuptools>=61.0"]
+requires = ["setuptools>=77.0"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -8,10 +8,15 @@ version = "0.1.0"
 description = "AI 방송인 자동화 레이어 — Open-LLM-VTuber 위에 올리는 스케줄러/종료판단/OBS제어/공지봇/오케스트레이터"
 readme = "README.md"
 requires-python = ">=3.10"
-license = { text = "MIT" }
+license = "MIT"
+license-files = ["LICENSE"]
 authors = [{ name = "24aist" }]
 dependencies = [
   "PyYAML>=6.0",
+  # 윈도우에는 시스템 타임존 DB 가 없다. 이게 없으면 zoneinfo 가
+  # ZoneInfoNotFoundError 를 내고, config 의 timezone 설정이 통째로
+  # 무시된 채 PC 로컬 시간으로 돈다(방송 시각이 어긋난다).
+  'tzdata; sys_platform == "win32"',
 ]
 
 # 무거운/선택적 의존성은 기능별로 분리해서, 핵심 로직(스케줄러/종료판단/페르소나/

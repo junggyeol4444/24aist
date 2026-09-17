@@ -13,7 +13,7 @@ import logging
 import random
 from typing import AsyncIterator, Dict, Optional
 
-from .base import ChatMessage, ChatSource
+from .base import ChatMessage, ChatSource, RetryLog
 
 log = logging.getLogger("aist.chat.twitch")
 
@@ -62,6 +62,7 @@ class TwitchChat(ChatSource):
         self.nick = (nick or "").lower()
         self._ws = None
         self._closed = False
+        self._reconnect = RetryLog(log, "트위치 연결 끊김", base=3.0)
 
     async def _connect(self):
         import websockets  # 지연 import
@@ -80,6 +81,8 @@ class TwitchChat(ChatSource):
         await self._ws.send(f"JOIN #{self.channel}")
         log.info("트위치 채팅 연결됨 (#%s, %s)", self.channel,
                  "인증" if self.oauth_token else "익명")
+        self.connected_once = True
+        self._reconnect.success()
 
     async def messages(self) -> AsyncIterator[ChatMessage]:
         # 장시간 방송에서 IRC 연결이 끊길 수 있어 재연결 루프로 감싼다.
@@ -113,8 +116,9 @@ class TwitchChat(ChatSource):
             except Exception as e:
                 if self._closed:
                     break
-                log.warning("트위치 연결 끊김: %s (재연결)", e)
-                await asyncio.sleep(3)
+                # 플랫폼이 점검 중이면 이 자리가 3초마다 영원히 돈다.
+                # 같은 사유는 간격을 늘리고 로그도 줄인다(회전 로그 보호).
+                await asyncio.sleep(self.wait_after(self._reconnect, e))
 
     async def close(self) -> None:
         self._closed = True

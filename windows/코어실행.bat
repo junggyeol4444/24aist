@@ -13,11 +13,11 @@ echo === 방송 코어 (Open-LLM-VTuber) 실행 ===
 if not exist "conf.yaml" (
   if exist "conf.korean.yaml" (
     copy "conf.korean.yaml" "conf.yaml" >nul
-    echo conf.korean.yaml -^> conf.yaml 적용(한국어/페르소나)
+    echo conf.korean.yaml -^> conf.yaml 적용^(한국어/페르소나^)
   )
 )
 if not exist "frontend\index.html" (
-  echo [안내] 웹UI(화면)가 없습니다. windows\코어준비.bat 을 먼저 실행하세요.
+  echo [안내] 웹UI^(화면^)가 없습니다. windows\코어준비.bat 을 먼저 실행하세요.
   echo        ^(웹UI + 코어 의존성 + conf.yaml 을 한 번에 준비합니다^)
   if not defined NOPAUSE pause
   exit /b 1

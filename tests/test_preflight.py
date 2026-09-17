@@ -145,3 +145,119 @@ def test_core_python_ok_when_core_absent(monkeypatch, tmp_path):
     """코어 pyproject 가 없으면 막지 않는다(판단 근거가 없다)."""
     ok, msg = preflight.core_python_ok(tmp_path)
     assert ok is True
+
+
+# ------------------- 방송인 목소리(코어 TTS) 점검 -------------------
+def _core_conf(tmp_path, tts_block: str):
+    core = tmp_path / "Open-LLM-VTuber"
+    core.mkdir(parents=True, exist_ok=True)
+    (core / "conf.yaml").write_text(
+        "character_config:\n  tts_config:\n" + tts_block, encoding="utf-8")
+    return tmp_path
+
+
+def test_tts_check_catches_empty_ref_audio(tmp_path):
+    """기본으로 실려 있는 gpt_sovits 는 ref_audio_path 가 비어 있다.
+
+    그대로 방송하면 코어가 조용히 실패해서 자막만 나가고 목소리가 안 난다
+    (실제 코어에서 audio=0바이트로 확인). 켜기 전에 잡아야 한다.
+    """
+    from aist.preflight import core_tts_config
+    root = _core_conf(tmp_path,
+                      "    tts_model: 'gpt_sovits_tts'\n"
+                      "    gpt_sovits_tts:\n"
+                      "      api_url: 'http://127.0.0.1:9880/tts'\n"
+                      "      ref_audio_path: ''\n")
+    ok, msg = core_tts_config(root)
+    assert ok is False and "ref_audio_path" in msg
+
+
+def test_tts_check_catches_dead_local_server(tmp_path):
+    from aist.preflight import core_tts_config
+    root = _core_conf(tmp_path,
+                      "    tts_model: 'gpt_sovits_tts'\n"
+                      "    gpt_sovits_tts:\n"
+                      "      api_url: 'http://127.0.0.1:9880/tts'\n"
+                      "      ref_audio_path: 'voice/ref.wav'\n")
+    ok, msg = core_tts_config(root)
+    assert ok is False and "서버" in msg
+
+
+def test_tts_check_passes_for_server_less_model(tmp_path):
+    """별도 서버가 필요 없는 TTS 면 통과해야 한다(오탐 방지)."""
+    from aist.preflight import core_tts_config
+    root = _core_conf(tmp_path,
+                      "    tts_model: 'edge_tts'\n"
+                      "    edge_tts:\n"
+                      "      voice: 'ko-KR-SunHiNeural'\n")
+    assert core_tts_config(root) == (True, "edge_tts")
+
+
+def test_tts_check_reports_missing_model(tmp_path):
+    from aist.preflight import core_tts_config
+    root = _core_conf(tmp_path, "    azure_tts:\n      api_key: ''\n")
+    ok, msg = core_tts_config(root)
+    assert ok is False and "tts_model" in msg
+
+
+def test_llm_check_catches_dead_local_server(tmp_path):
+    """로컬 LLM(ollama 등)이 안 떠 있으면 점검이 잡아야 한다.
+
+    저장소에 실린 코어 설정은 ollama(localhost:11434)를 쓴다. 그런데
+    윈도우 설치 순서 어디에도 ollama 를 설치·실행하는 단계가 없다.
+    예전에는 "떠 있어야 합니다" 한 줄과 함께 OK 로 넘겼다 — 운영자는
+    점검을 통과한 줄 알고 방송을 켜고, 방송인은 대답 대신 영어 오류
+    문구를 읽는다(실제 코어에서 확인한 동작).
+    """
+    from aist.preflight import core_llm_config
+
+    core = tmp_path / "Open-LLM-VTuber"
+    core.mkdir(parents=True)
+    (core / "conf.yaml").write_text(
+        "character_config:\n"
+        "  agent_config:\n"
+        "    agent_settings:\n"
+        "      basic_memory_agent:\n"
+        "        llm_provider: 'ollama_llm'\n"
+        "    llm_configs:\n"
+        "      ollama_llm:\n"
+        "        base_url: 'http://127.0.0.1:11434/v1'\n"
+        "        model: 'qwen2.5:latest'\n", encoding="utf-8")
+    ok, msg = core_llm_config(tmp_path)
+    assert ok is False and "안 떠 있습니다" in msg
+
+
+def test_llm_check_passes_for_a_filled_cloud_key(tmp_path):
+    """클라우드 LLM 은 키만 채워져 있으면 통과한다(네트워크는 안 본다)."""
+    from aist.preflight import core_llm_config
+
+    core = tmp_path / "Open-LLM-VTuber"
+    core.mkdir(parents=True)
+    (core / "conf.yaml").write_text(
+        "character_config:\n"
+        "  agent_config:\n"
+        "    agent_settings:\n"
+        "      basic_memory_agent:\n"
+        "        llm_provider: 'openai_llm'\n"
+        "    llm_configs:\n"
+        "      openai_llm:\n"
+        "        llm_api_key: 'sk-real-looking-key'\n"
+        "        model: 'gpt-4o-mini'\n", encoding="utf-8")
+    assert core_llm_config(tmp_path)[0] is True
+
+
+def test_missing_core_folder_says_where_it_looked(tmp_path, monkeypatch):
+    """코어 폴더를 못 찾으면 어디서 찾았는지·지금 어디서 도는지 알려준다.
+
+    exe 를 dist 폴더에서 바로 실행하면 이 길로 온다. 예전에는 "없습니다"
+    한 줄만 나와서, 운영자는 멀쩡히 있는 코어를 다시 받으러 갔다.
+    """
+    from aist.preflight import (core_conf_ready, core_deps_ready,
+                                core_frontend_ready, core_startup_files_ready)
+
+    monkeypatch.chdir(tmp_path)
+    for fn in (core_frontend_ready, core_conf_ready, core_deps_ready,
+               core_startup_files_ready):
+        ok, msg = fn(tmp_path / "없는곳")
+        assert ok is False
+        assert "찾아본 곳" in msg and "실행 위치" in msg, (fn.__name__, msg)

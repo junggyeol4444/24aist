@@ -18,6 +18,7 @@ from typing import List, Optional
 from ..config import AnnounceConfig
 from ..llm import LLMClient
 from ..persona import Persona
+from ..safety import check_output
 
 log = logging.getLogger("aist.announce.composer")
 
@@ -141,6 +142,36 @@ def _llm_varied(
     return llm.complete(system, "\n".join(bits))
 
 
+# 공지는 커뮤니티에 영구히 남는 글이다. 말은 흘러가지만 글은 남는다.
+# 그런데 AI 가 쓴 공지는 지금까지 아무 검사 없이 그대로 올라갔다.
+#  - 길이: "1~2문장" 이라고 시켜도 LLM 은 가끔 길게 쓴다. 디스코드는
+#    2000자를 넘으면 400 을 돌려주고, 400 은 재시도 대상이 아니라서
+#    그 공지는 조용히 사라진다.
+#  - 금지어: 운영자가 정한 금지어는 '발화' 에만 걸려 있었다. 같은 AI 가
+#    쓴 글은 그대로 나갔다 — 지워도 캡처는 남는다.
+#  - 무대 지시: 페르소나의 무대 규칙(귓속말 등)이 본문에 새어 나오면
+#    시청자에게는 그대로 보인다.
+_ANNOUNCE_MAX_CHARS = 500
+_LEAK_MARKS = ("매니저 귓속말", "(게임 상황", "system:", "assistant:")
+
+
+def announce_problem(text: str, banned=()) -> Optional[str]:
+    """그대로 올리면 안 되는 공지인지. 문제면 사람이 읽는 사유를 돌려준다."""
+    t = (text or "").strip()
+    if not t:
+        return "빈 글"
+    if len(t) > _ANNOUNCE_MAX_CHARS:
+        return f"너무 김({len(t)}자, 상한 {_ANNOUNCE_MAX_CHARS}자)"
+    low = t.lower()
+    for mark in _LEAK_MARKS:
+        if mark.lower() in low:
+            return f"무대 뒤 지시가 새어나옴({mark!r})"
+    hit = check_output(t, list(banned or []))
+    if hit:
+        return f"금지어 포함({hit!r})"
+    return None
+
+
 def compose(
     persona: Persona,
     ctx: AnnounceContext,
@@ -149,6 +180,7 @@ def compose(
     now: Optional[datetime] = None,
     rng: Optional[random.Random] = None,
     history_path: Optional[Path] = None,
+    banned=(),
 ) -> str:
     """공지 본문을 만든다. (디스코드 역할 멘션은 게시 단계에서 별도로 붙음)
 
@@ -169,6 +201,13 @@ def compose(
     if llm is not None and llm.available():
         try:
             text = _llm_varied(persona, ctx, llm).strip()
+            problem = announce_problem(text, banned)
+            if problem:
+                # 잘라 붙이지 않는다 — 중간에 끊긴 문장을 올리느니
+                # 항상 멀쩡한 오프라인 문구를 쓰는 게 낫다.
+                log.error("AI 가 쓴 공지를 쓰지 않았습니다(%s) — 준비된 문구로 "
+                          "대체합니다. 본문 앞부분: %s", problem, text[:80])
+                text = ""
             base = text
         except Exception:  # noqa: BLE001 - LLM 실패 시 오프라인 변주로 폴백
             log.exception("LLM 공지 생성 실패 → 오프라인 변주로 대체")

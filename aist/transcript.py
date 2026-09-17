@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import Optional
 
 from .chat.base import ChatMessage
+from .paths import unique_path
 
 log = logging.getLogger("aist.transcript")
 
@@ -29,11 +30,13 @@ class Transcript:
         self.dir = Path(dir_path)
         self._fh = None
         self.path: Optional[Path] = None
+        self._write_failed = False
 
     def open_session(self, start_dt: datetime) -> Path:
         self.dir.mkdir(parents=True, exist_ok=True)
         name = start_dt.strftime("%Y-%m-%d_%H%M") + ".jsonl"
-        self.path = self.dir / name
+        # 같은 분에 방송이 두 번 시작하면 한 파일에 섞인다(append 모드).
+        self.path = unique_path(self.dir / name)
         self._fh = self.path.open("a", encoding="utf-8")
         self.log_event("broadcast_start")
         return self.path
@@ -45,8 +48,19 @@ class Transcript:
         try:
             self._fh.write(json.dumps(record, ensure_ascii=False) + "\n")
             self._fh.flush()
-        except OSError as e:
-            log.warning("트랜스크립트 기록 실패: %s", e)
+        except (OSError, ValueError) as e:
+            # OSError: 디스크 참 / 권한. ValueError: 핸들이 이미 닫힘.
+            # 채팅마다 경고를 찍으면 로그가 폭발하므로 한 번만 알리고
+            # 이후로는 기록을 포기한다(방송은 계속 돌아야 한다).
+            if not self._write_failed:
+                self._write_failed = True
+                log.error("트랜스크립트 기록 실패 — 이번 방송은 기록 없이 진행합니다: %s", e)
+            self._fh = None
+
+    @property
+    def write_failed(self) -> bool:
+        """이번 방송 기록이 중간에 끊겼는지(디스크 참·권한 등)."""
+        return self._write_failed
 
     def log_chat(self, msg: ChatMessage) -> None:
         self._write({

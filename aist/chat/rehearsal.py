@@ -12,7 +12,7 @@ import random
 from datetime import datetime, timezone
 from typing import AsyncIterator
 
-from .base import ChatMessage, ChatSource
+from .base import ChatMessage, ChatSource, ProbeResult, probe_fail, probe_ok, probe_warn
 
 # 사람이 실제로 치는 정도의 짧은 말들. 방송인이 반응할 거리를 준다.
 _LINES = [
@@ -37,6 +37,7 @@ class RehearsalChat(ChatSource):
         self._n = 0
 
     async def messages(self) -> AsyncIterator[ChatMessage]:
+        self.connected_once = True      # 붙을 곳이 없으니 항상 붙은 것으로 본다
         while True:
             await asyncio.sleep(self.interval_sec)
             self._n += 1
@@ -55,5 +56,5 @@ class RehearsalChat(ChatSource):
                     platform=self.platform, timestamp=now,
                 )
 
-    async def probe(self) -> str:
-        return f"리허설용 가짜 채팅 (약 {self.interval_sec:g}초마다)"
+    async def probe(self) -> ProbeResult:
+        return probe_ok(f"리허설용 가짜 채팅 (약 {self.interval_sec:g}초마다)")

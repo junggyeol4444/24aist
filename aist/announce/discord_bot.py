@@ -15,6 +15,7 @@ from typing import Optional
 
 from ..config import DiscordAnnounce
 from .base import Announcer
+from .retry import post_with_retry, retry_after_of
 
 log = logging.getLogger("aist.announce.discord")
 
@@ -34,8 +35,25 @@ class DiscordAnnouncer(Announcer):
         if not self.token or not self.cfg.channel_id:
             log.warning("디스코드 토큰/채널ID 미설정 → 공지 생략")
             return False
+        if not self._token_ok():
+            return False
         payload = self.build_payload(text, title)
         return await asyncio.to_thread(self._post_sync, payload)
+
+    def _token_ok(self) -> bool:
+        """토큰이 HTTP 헤더에 실릴 수 있는 값인지.
+
+        헤더는 latin-1 로만 보낼 수 있다. 토큰에 한글이나 특수문자가 섞이면
+        (메모장에서 라벨까지 같이 붙여넣는 실수가 흔하다) 요청이 나가지도
+        못하고 "'latin-1' codec can't encode characters" 만 세 번 반복된다.
+        운영자가 그 메시지로 고칠 방법은 없다.
+        """
+        from ..safety import token_problem
+        problem = token_problem("DISCORD_BOT_TOKEN", self.token)
+        if problem:
+            log.error("%s 공지는 건너뜁니다.", problem)
+            return False
+        return True
 
     def build_payload(self, text: str, title: str = "") -> dict:
         """게시 페이로드 구성 — 일반 텍스트 or 임베드(카드형)+이미지."""
@@ -61,11 +79,21 @@ class DiscordAnnouncer(Announcer):
         return {"content": mention, "embeds": [embed], "allowed_mentions": allowed}
 
     def _post_sync(self, payload: dict) -> bool:
+        """한 번 실패가 곧 '공지 없음' 이 되지 않게 짧게 재시도한다."""
         try:
-            import requests  # 지연 import
+            import requests  # noqa: F401 - 미설치 확인용
         except ImportError:
             log.error("requests 미설치: `pip install requests`")
             return False
+        if not self._token_ok():
+            return False
+        return post_with_retry(lambda: self._post_once(payload), what="디스코드 공지")
+
+    def _post_once(self, payload: dict):
+        """(성공여부, 상태코드, 사유, 서버가 알려준 대기초).
+
+        상태코드 None 이면 네트워크 예외."""
+        import requests
         url = f"{_API}/channels/{self.cfg.channel_id}/messages"
         headers = {"Authorization": f"Bot {self.token}"}
         try:
@@ -85,9 +113,7 @@ class DiscordAnnouncer(Announcer):
                                   json=payload, timeout=15)
             if r.status_code in (200, 201):
                 log.info("디스코드 공지 게시 완료")
-                return True
-            log.error("디스코드 공지 실패 (%s): %s", r.status_code, r.text[:300])
-            return False
-        except Exception as e:  # noqa: BLE001
-            log.error("디스코드 공지 예외: %s", e)
-            return False
+                return True, r.status_code, "", None
+            return False, r.status_code, r.text[:200], retry_after_of(r)
+        except Exception as e:  # noqa: BLE001 - 네트워크 사유 다양
+            return False, None, str(e), None

@@ -16,12 +16,39 @@ import json
 import logging
 from typing import AsyncIterator, Optional
 
-from .base import ChatMessage, ChatSource
+from .base import (ChatMessage, ChatSource, ProbeResult, RetryLog,
+                   import_problem, probe_fail, probe_ok, probe_warn)
 
 log = logging.getLogger("aist.chat.chzzk")
 
 _CMD = {"ping": 0, "pong": 10000, "connect": 100, "chat": 93101, "donation": 93102}
+# 채팅 서버 주소(테스트에서 바꿔 끼울 수 있게 상수로 둔다)
+_WS_URL = "wss://kr-ss1.chat.naver.com/chat"
 _UA = {"User-Agent": "Mozilla/5.0", "Accept": "application/json"}
+
+
+def _format_amount(extras) -> str:
+    """후원 금액을 사람이 읽는 표기로. 못 읽으면 빈 문자열.
+
+    payAmount 는 숫자(원)로 온다. 그대로 넘기면 방송인에게 "10000 후원"
+    으로 들려서 단위가 없다. 화면에 뜨는 것과 같은 "10,000원" 으로 맞춘다.
+    """
+    if not extras:
+        return ""
+    if isinstance(extras, str):
+        try:
+            extras = json.loads(extras)
+        except json.JSONDecodeError:
+            return ""
+    if not isinstance(extras, dict):
+        return ""
+    pay = extras.get("payAmount", "")
+    if pay in ("", None):
+        return ""
+    try:
+        return f"{int(pay):,}원"
+    except (TypeError, ValueError):
+        return str(pay)
 
 
 def _parse_chat_bdy(raw: dict):
@@ -40,13 +67,7 @@ def _parse_chat_bdy(raw: dict):
                 pass
         msg = c.get("msg") or c.get("content") or ""
         is_dono = raw.get("cmd") == _CMD["donation"]
-        amount = ""
-        if is_dono:
-            extra = c.get("extras")
-            try:
-                amount = str(json.loads(extra).get("payAmount", "")) if extra else ""
-            except (json.JSONDecodeError, TypeError):
-                amount = ""
+        amount = _format_amount(c.get("extras")) if is_dono else ""
         out.append((nickname, msg, is_dono, amount))
     return out
 
@@ -60,6 +81,8 @@ class ChzzkChat(ChatSource):
         self.channel_id = channel_id
         self._ws = None
         self._closed = False
+        self._reconnect = RetryLog(log, "치지직 연결 끊김", base=3.0)
+        self._retry = RetryLog(log, "치지직 토큰 획득 실패")
 
     def _fetch_tokens(self):
         """(chatChannelId, accessToken) 획득 — 블로킹(requests)."""
@@ -87,12 +110,15 @@ class ChzzkChat(ChatSource):
             try:
                 cid, token = await asyncio.to_thread(self._fetch_tokens)
             except Exception as e:
-                log.error("치지직 토큰 획득 실패: %s (5초 후 재시도)", e)
-                await asyncio.sleep(5)
+                fatal = import_problem(e, "requests")
+                if fatal:
+                    log.error("%s", fatal)
+                    self.fatal = fatal
+                    return
+                await asyncio.sleep(self.wait_after(self._retry, e))
                 continue
             try:
-                async with websockets.connect("wss://kr-ss1.chat.naver.com/chat",
-                                              max_size=None) as ws:
+                async with websockets.connect(_WS_URL, max_size=None) as ws:
                     self._ws = ws
                     await ws.send(json.dumps({
                         "ver": "2", "cmd": _CMD["connect"], "svcid": "game",
@@ -101,6 +127,9 @@ class ChzzkChat(ChatSource):
                                 "accTkn": token, "auth": "READ"},
                     }))
                     log.info("치지직 채팅 연결됨 (channel=%s)", self.channel_id)
+                    self.connected_once = True
+                    self._reconnect.success()
+                    self._retry.success()
                     async for raw in ws:
                         data = json.loads(raw)
                         cmd = data.get("cmd")
@@ -109,7 +138,9 @@ class ChzzkChat(ChatSource):
                             continue
                         if cmd in (_CMD["chat"], _CMD["donation"]):
                             for nick, text, is_dono, amount in _parse_chat_bdy(data):
-                                if not text:
+                                # 메시지 없는 후원(금액만)도 흘려보낸다. 버리면
+                                # 시청자가 돈을 냈는데 방송인은 모르고 지나간다.
+                                if not text and not is_dono:
                                     continue
                                 yield ChatMessage(
                                     author=nick, text=text, platform=self.platform,
@@ -118,15 +149,19 @@ class ChzzkChat(ChatSource):
             except Exception as e:
                 if self._closed:
                     break
-                log.warning("치지직 연결 끊김: %s (재연결)", e)
-                await asyncio.sleep(3)
+                # 플랫폼이 점검 중이면 이 자리가 3초마다 영원히 돈다.
+                # 같은 사유는 간격을 늘리고 로그도 줄인다(회전 로그 보호).
+                await asyncio.sleep(self.wait_after(self._reconnect, e))
 
-    async def probe(self) -> str:
+    async def probe(self) -> ProbeResult:
         try:
             cid, _ = await asyncio.to_thread(self._fetch_tokens)
-            return f"온에어(chatChannelId 확보: {cid[:8]}…)"
+            return probe_ok(f"온에어(chatChannelId 확보: {cid[:8]}…)")
         except Exception as e:
-            return f"방송중 아님/실패: {e}"
+            # 방송 전이면 정상이다. 다만 채널 ID 가 틀려도 같은 모양으로
+            # 실패하므로, 방송 중인데 이게 뜨면 ID 를 의심해야 한다.
+            return probe_warn(f"지금은 못 붙음(방송 전이면 정상, 방송 중이면 "
+                              f"channel_id 확인): {e}")
 
     async def close(self) -> None:
         self._closed = True

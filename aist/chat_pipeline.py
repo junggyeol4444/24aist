@@ -24,7 +24,8 @@ from datetime import datetime, timezone
 from typing import Callable, List, Optional
 
 from .chat.base import ChatMessage, ChatSource
-from .config import BroadcastConfig
+from .config import BroadcastConfig, SafetyConfig
+from .safety import sanitize_incoming
 from .vtuber_bridge import VTuberBridge, format_chat_line
 
 log = logging.getLogger("aist.chat_pipeline")
@@ -38,17 +39,54 @@ class ChatPipeline:
         bridge: VTuberBridge,
         cfg: BroadcastConfig,
         on_message: Optional[Callable[[ChatMessage], None]] = None,
+        safety: Optional[SafetyConfig] = None,
+        on_send_error: Optional[Callable[[Exception], None]] = None,
+        on_source_ended: Optional[Callable[[], None]] = None,
+        on_core_mute: Optional[Callable[[], None]] = None,
+        on_core_stuck: Optional[Callable[[int], None]] = None,
+        on_core_brain_dead: Optional[Callable[[str], None]] = None,
+        on_tts_silent: Optional[Callable[[], None]] = None,
     ):
         self.bridge = bridge
         self.cfg = cfg
         self.on_message = on_message
+        self.safety = safety or SafetyConfig()
+        # 코어로 못 보냈을 때 오케스트레이터에 알린다(재연결 판단용).
+        self.on_send_error = on_send_error
+        # 채팅 소스가 끝났을 때(플랫폼 연결이 끊겼을 때) 알린다.
+        # 채팅이 '안 오는 것'과 소스가 '죽은 것'은 다르다 — 전자는 정상이고
+        # (혼잣말로 방송을 끌고 간다) 후자는 사고다.
+        self.on_source_ended = on_source_ended
+        # 코어가 '말을 끝냈다'는 신호를 연속으로 못 줄 때 알린다.
+        # = 시청자에게 소리·자막이 안 나가는 상태(웹UI 미접속).
+        self.on_core_mute = on_core_mute
+        # 발화가 한 번 걸릴 때마다(= 말 끝 신호가 안 올 때마다) 알린다.
+        # 방송을 내리기 전에 고쳐볼 기회를 오케스트레이터에 준다.
+        self.on_core_stuck = on_core_stuck
+        # 코어가 LLM 오류 문구를 그대로 읽어버릴 때 알린다.
+        self.on_core_brain_dead = on_core_brain_dead
+        # 자막은 나가는데 소리가 비어 있을 때 알린다(TTS 죽음).
+        self.on_tts_silent = on_tts_silent
+        # 같은 전송 오류를 매 채팅마다 트레이스백으로 찍으면 로그가 폭발한다.
+        self._send_fail_streak = 0
         # 종료판단(채팅 저조/눈치 종료)에 쓰는 공유 상태. tz-aware UTC.
         self.last_chat_time: datetime = datetime.now(timezone.utc)
         self._last_chat_mono = time.monotonic()
         self._flood_window = deque()      # 최근 forward 시각(monotonic)
+        self._flood_dropped = 0           # 폭주 처리로 AI 에게 안 넘긴 건수
+        self._batch_capped = 0            # 한 묶음 상한에 걸린 횟수
         # '입 하나' 상태
         self._core_busy = False
         self._busy_since = 0.0
+        self._busy_timeouts = 0           # 말 끝 신호가 안 온 횟수(진단용)
+        self._busy_streak = 0             # 그 중 '연속으로' 안 온 횟수
+        self._mute_reported = False       # 벙어리 상태를 이미 알렸는지
+        self._llm_error_streak = 0        # LLM 오류로 끝난 대화가 연속 몇 번인지
+        self._chain_had_error = False     # 지금 대화에 오류 문구가 있었나
+        self._last_llm_error = ""
+        self._silent_streak = 0           # 소리 없이 나간 발화가 연속 몇 번인지
+        self._silent_reported = False
+        self._brain_reported = False
         self._pending: List[ChatMessage] = []
         self._include_platform = False    # 동출일 때만 플랫폼 표기
         # 진행자 혼잣말: 이번 조용한 구간에 말 걸 목표 시각(발화/채팅 후 재설정)
@@ -58,14 +96,115 @@ class ChatPipeline:
     # ------------------------------------------------------------- 외부 상태
     def on_core_message(self, data: dict) -> None:
         """코어 drain 훅 — 말 시작/끝 신호로 '말하는 중'을 추적한다."""
+        # 말하는 동안에도 코어는 문장마다 audio 를 보낸다. 그게 오는 동안은
+        # '살아 있다'는 뜻이므로 폴백 시계를 다시 잰다. 폴백은 신호가 정말
+        # 유실됐을 때(아무 것도 안 올 때)만 돌아야 한다.
+        if self._core_busy and data.get("type") in ("audio", "full-text"):
+            self._busy_since = time.monotonic()
+        if data.get("type") == "audio":
+            self._watch_llm_error(data)
+            self._watch_silent_audio(data)
         if data.get("type") != "control":
             return
         text = data.get("text")
         if text == "conversation-chain-start":
             self._core_busy = True
             self._busy_since = time.monotonic()
+            self._chain_had_error = False
         elif text == "conversation-chain-end":
             self._core_busy = False
+            # 한 번이라도 제대로 끝났으면 '연속 실패'는 끊긴 것이다.
+            self._busy_streak = 0
+            self._close_chain()
+
+    # 코어가 LLM 에 실패하면, 그 오류 문구를 방송인이 그대로 읽는다.
+    # 실제로 코어에 429 를 주고 확인한 문구(세 문장으로 나뉘어 온다):
+    #   "Error calling the chat endpoint: Rate limit exceeded."
+    #   "Please try again later."
+    #   "See the logs for details."
+    # 시청자에게는 AI 가 갑자기 영어 에러를 읊는 사고로 보인다.
+    # 접두사는 첫 문장에만 있으므로, 발화 한 줄이 아니라 '대화 한 덩어리'
+    # 단위로 센다 — 줄 단위로 세면 뒤따라오는 문장이 연속 카운터를 리셋해
+    # 영원히 1 에 머문다(실제로 그렇게 나왔다).
+    _LLM_ERROR_PREFIX = "error calling the chat endpoint"
+
+    def _watch_llm_error(self, data: dict) -> None:
+        dt = data.get("display_text") or {}
+        text = (dt.get("text") if isinstance(dt, dict) else "") or ""
+        if not text.strip().lower().startswith(self._LLM_ERROR_PREFIX):
+            return
+        if not self._chain_had_error:
+            self._chain_had_error = True
+            log.error("방송인이 LLM 오류 문구를 그대로 읽었습니다: %s",
+                      text.strip()[:160])
+        self._last_llm_error = text.strip()[:200]
+
+    def _watch_silent_audio(self, data: dict) -> None:
+        """자막은 나가는데 소리가 비어 있으면 TTS 가 죽은 것이다.
+
+        코어는 TTS 합성에 실패해도 발화를 멈추지 않는다 — audio 필드만 빈
+        채로 자막을 내보낸다(실제 코어에서 확인: audio=0바이트).
+        시청자에게는 목소리 없이 자막만 흐르는 방송이 되는데, 로그에는
+        아무 것도 안 남아서 운영자가 알 길이 없다.
+        """
+        limit = self.cfg.tts_silent_max_strikes
+        if limit <= 0:
+            return
+        if data.get("audio"):
+            self._silent_streak = 0
+            return
+        dt = data.get("display_text") or {}
+        if not (dt.get("text") if isinstance(dt, dict) else ""):
+            return                      # 자막도 없으면 발화로 치지 않는다
+        self._silent_streak += 1
+        if self._silent_streak < limit or self._silent_reported:
+            return
+        self._silent_reported = True
+        log.error("발화 %d개가 연속으로 소리 없이(자막만) 나갔습니다 — TTS 가 "
+                  "죽은 것으로 봅니다. 코어 설정의 tts_model 과 TTS 서버를 "
+                  "확인하세요. 방송은 계속하지만 시청자에게 목소리가 안 갑니다.",
+                  self._silent_streak)
+        if self.on_tts_silent is None:
+            return
+        try:
+            self.on_tts_silent()
+        except Exception as e:  # noqa: BLE001
+            log.debug("on_tts_silent 콜백 실패: %s", e)
+
+    def _close_chain(self) -> None:
+        """대화 한 덩어리가 끝났다 — 오류였는지 아닌지로 연속 횟수를 센다."""
+        if not self._chain_had_error:
+            self._llm_error_streak = 0
+            return
+        self._chain_had_error = False
+        self._llm_error_streak += 1
+        limit = self.cfg.core_error_max_strikes
+        if limit <= 0 or self._llm_error_streak < limit:
+            return
+        if self._brain_reported or not self.on_core_brain_dead:
+            return
+        self._brain_reported = True
+        log.error("LLM 오류 문구만 %d번 연속으로 읽었습니다 — 방송인의 두뇌가 "
+                  "죽은 것으로 봅니다.", self._llm_error_streak)
+        try:
+            self.on_core_brain_dead(self._last_llm_error)
+        except Exception as e:  # noqa: BLE001
+            log.debug("on_core_brain_dead 콜백 실패: %s", e)
+
+    def core_reconnected(self) -> None:
+        """코어에 다시 붙었다 — '말하는 중' 상태를 푼다.
+
+        끊기기 직전에 보낸 발화의 '말 끝' 신호(conversation-chain-end)는 옛
+        연결과 함께 사라져서 영영 오지 않는다. 그대로 두면 파이프라인이
+        계속 '말하는 중'으로 알고 채팅을 쌓아두기만 한다 — 실제로 코어를
+        죽였다 살려보니 재연결 뒤 약 3분 동안 채팅이 한 건도 안 나갔고,
+        폴백 타이머(기본 90초)가 돌 때까지 방송이 조용했다.
+        """
+        if self._core_busy:
+            log.info("코어 재연결 — 끊기기 전 발화는 끝난 것으로 보고 채팅을 다시 흘립니다.")
+        self._core_busy = False
+        self._busy_since = 0.0
+        self._busy_streak = 0
 
     def is_speaking(self) -> bool:
         return self._core_busy
@@ -94,25 +233,58 @@ class ChatPipeline:
             async for msg in source.messages():
                 if stop_event.is_set():
                     break
-                self.last_chat_time = datetime.now(timezone.utc)
-                self._last_chat_mono = time.monotonic()
-                self._reset_idle_gap()              # 채팅 왔으니 혼잣말 타이밍 리셋
-                # '읽기'는 항상 전부 한다(기록/기억용).
-                if self.on_message is not None:
-                    try:
-                        self.on_message(msg)
-                    except Exception:  # 기록 실패가 방송을 멈추면 안 됨
-                        log.exception("on_message 콜백 오류")
-                if not self._should_forward():
-                    continue
-                if self._busy_now():
-                    self._pending.append(msg)       # 말 끝나면 이어받음
-                else:
-                    await self._send_single(msg)
+                await self._handle_one(msg)
+            if not stop_event.is_set():
+                # 우리가 멈춘 게 아닌데 소스가 끝났다 = 플랫폼 연결이 끊겼다.
+                log.error("채팅 소스가 끝났습니다 — 더는 채팅이 들어오지 않습니다.")
+                self._notify_source_ended()
         except asyncio.CancelledError:
             raise
         except Exception:
             log.exception("채팅 소비 루프 오류 — 종료")
+            if not stop_event.is_set():
+                self._notify_source_ended()
+
+    async def _handle_one(self, msg: ChatMessage):
+        """채팅 한 줄을 이 방송의 규칙대로 처리한다."""
+        if not msg.from_game:
+            # 종료 판단(채팅 저조)은 '시청자가 조용한가' 를 본다. 게임 안
+            # 채팅으로 이 시계를 되돌리면, 시청자가 아무도 없는 방송이
+            # 게임 서버 사람들 덕분에 계속 켜져 있게 된다.
+            self.last_chat_time = datetime.now(timezone.utc)
+            self._last_chat_mono = time.monotonic()
+        self._reset_idle_gap()              # 할 말이 생겼으니 혼잣말 타이밍 리셋
+        # '읽기'는 항상 전부 한다(기록/기억용).
+        if self.on_message is not None:
+            try:
+                self.on_message(msg)
+            except Exception:  # 기록 실패가 방송을 멈추면 안 됨
+                log.exception("on_message 콜백 오류")
+        if not self._should_forward():
+            return
+        if self._busy_now():
+            self._pending.append(msg)       # 말 끝나면 이어받음
+        else:
+            await self._send_single(msg)
+
+    async def submit(self, msg: ChatMessage):
+        """채팅 소스가 아닌 곳(게임 연동 등)에서 들어온 말을 같은 길로 넣는다.
+
+        예전에는 게임 연동이 코어로 직접 쏘았다. 그래서 '입 하나' 모델도,
+        폭주 처리도, 기록도 전부 비켜갔다. 실제로 3분 방송에서 코어가 받은
+        134줄 중 80줄이 게임 채팅이었고(2초에 한 줄짜리 한산한 서버였다),
+        시청자 채팅은 그 사이에 파묻혔다 — 기획 1-2 "시청자 채팅 다 읽고
+        다 반응" 이 통째로 뒤집힌다.
+        """
+        await self._handle_one(msg)
+
+    def _notify_source_ended(self):
+        if self.on_source_ended is None:
+            return
+        try:
+            self.on_source_ended()
+        except Exception:
+            log.debug("on_source_ended 콜백 오류", exc_info=True)
 
     # ------------------------------------------------------------- 눈치 루프
     async def _pace_loop(self, stop_event: asyncio.Event):
@@ -130,14 +302,82 @@ class ChatPipeline:
         except asyncio.CancelledError:
             raise
 
+    def _busy_timeout(self) -> float:
+        """말 끝 신호 폴백 시간. 0 이하는 설정 실수로 보고 기본값을 쓴다.
+
+        음수를 넣으면 모든 발화가 시작하자마자 '멈춘 것'이 돼서, 방송이
+        켜지자마자 "웹UI 가 안 붙어 있습니다" 로 내려간다 — 운영자에게는
+        멀쩡한 설정을 의심하게 만드는 엉뚱한 진단이다.
+        """
+        t = self.cfg.core_busy_timeout_sec
+        return t if t > 0 else 90.0
+
     def _busy_now(self) -> bool:
         if not self._core_busy:
             return False
-        if time.monotonic() - self._busy_since > self.cfg.core_busy_timeout_sec:
-            log.debug("말 끝 신호 유실 추정 → 잠금 해제(폴백)")
+        if time.monotonic() - self._busy_since > self._busy_timeout():
+            # 말이 끝났다는 신호(conversation-chain-end)가 안 왔다.
+            # 코어는 '웹UI 가 재생을 마쳤다'는 응답을 받아야 이 신호를 보낸다.
+            # 즉 이게 계속 나면 웹UI(OBS 브라우저 소스)가 코어에 안 붙어
+            # 있다는 뜻이고, 그건 시청자에게 소리·자막이 안 나간다는 뜻이다.
+            self._busy_timeouts += 1
+            self._busy_streak += 1
+            if self._busy_timeouts in (1, 5) or self._busy_timeouts % 20 == 0:
+                log.warning(
+                    "말이 끝났다는 신호가 %.0f초 동안 안 왔습니다(%d번째). "
+                    "웹UI(OBS 브라우저 소스)가 코어에 안 붙어 있으면 시청자에게 "
+                    "소리·자막이 안 나갑니다 — 브라우저 화면이 떠 있는지, "
+                    "코어 설정의 enable_proxy 가 켜져 있는지 확인하세요.",
+                    self._busy_timeout(), self._busy_timeouts)
+            # 로컬에서 잠금만 푸는 걸로는 부족하다. 코어 쪽에는 끝나지 않은
+            # 대화가 그대로 걸려 있어서, 이 뒤에 보내는 채팅이 전부 그 뒤에
+            # 줄만 서고 영영 안 나간다(실제로 웹UI 가 대화 도중에 끊겼을 때
+            # 재현됨 — 웹UI 를 다시 붙여도 안 풀렸다).
+            # 끼어들기 신호를 보내면 코어가 그 대화를 취소하고 큐가 풀린다.
+            self._unstick_core()
             self._core_busy = False
+            # 큐만 풀고 끝내면 다음 발화도 똑같이 걸린다. 고칠 수단이
+            # 있는 쪽(오케스트레이터 → OBS 브라우저 소스 새로고침)에
+            # 몇 번째인지 알려준다.
+            if self.on_core_stuck is not None:
+                try:
+                    self.on_core_stuck(self._busy_streak)
+                except Exception as e:  # noqa: BLE001 - 콜백 사고가 방송을 깨지 않게
+                    log.debug("on_core_stuck 콜백 실패: %s", e)
+            # 끼어들기로 큐만 풀어주고 계속 도는 건 반쪽짜리다. 웹UI 가 안
+            # 붙어 있으면 그 뒤로도 영영 소리가 안 나가는데, 방송은 조용한
+            # 화면만 몇 시간씩 내보내게 된다. 연속으로 이 지경이면 끊긴
+            # 코어와 똑같이 취급한다 — 조용히 송출하느니 내리는 게 낫다.
+            limit = self.cfg.core_mute_max_strikes
+            if (limit > 0 and self._busy_streak >= limit
+                    and not self._mute_reported and self.on_core_mute):
+                self._mute_reported = True
+                log.error(
+                    "말 끝 신호가 %d번 연속으로 안 왔습니다 — 시청자에게 소리·자막이 "
+                    "나가지 않는 상태로 봅니다. 이번 방송을 내립니다.",
+                    self._busy_streak)
+                try:
+                    self.on_core_mute()
+                except Exception as e:  # noqa: BLE001 - 콜백 사고가 방송을 깨지 않게
+                    log.debug("on_core_mute 콜백 실패: %s", e)
             return False
         return True
+
+    def _unstick_core(self) -> None:
+        """코어에 걸려 있는 대화를 끊어 다음 채팅이 나갈 수 있게 한다."""
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:      # 루프 밖(테스트 등)
+            return
+
+        async def _go():
+            try:
+                await self.bridge.interrupt()
+                log.warning("코어에 걸려 있던 발화를 끊었습니다 — 이래야 다음 채팅이 나갑니다.")
+            except Exception as e:  # noqa: BLE001 - 끊겨 있으면 실패할 수 있다
+                log.debug("끼어들기 실패: %s", e)
+
+        loop.create_task(_go())
 
     def _mark_busy(self):
         """입력을 보냈으니 코어가 곧 말한다 — 신호 오기 전 선제 잠금."""
@@ -145,16 +385,120 @@ class ChatPipeline:
         self._busy_since = time.monotonic()
         self._reset_idle_gap()   # 방금 말했으니 다음 혼잣말 공백을 새로 잡음
 
+    def _clean(self, msg: ChatMessage):
+        """코어에 넘기기 직전 소독 — 개행/제어문자 제거, 시스템 신호 흉내 무력화.
+
+        채팅을 버리지 않는다(다 반응). 모양만 한 줄 안에 가둔다.
+        이게 없으면 시청자가 개행으로 진짜 시스템 신호와 똑같은 줄을 만든다.
+        """
+        if not self.safety.sanitize_chat:
+            return msg.text, msg.author
+        return sanitize_incoming(msg.text, msg.author)
+
+    def _cap_batch(self, lines: List[str], game_flags: Optional[List[bool]] = None):
+        """한 번에 넘길 양을 제한한다. (남길 줄, 못 넣은 건수) 를 돌려준다.
+
+        최근 것을 남긴다 — 사람이 채팅창을 보면 최근 것이 눈에 들어온다.
+        상한에 걸리는 건 정상 방송에선 없는 일이라, 걸리면 로그로 알린다
+        (운영자가 폭주를 인지하고 flood_handling 을 켤지 정한다 — 기획안 4-2).
+
+        게임 안 채팅이 섞여 있으면 시청자 줄을 먼저 담는다. 붐비는 게임
+        서버는 방송인이 한 번 말하는 동안 수십 줄을 만들어내는데, 그냥
+        최근 순으로 자르면 그 사이에 올라온 시청자 채팅이 게임 채팅에
+        밀려 잘린다 — 기획 1-2 가 지키려는 건 시청자 쪽이다.
+        넘기는 순서는 원래(시간) 순서 그대로다.
+        """
+        max_lines = max(1, self.cfg.max_batch_lines)
+        max_chars = max(100, self.cfg.max_batch_chars)
+        flags = game_flags or [False] * len(lines)
+        # 시청자 먼저, 그 안에서 최근 것부터
+        order = sorted(range(len(lines)), key=lambda i: (flags[i], -i))
+        kept_idx, total = [], 0
+        for i in order:
+            line = lines[i]
+            if len(kept_idx) >= max_lines or total + len(line) > max_chars:
+                break
+            kept_idx.append(i)
+            total += len(line) + 1
+        kept = [lines[i] for i in sorted(kept_idx)]
+        dropped = len(lines) - len(kept)
+        if dropped:
+            # 폭주는 몇 초에 한 번씩 계속 걸린다. 매번 찍으면 3시간이면
+            # 같은 줄이 수천 개 쌓여 회전 로그가 밀린다.
+            self._batch_capped += 1
+            if self._batch_capped in (1, 10) or self._batch_capped % 100 == 0:
+                log.warning("채팅이 쏟아져 한 번에 %d건 중 %d건만 넘깁니다"
+                            "(%d번째, 기록·기억에는 전부 남습니다). 폭주가 잦으면 "
+                            "config 의 broadcast.flood_handling 을 검토하세요.",
+                            len(lines), len(kept), self._batch_capped)
+        return kept, dropped
+
+    @staticmethod
+    def _donation(msg: ChatMessage) -> Optional[str]:
+        """후원이면 금액 문자열을, 아니면 None 을 돌려준다.
+
+        금액은 플랫폼이 준 외부 문자열이라 채팅과 똑같이 소독한다.
+        """
+        if not msg.is_superchat:
+            return None
+        amount, _ = sanitize_incoming(msg.amount or "", "")
+        return amount
+
+    # 코드 버그를 연결 끊김으로 오인하면 안 된다. 오인하면 오케스트레이터가
+    # 재연결을 시도하고, 코어는 멀쩡하니 성공하고, 다음 채팅에서 또 같은
+    # 버그가 나서 무한 재연결 루프가 된다. 방송은 그동안 아무 말도 못 한다.
+    _BUG_ERRORS = (TypeError, AttributeError, NameError, ImportError)
+    # 반대로, 연결이 끊겨서 못 보낸 건 '이미 아는 일'이다. 오케스트레이터가
+    # 바로 옆에서 재연결을 하고 있다. 여기에 파이썬 트레이스백을 통째로
+    # 쏟으면(실제로 코어를 죽여본 실행에서 17줄이 찍혔다) 운영자가 봐야 할
+    # 한국어 안내가 그 밑에 묻힌다. 게다가 영어 스택은 운영자가 할 수 있는
+    # 일을 하나도 알려주지 않는다.
+    _NET_ERRORS = (ConnectionError, OSError, EOFError, asyncio.TimeoutError)
+
+    @classmethod
+    def _is_net_error(cls, e: Exception) -> bool:
+        if isinstance(e, cls._NET_ERRORS):
+            return True
+        # websockets 는 지연 import 라 클래스로 직접 비교하지 않는다.
+        # (ConnectionClosedError 등은 전부 이 모듈에 있다)
+        return (type(e).__module__ or "").startswith("websockets")
+
+    def _note_send_error(self, e: Exception, where: str):
+        """전송 실패 로그 — 같은 실패가 이어지면 트레이스백을 반복하지 않는다."""
+        self._send_fail_streak += 1
+        is_bug = isinstance(e, self._BUG_ERRORS)
+        if self._send_fail_streak == 1:
+            if is_bug:
+                log.exception("%s 실패 — 연결 문제가 아니라 코드 문제로 보입니다", where)
+            elif self._is_net_error(e):
+                log.error("%s 실패: 코어와의 연결이 끊겼습니다(%s). "
+                          "다시 붙는 중입니다.", where, type(e).__name__)
+            else:
+                log.exception("%s 실패", where)
+        elif self._send_fail_streak % 20 == 0:
+            log.error("%s 실패가 %d회째 이어지는 중: %s",
+                      where, self._send_fail_streak, e)
+        if is_bug:
+            return  # 재연결로 해결될 문제가 아니다
+        if self.on_send_error is not None:
+            try:
+                self.on_send_error(e)
+            except Exception:
+                log.debug("on_send_error 콜백 오류", exc_info=True)
+
     async def _send_single(self, msg: ChatMessage):
         if self.cfg.artificial_delay_sec > 0:
             # 기본 0. 운영자가 일부러 넣은 경우에만 작동.
             await asyncio.sleep(self.cfg.artificial_delay_sec)
         platform = msg.platform if self._include_platform else None
+        text, author = self._clean(msg)
         try:
-            await self.bridge.say_to_ai(msg.text, source=msg.author, platform=platform)
+            await self.bridge.say_to_ai(text, source=author, platform=platform,
+                                        donation=self._donation(msg))
+            self._send_fail_streak = 0
             self._mark_busy()
-        except Exception:
-            log.exception("채팅 전달 실패")
+        except Exception as e:
+            self._note_send_error(e, "채팅 전달")
 
     # 쌓인 채팅을 넘길 때의 귓속말 — 사람은 말 끝나고 채팅창을 '훑어보고'
     # 자연스럽게 반응하지, 쌓인 걸 하나하나 순서대로 전부 답하지 않는다.
@@ -167,18 +511,28 @@ class ChatPipeline:
         if len(batch) == 1:
             await self._send_single(batch[0])
             return
-        lines = [
-            format_chat_line(
-                m.text, m.author,
+        lines = []
+        for m in batch:
+            text, author = self._clean(m)
+            lines.append(format_chat_line(
+                text, author,
                 m.platform if self._include_platform else None,
-            )
-            for m in batch
-        ]
+                self._donation(m),
+            ))
+        lines, dropped = self._cap_batch(
+            lines, [bool(getattr(m, "from_game", False)) for m in batch])
+        body = "\n".join(lines)
+        if dropped:
+            # 버린 게 아니다 — 기록·기억에는 전부 남았다. AI 에게는 감당
+            # 가능한 양과 '얼마나 쏟아졌는지' 를 같이 준다. 사람 방송인도
+            # 채팅이 쏟아지면 다 못 읽고 "엄청 빠르네" 하고 반응한다.
+            body += f"\n(그 외 {dropped}건 더 올라왔어. 채팅이 빠르게 쏟아지는 중이야.)"
         try:
-            await self.bridge.say_to_ai(self._BATCH_WHISPER + "\n" + "\n".join(lines))
+            await self.bridge.say_to_ai(self._BATCH_WHISPER + "\n" + body)
+            self._send_fail_streak = 0
             self._mark_busy()
-        except Exception:
-            log.exception("채팅 묶음 전달 실패")
+        except Exception as e:
+            self._note_send_error(e, "채팅 묶음 전달")
 
     def _reset_idle_gap(self):
         """다음 혼잣말까지의 공백을 idle_gap_min~max 사이로 새로 잡는다.
@@ -202,8 +556,12 @@ class ChatPipeline:
                 await self.bridge.proactive_speak()
                 self._mark_busy()
                 self._reset_idle_gap()
-            except Exception:
-                log.exception("혼잣말 트리거 실패")
+            except Exception as e:  # noqa: BLE001 - 코어가 끊겼을 수 있다
+                # 실패해도 목표 시각을 다시 잡는다. 안 그러면 눈치 루프가
+                # 0.3초마다 다시 시도하면서 트레이스백을 초당 몇 번씩 찍는다
+                # — 회전 로그가 순식간에 밀려 정작 필요한 기록이 사라진다.
+                self._reset_idle_gap()
+                self._note_send_error(e, "혼잣말 트리거")
 
     def _should_forward(self) -> bool:
         fh = self.cfg.flood_handling
@@ -213,6 +571,17 @@ class ChatPipeline:
         while self._flood_window and now - self._flood_window[0] > fh.window_sec:
             self._flood_window.popleft()
         if len(self._flood_window) >= fh.max_per_window:
-            return False  # 폭주 구간: 이번 건은 AI 발화로 넘기지 않음(읽기는 됨)
+            # 폭주 구간: 이번 건은 AI 발화로 넘기지 않는다(읽기·기억은 된다).
+            # 운영자가 직접 켠 기능이지만, 얼마나 걸러지는지 안 알려주면
+            # 기준값이 너무 낮아도 알 수가 없다 — 기획안 1-2 의 "다 반응"을
+            # 일부러 잠시 끄는 구간이므로 규모는 보여준다.
+            self._flood_dropped += 1
+            if self._flood_dropped in (1, 10) or self._flood_dropped % 100 == 0:
+                log.warning("폭주 처리로 채팅 %d건을 방송인에게 넘기지 않았습니다 "
+                            "(%d초에 %d건 상한). 기록·기억에는 전부 남습니다 — "
+                            "너무 많이 걸러지면 broadcast.flood_handling 의 "
+                            "max_per_window 를 올리세요.",
+                            self._flood_dropped, fh.window_sec, fh.max_per_window)
+            return False
         self._flood_window.append(now)
         return True

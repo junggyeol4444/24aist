@@ -19,6 +19,10 @@ if errorlevel 1 (
 )
 
 echo [3] AI 방송인 자동 운영 시작...
+echo.
+echo   [중요] 이 창도, 코어 창도 X 로 닫지 마세요.
+echo          끄려면 중단.bat 을 더블클릭하세요 ^(다른 창에서^).
+echo.
 aist --config config.yaml --persona persona.yaml run
 
 echo.

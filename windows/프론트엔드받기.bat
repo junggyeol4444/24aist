@@ -72,6 +72,15 @@ for /d %%D in ("%TMP_DIR%\Open-LLM-VTuber-Web-*") do (
 rmdir /s /q "%TMP_DIR%" 2>nul
 
 if not exist "%DEST%\index.html" goto failed
+
+REM 웹UI 가 /proxy-ws 에 붙게 한다. 안 하면 웹UI 는 /client-ws 로 붙는데,
+REM 그 경로는 채팅을 넣은 쪽에만 결과를 돌려줘서 화면에 아무것도 안 나온다.
+if exist ".venv\Scripts\python.exe" (
+  ".venv\Scripts\python.exe" -m aist.frontend_patch "%DEST%"
+) else (
+  echo     [건너뜀] .venv 가 없어 웹UI 주소 설정을 못 넣었습니다.
+  echo            설치.bat 를 먼저 실행한 뒤 이 파일을 다시 실행하세요.
+)
 echo ==^> 완료. %DEST% 에 index.html 이 들어왔습니다.
 pause & exit /b 0
 

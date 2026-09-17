@@ -7,12 +7,16 @@
 - 기본값 자체가 기획안의 "디폴트"를 반영한다(다 반응/딜레이0/변주0 등).
 """
 
+import difflib
+import logging
 import os
 from dataclasses import dataclass, field, fields, is_dataclass
 from pathlib import Path
 from typing import Any, Dict, List, Union, get_args, get_origin
 
 import yaml
+
+log = logging.getLogger("aist.config")
 
 
 # --------------------------------------------------------------------------- #
@@ -21,9 +25,21 @@ import yaml
 @dataclass
 class VTuberConfig:
     """Open-LLM-VTuber 연결(두뇌+입+얼굴+귀)."""
-    ws_url: str = "ws://127.0.0.1:12393/client-ws"
+    # /proxy-ws 여야 한다. /client-ws 는 "보낸 클라이언트에게만" 결과를
+    # 돌려주는 1:1 경로라, 우리가 채팅을 넣으면 AI 의 목소리·자막이 우리
+    # 프로세스로만 오고 OBS 가 잡는 웹UI 에는 아무것도 안 간다(무음 방송).
+    # /proxy-ws 는 웹UI 와 우리를 같은 대화에 물려 모든 출력을 양쪽에 뿌린다.
+    ws_url: str = "ws://127.0.0.1:12393/proxy-ws"
     connect_timeout_sec: float = 10.0
+    # 초기 연결 재시도(코어가 늦게 떠도 기다린다)
     reconnect: bool = True
+    # 방송 '중' 코어 연결이 끊겼을 때 다시 붙는다. 끄면 예전처럼 끊긴 채
+    # 계속 도는데, 그러면 아바타는 멈추고 스트림만 무음으로 나간다.
+    reconnect_during_broadcast: bool = True
+    # 방송 중 재연결을 몇 번까지 시도할지. 다 실패하면 이번 방송을 정상
+    # 종료 절차로 내린다(프로세스가 끝나야 무인운영 재시작이 걸린다).
+    reconnect_max_attempts: int = 5
+    reconnect_backoff_sec: float = 3.0
 
 
 @dataclass
@@ -63,6 +79,16 @@ class ObsConfig:
     launch_command: str = ""     # 예: "obs --disable-shutdown-check" (경로는 환경마다)
     launch_wait_sec: int = 20    # 켠 뒤 연결될 때까지 기다리는 최대 시간
     simulcast: SimulcastConfig = field(default_factory=SimulcastConfig)
+    # 방송 중 송출이 살아 있는지 확인하는 간격(초). 0 이면 끄기.
+    # OBS 는 스트림 키 오류·네트워크 문제로 혼자 송출을 내린다 —
+    # 그러면 방송인은 아무도 안 보는 데서 몇 시간을 떠든다.
+    stream_check_sec: float = 60.0
+    # 송출이 내려가 있으면 몇 번까지 다시 켜볼지. 0 이면 바로 방송 종료.
+    stream_restart_max: int = 2
+    # OBS 자체가 응답하지 않을 때(프로그램이 죽었거나 꺼졌을 때)
+    # 몇 번까지 다시 붙어볼지. 다 실패하면 이번 방송을 내린다 —
+    # OBS 가 없으면 송출도 없다.
+    unreachable_max: int = 3
 
 
 @dataclass
@@ -78,6 +104,17 @@ class SchedulerConfig:
     # 랜덤 변주(선택). 0 이면 정확히 그 시각. 강제 아님 — 운영자가 정한다.
     start_jitter_min: int = 0
     jitter_mode: str = "after"   # after(늦게만) | symmetric(앞뒤)
+    # 예정 시각을 이만큼 넘겨서 깨어나면 그 방송은 건너뛴다.
+    # (집 PC 는 잔다. 절전에서 깨면 예정보다 한참 늦은 시각인데, 그대로
+    #  시작하면 새벽 3시에 "19시 방송" 이 나간다. 0 이면 무조건 시작.)
+    late_start_grace_min: int = 30
+    # 방송이 사고로 일찍 끝났을 때(코어 유실·송출 내려감·두뇌 죽음)
+    # 같은 슬롯을 몇 번까지 다시 해볼지. 0 이면 그날 방송은 그걸로 끝.
+    retry_max: int = 3
+    retry_backoff_sec: float = 60.0
+    # 다시 켰을 때 최소 이만큼은 남아 있어야 한다(분). 1분짜리 방송을
+    # 다시 켜는 건 시청자에게 더 이상하다.
+    retry_min_left_min: int = 20
 
 
 @dataclass
@@ -103,12 +140,29 @@ class BroadcastConfig:
     opening_greeting: bool = True
     # 코어의 말 끝(chain-end) 신호가 유실됐을 때 잠금 해제 폴백(초)
     core_busy_timeout_sec: float = 90.0
+    # 말 끝 신호가 연속으로 이만큼 안 오면 "코어가 입만 벙긋하고 있다"로
+    # 본다 — 웹UI(OBS 브라우저 소스)가 안 붙은 상태. 0 이면 끄기.
+    core_mute_max_strikes: int = 3
+    # 코어가 LLM 오류 문구를 그대로 읽어버린 횟수가 연속 이만큼이면
+    # 방송인의 '두뇌'가 죽은 것으로 본다(영어 오류를 계속 읽는다). 0 이면 끄기.
+    core_error_max_strikes: int = 3
+    # 발화가 연속 이만큼 '소리 없이'(자막만) 나가면 TTS 가 죽은 것으로
+    # 본다. 목소리 없는 방송인은 방송이 아니다. 0 이면 끄기.
+    tts_silent_max_strikes: int = 5
     # 혼잣말(진행자 모드): 방송인은 손님이 아니라 진행자다. 채팅이 없으면
     # 오히려 말을 더 걸어 방송을 끌고 간다. 말하는 중엔 안 하고, 마지막
     # 발화/채팅 이후 idle_min~idle_max 사이 짧은 공백만 생겨도 말을 잇는다.
     idle_proactive_speak: bool = True
     idle_gap_min_sec: float = 6.0     # 말 끝난 뒤 이 정도만 조용해도 말 이음
     idle_gap_max_sec: float = 15.0    # 아무리 늦어도 이 안에는 말을 건다
+    # 말하는 동안 쌓인 채팅을 한 번에 넘길 때의 상한.
+    # 없으면 폭주 시 한 메시지가 수십만 자가 되고, LLM 이 조용히 잘라먹어
+    # 채팅이 사라지는데 아무도 모른다(기획안 1-2 "다 읽고 다 반응"이
+    # 소리 없이 깨진다). 넘치면 버리지 않고 "그 외 N건" 으로 규모를 알린다
+    # — 기록·기억에는 전부 남는다.
+    # 정상 방송에서는 걸릴 일이 없는 값이다. 걸리면 그게 폭주 신호다.
+    max_batch_lines: int = 80
+    max_batch_chars: int = 4000
     flood_handling: FloodHandling = field(default_factory=FloodHandling)
 
 
@@ -129,7 +183,11 @@ class WindDown:
     pre_notice_minutes_before_end: int = 20   # "슬슬 마무리할까" 예고 시점
     end_grace_minutes: int = 5                # 틈 못 찾아도 이만큼 지나면 마무리(안전 상한)
     closing_greeting: bool = True
-    closing_wait_sec: int = 45                # 마무리 인사 후 스트림 내리기까지(30~60초)
+    # 마무리 인사를 '끝낼 때까지' 기다리는 상한(초). 인사가 끝나기도 전에
+    # 스트림을 내리면 기획안 4-3 이 금지한 '뚝 끄기' 가 된다. 웹UI 가 안
+    # 붙어 있어 끝 신호가 안 오는 경우를 대비한 상한이다.
+    closing_max_wait_sec: int = 60
+    closing_wait_sec: int = 45                # 마무리 인사가 끝난 뒤 여운(30~60초)
 
 
 @dataclass
@@ -248,12 +306,33 @@ class LlmConfig:
     base_url: str = ""        # OpenAI 호환 엔드포인트면 지정 (ollama 포함)
     temperature: float = 0.9
     max_tokens: int = 300
+    # 응답을 기다리는 최대 시간(초). SDK 기본값은 10분이라, 공지 한 줄 때문에
+    # 방송 시작이 10분 밀리거나 종료 절차가 멈출 수 있다.
+    timeout_sec: float = 30.0
 
 
 @dataclass
 class MemoryConfig:
     backend: str = "json"     # json | chroma
     path: str = "data/memory"
+
+
+@dataclass
+class SafetyConfig:
+    """사고 방지 (기획안 8-2 '돌발 발언', 1-3 '사고 쳤을 때').
+
+    무엇이 문제인지는 운영자가 방송을 보고 정한다. 그래서 banned_words 의
+    기본값은 빈 목록이다 — 코드가 미리 금지어를 정하지 않는다(3-3/3-5).
+    """
+    # 시청자 채팅의 개행/제어문자 제거 + 시스템 신호 흉내 무력화.
+    # 이건 '행동 규칙'이 아니라 입력 경계라서 기본 켜둔다.
+    sanitize_chat: bool = True
+    # AI 가 실제로 말한 문장에 이 단어가 있으면 즉시 끼어들어 끊는다.
+    banned_words: List[str] = field(default_factory=list)
+    # 금지어가 걸렸을 때 방송 자체를 내릴지(true) 발화만 끊을지(false)
+    stop_broadcast_on_hit: bool = False
+    # 즉시 중단 스위치 파일. `aist stop` 이 만들고 방송 루프가 확인한다.
+    stop_flag_path: str = "data/STOP"
 
 
 @dataclass
@@ -285,6 +364,10 @@ class GameConfig:
     react_events: List[str] = field(default_factory=lambda: [
         "death", "respawn", "kicked", "health_low",
     ])
+    # 같은 게임 이벤트에 다시 반응하기까지의 최소 간격(초).
+    # health_low 같은 건 사이드카가 초당 여러 번 보낼 수 있는데, 그대로
+    # 흘리면 AI 가 게임 상황 안내에 파묻혀 시청자 채팅에 반응을 못 한다.
+    event_cooldown_sec: float = 20.0
 
 
 @dataclass
@@ -354,7 +437,10 @@ class Config:
     memory: MemoryConfig = field(default_factory=MemoryConfig)
     logging: LoggingConfig = field(default_factory=LoggingConfig)
     game: GameConfig = field(default_factory=GameConfig)
+    safety: SafetyConfig = field(default_factory=SafetyConfig)
     secrets: Secrets = field(default_factory=Secrets)
+    # 설정 파일에 있었지만 프로그램이 모르는 키(오타 등). `aist check` 가 보여준다.
+    unknown_keys: List[str] = field(default_factory=list)
 
     def active_platforms(self) -> List[str]:
         """이번 방송에서 채팅을 수집할 플랫폼 목록(동출이면 여러 개)."""
@@ -369,7 +455,66 @@ class Config:
 # --------------------------------------------------------------------------- #
 # YAML(dict) → dataclass 재귀 변환. 모르는 키는 무시, 빠진 키는 기본값.
 # --------------------------------------------------------------------------- #
-def _build(cls, data: Any):
+def _type_name(ftype) -> str:
+    return {int: "정수", float: "숫자", bool: "true/false", str: "문자열"}.get(
+        ftype, getattr(ftype, "__name__", str(ftype)))
+
+
+def _coerce(value, ftype, dotted: str):
+    """설정 값을 선언된 타입으로 맞춘다. 못 맞추면 한국어로 알려준다.
+
+    운영자는 이 파일을 손으로 고친다. 따옴표 하나 차이로 "180" 이 문자열이
+    되면 방송 도중에 TypeError 로 죽는데, 그 메시지로는 아무것도 못 고친다.
+    맞출 수 있으면 조용히 맞추고, 못 맞추면 어디를 어떻게 고치라고 말한다.
+    """
+    origin = get_origin(ftype)
+    if origin in (list, List):
+        if value is None:
+            return []
+        if isinstance(value, (list, tuple)):
+            return list(value)
+        return [value]              # 한 줄로 적은 경우(platforms: twitch)
+    if origin in (dict, Dict):
+        if value is None:
+            return {}
+        if not isinstance(value, dict):
+            raise ConfigError(
+                f"{dotted} 는 '항목: 값' 형태여야 합니다. 지금 값: {value!r}")
+        return value
+    if ftype is bool:
+        if isinstance(value, bool):
+            return value
+        if isinstance(value, str) and value.strip().lower() in (
+                "true", "false", "yes", "no", "y", "n", "on", "off"):
+            return value.strip().lower() in ("true", "yes", "y", "on")
+        if isinstance(value, int):
+            return bool(value)
+        raise ConfigError(f"{dotted} 는 true 또는 false 여야 합니다. 지금 값: {value!r}")
+    if ftype in (int, float):
+        if isinstance(value, bool):
+            raise ConfigError(f"{dotted} 는 {_type_name(ftype)}여야 합니다. 지금 값: {value!r}")
+        if isinstance(value, (int, float)):
+            return ftype(value)
+        if isinstance(value, str):
+            try:
+                return ftype(value.strip())
+            except ValueError:
+                pass
+        raise ConfigError(
+            f"{dotted} 는 {_type_name(ftype)}여야 합니다. 지금 값: {value!r}")
+    if ftype is str:
+        if value is None:
+            return ""
+        if isinstance(value, str):
+            return value
+        if isinstance(value, (int, float, bool)):
+            # 따옴표를 빼먹은 경우가 대부분이다(예: password: 1234)
+            return str(value)
+        raise ConfigError(f"{dotted} 는 문자열이어야 합니다. 지금 값: {value!r}")
+    return value
+
+
+def _build(cls, data: Any, path: str = "", unknown: Any = None):
     if not is_dataclass(cls):
         return data
     if data is None:
@@ -378,6 +523,12 @@ def _build(cls, data: Any):
         raise ConfigError(f"{cls.__name__} 섹션은 매핑(dict)이어야 합니다. 받은 값: {type(data).__name__}")
     kwargs: Dict[str, Any] = {}
     known = {f.name: f for f in fields(cls)}
+    if unknown is not None:
+        # 오타 잡기. 운영자가 메모장으로 고치다 보면 키 이름이 틀린다.
+        # 조용히 무시하면 "설정을 바꿨는데 아무 일도 안 일어난다" 가 된다.
+        for key in data:
+            if key not in known:
+                unknown.append(_unknown_note(path + str(key), known))
     for key, f in known.items():
         if key not in data:
             continue  # 기본값 사용
@@ -385,13 +536,47 @@ def _build(cls, data: Any):
         ftype = f.type
         # 중첩 dataclass 처리
         if is_dataclass(ftype):
-            kwargs[key] = _build(ftype, raw)
+            kwargs[key] = _build(ftype, raw, f"{path}{key}.", unknown)
         elif _is_dataclass_list(ftype) and isinstance(raw, list):
             item_cls = get_args(ftype)[0]
-            kwargs[key] = [_build(item_cls, item) for item in raw]
+            kwargs[key] = [_build(item_cls, item, f"{path}{key}[].", unknown)
+                           for item in raw]
         else:
-            kwargs[key] = raw
+            kwargs[key] = _coerce(raw, ftype, f"{path}{key}")
     return cls(**kwargs)
+
+
+def suggest_key(name: str, known) -> str:
+    """오타로 보이는 이름에 가장 그럴듯한 정답 하나를 돌려준다(없으면 "").
+
+    difflib 만 쓰면 'speech_style' → 'speech_habits' 같은, 운영자가 실제로
+    많이 내는 오타를 놓친다(기본 cutoff 0.7 에서 안 걸린다). 그렇다고 더
+    낮추면 'age' → 'name' 처럼 엉뚱한 걸 자신 있게 알려준다.
+    그래서 0.6 까지만 낮추고, 대신 앞부분이 겹치는 이름을 따로 본다
+    ('age' → 'age_range', 'habits' → 'speech_habits').
+    """
+    import difflib
+    known = list(known)
+    close = difflib.get_close_matches(str(name), known, n=1, cutoff=0.6)
+    if close:
+        return close[0]
+    low = str(name).lower()
+    if len(low) < 3:
+        return ""
+    for k in known:
+        kl = k.lower()
+        if kl.startswith(low) or low.startswith(kl) or low in kl.split("_"):
+            return k
+    return ""
+
+
+def _unknown_note(full_key: str, known) -> str:
+    """모르는 키 한 줄 안내(비슷한 이름이 있으면 같이 알려준다)."""
+    name = full_key.rsplit(".", 1)[-1]
+    close = suggest_key(name, known)
+    if close:
+        return f"{full_key} (혹시 {close} 인가요?)"
+    return full_key
 
 
 def _is_dataclass_list(ftype) -> bool:
@@ -406,6 +591,43 @@ class ConfigError(Exception):
     pass
 
 
+# 운영자가 설정 파일을 메모장으로 편집한다(README 안내). 메모장은 저장할 때
+# UTF-8(BOM) / 유니코드(UTF-16) / ANSI(한국어 윈도우면 CP949) 를 고를 수 있고,
+# 그중 UTF-8 이 아니면 파이썬이 UnicodeDecodeError 로 죽는다. 에러 메시지가
+#   'utf-8' codec can't decode byte 0xb9 in position 81
+# 이라 운영자는 손쓸 방법이 없다. 그래서 흔한 인코딩을 순서대로 시도한다.
+_UTF16_BOMS = (b"\xff\xfe", b"\xfe\xff")
+
+
+def read_text_lenient(path: Union[str, Path]) -> str:
+    """설정/환경 파일을 관대하게 읽는다(메모장이 만든 인코딩들 지원).
+
+    순서가 중요하다:
+      1) utf-8-sig — BOM 있는 UTF-8 과 없는 UTF-8 을 모두 처리
+      2) UTF-16 — 단, **BOM 이 있을 때만**. UTF-16 은 길이가 짝수이기만 하면
+         아무 바이트나 '성공'시켜서 쓰레기 문자열을 만든다. 메모장은 유니코드로
+         저장할 때 항상 BOM 을 붙이므로 BOM 을 신호로 쓴다.
+      3) cp949 — 한국어 윈도우 메모장의 'ANSI'
+    전부 실패하면 사람이 읽는 한국어 안내로 바꿔 올린다.
+    """
+    p = Path(path)
+    raw = p.read_bytes()
+    candidates = ["utf-8-sig"]
+    if raw[:2] in _UTF16_BOMS:
+        candidates.append("utf-16")
+    candidates.append("cp949")
+    for enc in candidates:
+        try:
+            return raw.decode(enc)
+        except (UnicodeDecodeError, LookupError):
+            continue
+    raise ConfigError(
+        f"{p} 의 글자 인코딩을 알 수 없습니다.\n"
+        f"메모장에서 파일을 열고 [다른 이름으로 저장] → 인코딩을 'UTF-8' 로 "
+        f"골라 다시 저장하세요. ('ANSI' 나 '유니코드' 로 저장하면 안 됩니다)"
+    )
+
+
 def load_config(path: Union[str, Path]) -> Config:
     """config.yaml 을 읽어 Config 로 만든다. 비밀은 .env(환경변수)에서 채운다."""
     p = Path(path)
@@ -414,27 +636,37 @@ def load_config(path: Union[str, Path]) -> Config:
             f"설정 파일이 없습니다: {p}\n"
             f"config/config.example.yaml 을 복사해서 config.yaml 을 만드세요."
         )
-    with p.open("r", encoding="utf-8") as fh:
-        raw = yaml.safe_load(fh) or {}
+    raw = yaml.safe_load(read_text_lenient(p)) or {}
     if not isinstance(raw, dict):
         raise ConfigError("config.yaml 최상위는 매핑(dict)이어야 합니다.")
 
+    unknown: List[str] = []
     cfg = Config(
         platform=raw.get("platform", "twitch"),
-        platforms=list(raw.get("platforms", []) or []),
-        chat=_build(ChatConfig, raw.get("chat")),
-        vtuber=_build(VTuberConfig, raw.get("vtuber")),
-        obs=_build(ObsConfig, raw.get("obs")),
-        scheduler=_build(SchedulerConfig, raw.get("scheduler")),
-        broadcast=_build(BroadcastConfig, raw.get("broadcast")),
-        end_judge=_build(EndJudgeConfig, raw.get("end_judge")),
-        announce=_build(AnnounceConfig, raw.get("announce")),
-        llm=_build(LlmConfig, raw.get("llm")),
-        memory=_build(MemoryConfig, raw.get("memory")),
-        logging=_build(LoggingConfig, raw.get("logging")),
-        game=_build(GameConfig, raw.get("game")),
+        # platforms 를 한 줄로 적으면(platforms: twitch) list() 가 글자 단위로
+        # 쪼개서 't','w','i'... 가 된다. 목록으로 맞춰준다.
+        platforms=_coerce(raw.get("platforms"), List[str], "platforms"),
+        chat=_build(ChatConfig, raw.get("chat"), "chat.", unknown),
+        vtuber=_build(VTuberConfig, raw.get("vtuber"), "vtuber.", unknown),
+        obs=_build(ObsConfig, raw.get("obs"), "obs.", unknown),
+        scheduler=_build(SchedulerConfig, raw.get("scheduler"), "scheduler.", unknown),
+        broadcast=_build(BroadcastConfig, raw.get("broadcast"), "broadcast.", unknown),
+        end_judge=_build(EndJudgeConfig, raw.get("end_judge"), "end_judge.", unknown),
+        announce=_build(AnnounceConfig, raw.get("announce"), "announce.", unknown),
+        llm=_build(LlmConfig, raw.get("llm"), "llm.", unknown),
+        memory=_build(MemoryConfig, raw.get("memory"), "memory.", unknown),
+        logging=_build(LoggingConfig, raw.get("logging"), "logging.", unknown),
+        game=_build(GameConfig, raw.get("game"), "game.", unknown),
+        safety=_build(SafetyConfig, raw.get("safety"), "safety.", unknown),
         secrets=Secrets.from_env(),
     )
+    _TOP_KEYS = {f.name for f in fields(Config)} - {"secrets", "unknown_keys"}
+    for key in raw:
+        if key not in _TOP_KEYS:
+            unknown.append(_unknown_note(str(key), _TOP_KEYS))
+    cfg.unknown_keys = unknown
+    for note in unknown:
+        log.warning("설정 파일에 모르는 키가 있습니다 — 무시됩니다: %s", note)
     cfg.resolve_secrets()
     _validate(cfg)
     return cfg

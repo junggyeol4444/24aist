@@ -10,6 +10,7 @@ chroma 백엔드는 의미검색용 확장 자리(미연결 시 JSON 으로 동�
 
 import json
 import logging
+import time
 from collections import Counter
 from datetime import datetime, timezone
 from pathlib import Path
@@ -19,6 +20,14 @@ from .chat.base import ChatMessage
 from .config import MemoryConfig
 
 log = logging.getLogger("aist.memory")
+
+# 방송 중 기억을 디스크에 다시 쓰는 최소 간격(초). 너무 잦으면 긴 방송
+# 후반에 매 채팅마다 수백 KB 를 다시 쓰게 된다.
+_CHECKPOINT_SEC = 30.0
+# 사고로 끊긴 방송을 이만큼 안에 다시 켰으면, 그건 '저번 방송'이 아니라
+# '방금 그 방송'이다. 시청자 입장에서는 보고 있던 방송이 끊겼다가
+# 돌아온 것이다(윈도우 업데이트 재부팅 → 무인운영.bat 재시작).
+_JUST_CRASHED_MIN = 30
 
 
 def _now_iso() -> str:
@@ -31,8 +40,27 @@ class Memory:
         self.dir = Path(cfg.path)
         self.dir.mkdir(parents=True, exist_ok=True)
         self.sessions_file = self.dir / "sessions.json"
+        # 진행 중인 세션만 따로 담는 작은 파일. 전체 기억을 30초마다 다시
+        # 쓰면 1년치(약 27MB)에서 한 번에 380ms 씩 이벤트 루프가 멎고,
+        # 3시간 방송이면 9.5GB 를 디스크에 쓴다(실측).
+        self.current_file = self.dir / "current_session.json"
         self._sessions: List[Dict] = self._load()
         self._cur: Optional[Dict] = None
+        self._last_save = 0.0
+        self._save_fails = 0
+        # 지난번에 비정상 종료된 세션(있으면). 다음 방송을 시작할 때
+        # 정식 기억으로 옮긴다 — 읽기 전용 명령(report 등)은 건드리지 않는다.
+        self._orphan: Optional[Dict] = self._load_current()
+        if self._orphan is not None:
+            log.warning("지난 방송이 정상 종료되지 않았습니다 — 중간까지의 기억을 살립니다.")
+            self._orphan["crashed"] = True
+            # 마지막으로 기록이 남은 시각 = 파일이 마지막으로 쓰인 시각.
+            try:
+                self._orphan["crashed_at"] = datetime.fromtimestamp(
+                    self.current_file.stat().st_mtime, timezone.utc).isoformat()
+            except OSError:
+                pass
+            self._sessions.append(self._orphan)
         # chroma 백엔드(선택): 의미검색용 색인. 실패하면 키워드 검색으로 대체.
         self._chroma = self._init_chroma() if cfg.backend == "chroma" else None
 
@@ -51,24 +79,135 @@ class Memory:
             log.warning("chroma 초기화 실패(%s) → 키워드 검색으로 대체", e)
             return None
 
+    def _set_aside(self, path: Path, why: str) -> None:
+        """읽을 수 없게 된 파일을 덮어쓰지 말고 옆으로 치워둔다.
+
+        예전에는 못 읽으면 경고 한 줄 남기고 빈 상태로 시작했는데, 다음
+        저장에서 그 파일을 그대로 덮어썼다 — 그동안 쌓인 단골·후원·회차
+        기록이 통째로 사라지고 되살릴 방법도 없었다. 파일이 깨지는 건
+        드물지만(정전 중 쓰기·디스크 오류·메모장으로 열었다 저장) 한 번
+        일어나면 되돌릴 수 없는 손실이다.
+        """
+        stamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+        spare = path.with_name(f"{path.name}.깨짐-{stamp}")
+        try:
+            path.replace(spare)
+            log.error("%s: %s → %s 로 옮겨뒀습니다. 지우지 마세요 — "
+                      "안에 지난 기록이 남아 있을 수 있습니다.", path.name, why, spare.name)
+        except OSError as e:
+            log.error("%s: %s (옮겨두지도 못했습니다: %s)", path.name, why, e)
+
     def _load(self) -> List[Dict]:
-        if self.sessions_file.exists():
+        if not self.sessions_file.exists():
+            return []
+        try:
+            data = json.loads(self.sessions_file.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError) as e:
+            self._set_aside(self.sessions_file, f"기억 파일을 읽지 못했습니다({e})")
+            return []
+        if not isinstance(data, list):
+            self._set_aside(self.sessions_file, "기억 파일 형식이 목록이 아닙니다")
+            return []
+        return data
+
+    def _load_current(self) -> Optional[Dict]:
+        """비정상 종료로 남은 '진행 중이던 세션' 파일을 읽는다."""
+        if not self.current_file.exists():
+            return None
+        try:
+            data = json.loads(self.current_file.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError) as e:
+            self._set_aside(self.current_file,
+                            f"진행 중이던 기억 파일을 읽지 못했습니다({e})")
+            return None
+        return data if isinstance(data, dict) and data.get("start") else None
+
+    def _save_current(self) -> None:
+        """진행 중인 세션 하나만 쓴다(작다 = 자주 써도 된다)."""
+        if self._cur is None:
+            return
+        tmp = self.current_file.with_suffix(".json.tmp")
+        try:
+            tmp.write_text(json.dumps(self._cur, ensure_ascii=False),
+                           encoding="utf-8")
+            tmp.replace(self.current_file)
+            self._save_fails = 0
+        except OSError as e:
+            # 디스크가 차면 이 자리가 30초마다 돈다. 3시간이면 같은 줄이
+            # 340개 쌓여서, 회전 로그가 밀려 정작 필요한 기록이 사라진다.
+            # 처음엔 크게, 그 뒤로는 드물게 알린다(상황은 안 바뀌니까).
+            self._save_fails += 1
+            if self._save_fails in (1, 3, 10) or self._save_fails % 20 == 0:
+                log.error("진행 중 기억 저장 실패(디스크 여유 공간 확인, "
+                          "%d번째): %s", self._save_fails, e)
             try:
-                return json.loads(self.sessions_file.read_text(encoding="utf-8"))
-            except (json.JSONDecodeError, OSError):
-                log.warning("기억 파일 읽기 실패 → 새로 시작")
-        return []
+                tmp.unlink()
+            except OSError:
+                pass
+
+    def _clear_current(self) -> None:
+        try:
+            self.current_file.unlink()
+        except OSError:
+            pass
 
     def _save(self) -> None:
+        """기억을 파일에 쓴다. 실패해도 예외를 올리지 않는다.
+
+        여기서 예외가 올라가면 방송 종료 절차(_teardown)가 중간에 끊겨
+        종료 공지가 안 나간다. 디스크가 차면 실제로 그렇게 됐다.
+        기억을 못 남기는 건 심각하므로 로그로는 크게 알린다.
+        """
         tmp = self.sessions_file.with_suffix(".json.tmp")
-        tmp.write_text(
-            json.dumps(self._sessions, ensure_ascii=False, indent=2),
-            encoding="utf-8",
-        )
-        tmp.replace(self.sessions_file)
+        try:
+            tmp.write_text(
+                json.dumps(self._sessions, ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
+            tmp.replace(self.sessions_file)
+        except OSError as e:
+            log.error("기억 저장 실패 — 이번 방송 기억이 남지 않습니다 "
+                      "(디스크 여유 공간을 확인하세요): %s", e)
+            try:
+                tmp.unlink()
+            except OSError:
+                pass
 
     # --- 세션 라이프사이클 --------------------------------------------------
-    def start_session(self) -> None:
+    def start_session(self, resume: bool = False) -> None:
+        """방송 세션을 연다. 열자마자 디스크에도 남긴다.
+
+        resume=True 는 '같은 방송을 다시 켜는 중'이라는 뜻이다(사고로 일찍
+        끝나 같은 슬롯을 재시도하는 경우). 그때 세션을 새로 열면 안 된다 —
+        한 슬롯이 회차 3개로 기록돼서, 10초 만에 죽은 시도에 들어온 시청자
+        둘이 '세 방송 출석한 단골'이 되고, 다음 방송 오프닝은 "저번 방송 땐
+        2명 왔었고" 라며 그 10초짜리를 저번 방송이라고 부른다. 리포트도
+        마지막 시도만 담아서 앞 시도에 온 시청자가 통째로 빠진다.
+        (실제 실행에서 한 슬롯에 세션 3개가 쌓이는 것을 확인했다)
+        """
+        if resume and self._cur is not None:
+            return
+        return self._start_session_now()
+
+    def _start_session_now(self) -> None:
+        """실제로 새 세션을 여는 부분.
+
+        예전에는 end_session() 에서만 저장해서, 방송 중에 프로세스가 죽으면
+        (정전·윈도우 강제 재부팅·무인운영 재시작) 그날 방송의 기억이 통째로
+        사라졌다. 24시간 무인 운영에서 크래시는 예외가 아니라 일상이다.
+        그래서 '시작 시점에 한 번 + 진행 중 주기적으로' 저장한다.
+        _cur 는 _sessions 안의 바로 그 객체라, 이후 변경은 저장만 하면 남는다.
+        """
+        # 앞 세션이 닫히지 않은 채 남아 있으면(재시도 도중 중단 등) 여기서
+        # 닫아준다. 안 닫으면 끝 시각 없는 회차가 기억에 그대로 남는다.
+        if self._cur is not None:
+            self._cur["end"] = _now_iso()
+            self._cur = None
+        # 지난 방송이 크래시로 끝났다면, 그 기억을 지금 정식으로 옮겨 적는다.
+        # (읽기 전용 명령이 아니라 '다음 방송 시작' 시점에만 파일을 건드린다)
+        if self._orphan is not None:
+            self._orphan = None
+            self._save()
         self._cur = {
             "start": _now_iso(),
             "end": None,
@@ -77,11 +216,23 @@ class Memory:
             "superchats": [],
             "summary": "",
         }
+        self._sessions.append(self._cur)
+        self._save_current()
+        self._last_save = time.monotonic()
+
+    def _checkpoint(self) -> None:
+        """진행 중인 세션을 가끔 디스크에 반영한다(크래시 대비)."""
+        now = time.monotonic()
+        if now - self._last_save < _CHECKPOINT_SEC:
+            return
+        self._last_save = now
+        self._save_current()
 
     def record_event(self, kind: str, **data) -> None:
         if self._cur is None:
             return
         self._cur["events"].append({"t": _now_iso(), "kind": kind, **data})
+        self._checkpoint()
 
     def note_chat(self, msg: ChatMessage) -> None:
         """채팅 한 줄을 기억에 반영(단골/슈퍼챗 추적). 파이프라인 콜백용."""
@@ -93,6 +244,7 @@ class Memory:
             self._cur["superchats"].append(
                 {"author": msg.author, "amount": msg.amount, "text": msg.text}
             )
+        self._checkpoint()
 
     def end_session(self, summary: str = "") -> None:
         if self._cur is None:
@@ -101,9 +253,14 @@ class Memory:
         if summary:
             self._cur["summary"] = summary
         session = self._cur
-        self._sessions.append(session)
+        # start_session() 이 이미 _sessions 에 넣어뒀다. 여기서 또 붙이면
+        # 같은 방송이 리포트·단골 집계에 두 번 잡힌다.
+        if not any(x is session for x in self._sessions):
+            self._sessions.append(session)
         self._cur = None
         self._save()
+        self._clear_current()
+        self._last_save = time.monotonic()
         self._index(session, len(self._sessions))
 
     def _session_text(self, s: Dict) -> str:
@@ -152,9 +309,21 @@ class Memory:
     # --- 회상 --------------------------------------------------------------
     def recent_summary(self) -> str:
         """직전 방송 한 줄 요약. 시작 공지/오프닝의 "저번에~" 재료."""
-        if not self._sessions:
+        # 지금 방송 중인 세션도 _sessions 에 들어 있다. 그건 '저번' 이 아니다.
+        past = [s for s in self._sessions if s is not self._cur]
+        # 사고로 몇십 초 만에 끝난 회차(재시도 전 시도)도 세션으로 남는다.
+        # 그걸 "저번 방송" 으로 집으면 오프닝에서 "저번엔 아무도 없었어" 가
+        # 나간다. 아무도 안 온 방송은 회상할 거리도 없으므로 건너뛴다.
+        worth = [s for s in past if s.get("viewers") or s.get("superchats")
+                 or s.get("summary")]
+        past = worth or past
+        if not past:
             return ""
-        last = self._sessions[-1]
+        last = past[-1]
+        # 방금 끊겼다가 돌아온 거면 "저번 방송 땐~" 이 아니다. 시청자는
+        # 3분 전까지 그 방송을 보고 있었다 — "저번" 이라고 하면 이상하다.
+        if last.get("crashed") and self._crashed_just_now(last):
+            return "아까 방송이 갑자기 끊겨서 다시 켰어"
         if last.get("summary"):
             return f"저번 방송 때 {last['summary']}"
         parts = []
@@ -167,6 +336,19 @@ class Memory:
         if not parts:
             return ""
         return "저번 방송 땐 " + ", ".join(parts)
+
+    @staticmethod
+    def _crashed_just_now(session: Dict) -> bool:
+        """그 사고가 방금 일어난 일인지."""
+        when = session.get("crashed_at") or session.get("start") or ""
+        try:
+            t = datetime.fromisoformat(when)
+        except (TypeError, ValueError):
+            return False
+        if t.tzinfo is None:
+            t = t.replace(tzinfo=timezone.utc)
+        gap = (datetime.now(timezone.utc) - t).total_seconds()
+        return 0 <= gap <= _JUST_CRASHED_MIN * 60
 
     def regulars(self, top: int = 5) -> List[str]:
         """여러 방송에 걸쳐 자주 보인 시청자(단골) 닉네임."""

@@ -40,13 +40,28 @@ aist build-persona --conf Open-LLM-VTuber/conf.yaml --live2d <모델명>
   `text_lang: ko` 를 채운다.
 - `character_config.live2d_model_name` — 아바타 모델.
 - `system_config.host/port` — 기본 `localhost:12393`. 이 값이 `config.yaml`
-  의 `vtuber.ws_url` 과 일치해야 한다(`ws://<host>:<port>/client-ws`).
+  의 `vtuber.ws_url` 과 일치해야 한다(`ws://<host>:<port>/proxy-ws`).
+- `system_config.enable_proxy: true` — **필수**. 이게 꺼져 있으면 `/proxy-ws`
+  자체가 안 열린다. 우리가 넣은 채팅의 결과(목소리·자막)가 웹UI 로 안 가서
+  시청자는 멈춘 아바타와 무음만 본다. (`conf.korean.yaml` 에는 켜져 있다)
 
 코어를 단독 실행해 "AI 가 말하고 아바타가 움직이는지" 먼저 확인(1단계).
 
 ### 브릿지가 코어로 보내는 것
 
-`aist/vtuber_bridge.py` 는 코어의 WebSocket(`/client-ws`)에 JSON 을 보냅니다:
+`aist/vtuber_bridge.py` 는 코어의 WebSocket(`/proxy-ws`)에 JSON 을 보냅니다:
+
+> **왜 `/client-ws` 가 아니라 `/proxy-ws` 인가**
+> `/client-ws` 는 1:1 경로다. 채팅을 넣은 클라이언트에게만 오디오·자막을
+> 돌려주므로, 우리가 채팅을 넣으면 그 결과가 **이 프로그램으로만** 오고
+> OBS 가 잡는 웹UI 에는 아무것도 안 간다. 게다가 코어는 "재생이 끝났다"
+> (`frontend-playback-complete`)는 응답을 그 클라이언트에게서 **타임아웃
+> 없이** 기다리기 때문에 `conversation-chain-end` 가 영영 안 온다 — 우리
+> '입 하나' 모델이 폴백 타이머로만 돌게 된다.
+> `/proxy-ws` 는 웹UI 와 우리를 같은 대화에 물리고 코어의 모든 출력을
+> 양쪽에 뿌린다. 재생 완료 응답은 웹UI 가 보낸다.
+> 웹UI 도 `/proxy-ws` 로 붙어야 한다 — `프론트엔드받기.bat` 이 받아온
+> `index.html` 에 그 설정을 넣어준다(`aist/frontend_patch.py`).
 
 | 보내는 메시지 | 효과 |
 |----------------|------|

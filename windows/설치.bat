@@ -43,7 +43,7 @@ pause & exit /b 1
 
 REM 가상환경 생성
 if not exist ".venv\Scripts\activate.bat" (
-  echo [1/5] 가상환경(.venv) 생성...
+  echo [1/5] 가상환경^(.venv^) 생성...
   %PY% -m venv .venv || ( echo [오류] venv 생성 실패 & pause & exit /b 1 )
 )
 

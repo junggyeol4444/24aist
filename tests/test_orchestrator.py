@@ -21,7 +21,7 @@ class FakeBridge:
         self.events.append("connect")
         return self
 
-    async def say_to_ai(self, text, source=None, platform=None):
+    async def say_to_ai(self, text, source=None, platform=None, **kw):
         self.events.append(("say", text))
 
     async def proactive_speak(self):
@@ -91,7 +91,7 @@ def _config(tmp_path):
     cfg.end_judge = EndJudgeConfig(max_minutes=0, min_minutes=0,
                                    wind_down=WindDown(enabled=False))
     cfg.broadcast = BroadcastConfig(idle_proactive_speak=False,
-                                    core_busy_timeout_sec=0)
+                                    core_busy_timeout_sec=0.001)
     cfg.announce = AnnounceConfig()
     cfg.announce.discord.enabled = False
     cfg.announce.naver_cafe.enabled = False
