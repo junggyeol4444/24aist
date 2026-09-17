@@ -31,12 +31,18 @@ def test_코어가_죽어_있으면_켜면_안_된다고_말한다(tmp_path, cap
     out = capsys.readouterr().out
     assert rc == 1
     assert "지금 켜면 방송이 안 됩니다" in out
-    # 무엇을 하면 되는지까지 — 이 OS 에서 실제로 누를 것으로
-    from aist import preflight
-    assert preflight.hint(*preflight.CMD_CORE_RUN) in out
-    # 코어 문제가 맨 앞
+    # 코어 문제가 맨 앞 — 코어가 안 붙으면 나머지는 볼 것도 없다
     body = out.split("지금 켜면 방송이 안 됩니다")[1]
-    assert body.index("코어에 못 붙습니다") < body.index("OBS")
+    bullets = [x for x in body.splitlines() if x.startswith("  - ")]
+    assert bullets and "코어" in bullets[0], bullets
+    # 무엇을 하면 되는지까지 — 이 OS 에서 실제로 누를 것으로.
+    # (websockets 가 없는 환경이면 코어에 붙어보기도 전에 걸린다)
+    import importlib.util
+    if importlib.util.find_spec("websockets") is not None:
+        from aist import preflight
+        assert preflight.hint(*preflight.CMD_CORE_RUN) in out
+    else:
+        assert "websockets" in body
 
 
 def test_송출_자동이_아니면_OBS_문구도_달라진다(tmp_path, capsys):

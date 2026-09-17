@@ -455,8 +455,10 @@ def cmd_doctor(args) -> int:
         ok = False
         core_dead = True
         print(f"  [!] 코어 점검 불가: {e}")
-        first.append(("코어를 점검하지 못했습니다",
-                      "위 메시지를 먼저 해결하세요"))
+        # 사유를 알고 있으면 그대로 적는다. "위 메시지를 먼저 해결하세요"
+        # 만 남기면, 아래 목록만 보는 운영자에게는 아무 정보가 아니다
+        # (websockets 미설치로 여기 오는 경우가 실제로 있다).
+        first.append(("코어를 점검하지 못했습니다", str(e)))
     except Exception as e:  # 연결 실패(코어 미실행 등)
         ok = False
         core_dead = True
