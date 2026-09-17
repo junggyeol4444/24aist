@@ -97,7 +97,7 @@ class YouTubeChat(ChatSource):
                 # 제자리에서 다시 시도한다.
                 if self._closed:
                     break
-                await asyncio.sleep(self._retry.failure(e))
+                await asyncio.sleep(self.wait_after(self._retry, e))
                 continue
             if not vid:
                 # 아직 방송 전인 경우가 대부분이다(자동발견의 정상 동작).
@@ -111,6 +111,7 @@ class YouTubeChat(ChatSource):
             try:
                 self._chat = pytchat.create(video_id=vid)
                 log.info("유튜브 라이브 채팅 연결됨 (video=%s)", vid)
+                self.connected_once = True
                 self._retry.success()
                 while self._chat.is_alive() and not self._closed:
                     data = await asyncio.to_thread(self._chat.get)
@@ -128,7 +129,7 @@ class YouTubeChat(ChatSource):
             except Exception as e:
                 if self._closed:
                     break
-                await asyncio.sleep(self._retry.failure(e))
+                await asyncio.sleep(self.wait_after(self._retry, e))
             finally:
                 if self._chat is not None:
                     try:

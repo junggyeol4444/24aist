@@ -115,7 +115,7 @@ class ChzzkChat(ChatSource):
                     log.error("%s", fatal)
                     self.fatal = fatal
                     return
-                await asyncio.sleep(self._retry.failure(e))
+                await asyncio.sleep(self.wait_after(self._retry, e))
                 continue
             try:
                 async with websockets.connect(_WS_URL, max_size=None) as ws:
@@ -127,6 +127,7 @@ class ChzzkChat(ChatSource):
                                 "accTkn": token, "auth": "READ"},
                     }))
                     log.info("치지직 채팅 연결됨 (channel=%s)", self.channel_id)
+                    self.connected_once = True
                     self._reconnect.success()
                     self._retry.success()
                     async for raw in ws:
@@ -150,7 +151,7 @@ class ChzzkChat(ChatSource):
                     break
                 # 플랫폼이 점검 중이면 이 자리가 3초마다 영원히 돈다.
                 # 같은 사유는 간격을 늘리고 로그도 줄인다(회전 로그 보호).
-                await asyncio.sleep(self._reconnect.failure(e))
+                await asyncio.sleep(self.wait_after(self._reconnect, e))
 
     async def probe(self) -> ProbeResult:
         try:

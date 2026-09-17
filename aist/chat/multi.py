@@ -42,6 +42,25 @@ class MultiChatSource(ChatSource):
             return ""
         return " / ".join(dict.fromkeys(reasons))
 
+    @property
+    def connected_once(self) -> bool:
+        """하나라도 실제로 붙었으면 '채팅이 들어올 길은 있었다' 로 본다."""
+        return any(getattr(s, "connected_once", False) for s in self.sources)
+
+    @connected_once.setter
+    def connected_once(self, value):    # ChatSource 기본값 대입을 흘려보낸다
+        pass
+
+    @property
+    def last_error(self) -> str:
+        parts = [f"{s.platform}: {getattr(s, 'last_error', '')}"
+                 for s in self.sources if getattr(s, "last_error", "")]
+        return " / ".join(parts)
+
+    @last_error.setter
+    def last_error(self, value):
+        pass
+
     async def _pump(self, src: ChatSource):
         try:
             async for m in src.messages():

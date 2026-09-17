@@ -39,6 +39,7 @@ _EVENT_LABEL = {
     "core_brain_dead": "AI 가 LLM 오류 문구를 읽음 — 방송을 내림",
     "web_ui_refresh": "웹UI(OBS 브라우저 소스)를 새로고침함",
     "chat_lost": "채팅 연결이 끊김",
+    "chat_never_connected": "채팅 플랫폼에 한 번도 못 붙음 (시청자가 없었던 게 아님)",
     "chat_gave_up": "채팅을 못 살려 혼잣말로 진행",
     "obs_down": "송출이 내려가 있어 다시 켬",
     "obs_reconnected": "OBS 에 다시 붙음",
@@ -52,6 +53,7 @@ _EVENT_LABEL = {
 
 # 이 중 하나라도 있으면 "정상적인 방송이 아니었다".
 _SERIOUS = ("core_lost", "core_gone", "core_mute", "core_stuck",
+            "chat_never_connected",
             "core_brain_dead", "chat_lost", "chat_gave_up", "obs_down",
             "obs_unreachable", "obs_gave_up", "obs_restart_failed",
             "ended_early")

@@ -83,6 +83,7 @@ class TwitcastingChat(ChatSource):
                         await asyncio.sleep(self.poll_interval)
                         continue
                     log.info("트위캐스팅 라이브 발견 (movie=%s)", movie_id)
+                    self.connected_once = True
                 comments, gone = await asyncio.to_thread(
                     self._fetch_comments, movie_id)
                 if gone:

@@ -56,6 +56,11 @@ class ChatSource(abc.ABC):
     """
 
     platform: str = "base"
+    # 이 방송에서 한 번이라도 실제로 붙었는지. 안 붙었으면 "아무도 안 왔다"
+    # 가 아니라 "채팅이 아예 안 들어왔다" 다 — 운영자에게 완전히 다른 얘기다.
+    connected_once: bool = False
+    # 마지막 실패 사유(못 붙은 채로 끝났을 때 리포트에 적어준다).
+    last_error: str = ""
     # 재시도해도 절대 안 고쳐지는 이유로 포기했을 때, 그 이유를 여기 남긴다.
     # (예: 패키지 미설치) 오케스트레이터는 이게 차 있으면 다시 만들지
     # 않는다 — 안 그러면 몇 초마다 같은 실패를 영원히 반복한다.
@@ -64,6 +69,15 @@ class ChatSource(abc.ABC):
     @abc.abstractmethod
     async def messages(self) -> AsyncIterator[ChatMessage]:
         ...
+
+    def wait_after(self, retry: "RetryLog", err: Exception) -> float:
+        """실패 사유를 남기고, 다음 시도까지 기다릴 초를 돌려준다.
+
+        사유를 들고 있어야 방송이 끝난 뒤 "아무도 안 왔다" 와 "아예 못
+        붙었다" 를 구분해서 알려줄 수 있다.
+        """
+        self.last_error = f"{type(err).__name__}: {err}"
+        return retry.failure(err)
 
     async def close(self) -> None:
         return None
@@ -96,6 +110,10 @@ class RetryLog:
         self._cap = max(self._base, cap)
         self._n = 0
         self._last = None
+
+    @property
+    def last_reason(self) -> str:
+        return self._last or ""
 
     def failure(self, err: Exception) -> float:
         """실패 한 번을 기록하고, 다음 시도까지 기다릴 초를 돌려준다."""

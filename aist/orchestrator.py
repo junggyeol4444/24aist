@@ -592,6 +592,19 @@ class Orchestrator:
             except Exception:
                 log.exception("트랜스크립트 마감 실패(방송 종료는 계속)")
 
+        # 채팅이 한 줄도 안 왔을 때, 그게 "아무도 안 왔다" 인지 "아예 못
+        # 붙었다" 인지 구분해 준다. 운영자에게는 완전히 다른 얘기다 —
+        # 전자는 기다리면 되고, 후자는 채널 ID·토큰을 고쳐야 한다.
+        # (실제 실행에서 채널 ID 가 틀린 채 3분을 돌렸더니, 리포트에는
+        #  "시청자 0명" 만 적혀 "아무도 안 왔네" 로 읽혔다)
+        src = self._chat_source
+        if src is not None and not getattr(src, "connected_once", True):
+            why = getattr(src, "last_error", "") or "사유 미상"
+            log.error("이번 방송 내내 채팅 플랫폼에 한 번도 못 붙었습니다 "
+                      "— 시청자가 없었던 게 아니라 채팅이 아예 안 들어왔습니다. "
+                      "채널 ID·토큰을 확인하세요. (마지막 사유: %s)", why[:300])
+            self._event("chat_never_connected", why=why[:300])
+
         # 세션 기억 저장. 다시 켤 회차면 아직 닫지 않는다 — 같은 슬롯의
         # 재시도는 '같은 방송'이라, 여기서 닫으면 회차가 쪼개진다.
         if not will_retry:

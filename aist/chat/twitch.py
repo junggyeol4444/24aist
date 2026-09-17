@@ -81,6 +81,7 @@ class TwitchChat(ChatSource):
         await self._ws.send(f"JOIN #{self.channel}")
         log.info("트위치 채팅 연결됨 (#%s, %s)", self.channel,
                  "인증" if self.oauth_token else "익명")
+        self.connected_once = True
         self._reconnect.success()
 
     async def messages(self) -> AsyncIterator[ChatMessage]:
@@ -117,7 +118,7 @@ class TwitchChat(ChatSource):
                     break
                 # 플랫폼이 점검 중이면 이 자리가 3초마다 영원히 돈다.
                 # 같은 사유는 간격을 늘리고 로그도 줄인다(회전 로그 보호).
-                await asyncio.sleep(self._reconnect.failure(e))
+                await asyncio.sleep(self.wait_after(self._reconnect, e))
 
     async def close(self) -> None:
         self._closed = True

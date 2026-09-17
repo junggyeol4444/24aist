@@ -37,6 +37,7 @@ class RehearsalChat(ChatSource):
         self._n = 0
 
     async def messages(self) -> AsyncIterator[ChatMessage]:
+        self.connected_once = True      # 붙을 곳이 없으니 항상 붙은 것으로 본다
         while True:
             await asyncio.sleep(self.interval_sec)
             self._n += 1
