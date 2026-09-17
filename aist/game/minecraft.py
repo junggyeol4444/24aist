@@ -40,10 +40,14 @@ _EVENT_CUES = {
 
 class MinecraftFeed:
     def __init__(self, bridge: VTuberBridge, cfg: GameConfig,
-                 on_event=None):
+                 on_event=None, on_chat=None):
         self.bridge = bridge
         self.cfg = cfg
         self.on_event = on_event      # 트랜스크립트/기억 기록용 콜백(선택)
+        # 게임 안 채팅을 넘길 곳(비동기). 채팅 파이프라인에 물려야
+        # '입 하나'·폭주 처리·기록이 시청자 채팅과 똑같이 적용된다.
+        # 없으면 예전처럼 코어로 직접 보낸다(테스트·단독 사용).
+        self.on_chat = on_chat
         self._closed = False
         self._ws = None
         self._last_cue = {}          # 이벤트별 마지막 반응 시각(도배 방지)
@@ -101,8 +105,7 @@ class MinecraftFeed:
                 message, username = sanitize_incoming(
                     data.get("message", ""), data.get("username", "?"))
                 if message:
-                    await self._safe_say(message, source=username,
-                                         platform="minecraft")
+                    await self._forward_chat(message, username)
             return
 
         if event in self.cfg.react_events:
@@ -115,6 +118,24 @@ class MinecraftFeed:
                 safe_event, _ = sanitize_incoming(str(event), "")
                 cue = f"(게임 상황: {safe_event})"
             await self._safe_say(cue)
+
+    async def _forward_chat(self, message: str, username: str):
+        """게임 안 채팅을 시청자 채팅과 같은 길로 넣는다.
+
+        예전에는 코어로 바로 쐈다. 그러면 방송인이 게임 채팅 하나하나에
+        전부 대답하느라 시청자 채팅이 묻힌다 — 2초에 한 줄 오는 한산한
+        서버로 3분을 돌려보니, 코어가 받은 134줄 중 80줄이 게임 채팅이었다.
+        """
+        if self.on_chat is None:
+            await self._safe_say(message, source=username, platform="minecraft")
+            return
+        from ..chat.base import ChatMessage
+        try:
+            await self.on_chat(ChatMessage(
+                author=username, text=message, platform="minecraft",
+                from_game=True))
+        except Exception as e:  # noqa: BLE001 - 게임 때문에 방송이 죽지 않게
+            log.debug("게임 채팅 전달 실패(무시): %s", e)
 
     def _cue_allowed(self, event: str) -> bool:
         """같은 이벤트에 너무 자주 반응하지 않게 한다.

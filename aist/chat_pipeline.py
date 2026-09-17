@@ -233,21 +233,7 @@ class ChatPipeline:
             async for msg in source.messages():
                 if stop_event.is_set():
                     break
-                self.last_chat_time = datetime.now(timezone.utc)
-                self._last_chat_mono = time.monotonic()
-                self._reset_idle_gap()              # 채팅 왔으니 혼잣말 타이밍 리셋
-                # '읽기'는 항상 전부 한다(기록/기억용).
-                if self.on_message is not None:
-                    try:
-                        self.on_message(msg)
-                    except Exception:  # 기록 실패가 방송을 멈추면 안 됨
-                        log.exception("on_message 콜백 오류")
-                if not self._should_forward():
-                    continue
-                if self._busy_now():
-                    self._pending.append(msg)       # 말 끝나면 이어받음
-                else:
-                    await self._send_single(msg)
+                await self._handle_one(msg)
             if not stop_event.is_set():
                 # 우리가 멈춘 게 아닌데 소스가 끝났다 = 플랫폼 연결이 끊겼다.
                 log.error("채팅 소스가 끝났습니다 — 더는 채팅이 들어오지 않습니다.")
@@ -258,6 +244,39 @@ class ChatPipeline:
             log.exception("채팅 소비 루프 오류 — 종료")
             if not stop_event.is_set():
                 self._notify_source_ended()
+
+    async def _handle_one(self, msg: ChatMessage):
+        """채팅 한 줄을 이 방송의 규칙대로 처리한다."""
+        if not msg.from_game:
+            # 종료 판단(채팅 저조)은 '시청자가 조용한가' 를 본다. 게임 안
+            # 채팅으로 이 시계를 되돌리면, 시청자가 아무도 없는 방송이
+            # 게임 서버 사람들 덕분에 계속 켜져 있게 된다.
+            self.last_chat_time = datetime.now(timezone.utc)
+            self._last_chat_mono = time.monotonic()
+        self._reset_idle_gap()              # 할 말이 생겼으니 혼잣말 타이밍 리셋
+        # '읽기'는 항상 전부 한다(기록/기억용).
+        if self.on_message is not None:
+            try:
+                self.on_message(msg)
+            except Exception:  # 기록 실패가 방송을 멈추면 안 됨
+                log.exception("on_message 콜백 오류")
+        if not self._should_forward():
+            return
+        if self._busy_now():
+            self._pending.append(msg)       # 말 끝나면 이어받음
+        else:
+            await self._send_single(msg)
+
+    async def submit(self, msg: ChatMessage):
+        """채팅 소스가 아닌 곳(게임 연동 등)에서 들어온 말을 같은 길로 넣는다.
+
+        예전에는 게임 연동이 코어로 직접 쏘았다. 그래서 '입 하나' 모델도,
+        폭주 처리도, 기록도 전부 비켜갔다. 실제로 3분 방송에서 코어가 받은
+        134줄 중 80줄이 게임 채팅이었고(2초에 한 줄짜리 한산한 서버였다),
+        시청자 채팅은 그 사이에 파묻혔다 — 기획 1-2 "시청자 채팅 다 읽고
+        다 반응" 이 통째로 뒤집힌다.
+        """
+        await self._handle_one(msg)
 
     def _notify_source_ended(self):
         if self.on_source_ended is None:

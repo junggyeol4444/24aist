@@ -15,6 +15,9 @@ class ChatMessage:
     is_superchat: bool = False
     amount: str = ""          # 슈퍼챗 금액 표기(있으면)
     raw: Optional[object] = None
+    # 게임 안에서 온 말인지(마인크래프트 서버의 다른 플레이어 등).
+    # 시청자 수·단골 집계에 섞으면 안 된다 — 방송을 보고 있는 사람이 아니다.
+    from_game: bool = False
 
 
 @dataclass

@@ -306,7 +306,10 @@ class Orchestrator:
                 # 채팅이 실제로 들어왔다 = 정말로 복구된 것이다.
                 # (소스를 만든 것만으로 '복구됨' 이라고 하면 안 된다)
                 self._chat_restarts = 0
-                self.memory.note_chat(msg)
+                # 게임 서버에서 떠든 사람은 방송 시청자가 아니다.
+                # 시청자 수·단골 집계에 섞으면 리포트가 거짓말이 된다.
+                if not getattr(msg, "from_game", False):
+                    self.memory.note_chat(msg)
                 if transcript is not None:
                     transcript.log_chat(msg)
 
@@ -385,7 +388,11 @@ class Orchestrator:
                     self.memory.record_event("game", **data)
                     if transcript is not None:
                         transcript.log_event("game", **data)
-                feed = MinecraftFeed(bridge, cfg.game, on_event=on_game_event)
+                # 게임 안 채팅은 파이프라인을 통해 넣는다 — 안 그러면
+                # 시청자 채팅과 경쟁하며 코어로 직행해서, 방송인이 게임
+                # 채팅만 상대하고 시청자는 묻힌다(기획 1-2 위반).
+                feed = MinecraftFeed(bridge, cfg.game, on_event=on_game_event,
+                                     on_chat=pipeline.submit)
                 game_task = asyncio.create_task(feed.run(chat_stop))
                 log.info("게임 연동 켜짐 (%s)", cfg.game.ws_url)
 
