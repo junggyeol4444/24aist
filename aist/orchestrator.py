@@ -484,7 +484,20 @@ class Orchestrator:
                 self._event("ended_early", why="코어/웹UI 문제로 방송을 내림")
             if not core_gone:
                 chat_stop.set()
-                if (cfg.end_judge.wind_down.enabled
+                if self._stop.is_set():
+                    # 킬스위치(중단.bat)나 Ctrl+C 로 내려오는 길이다.
+                    # 여기서 마무리 인사를 '시키기만' 하면 거짓말이 된다 —
+                    # 기다리는 쪽(_wait_until_done_speaking)이 _stop 을 보고
+                    # 곧장 돌아오므로, 인사 신호를 보낸 6밀리초 뒤에 스트림이
+                    # 꺼진다(실측). 시청자에게는 한 마디도 안 나가고, 로그와
+                    # 중단.bat 만 "마무리 인사" 라고 적혀 있었다.
+                    # 킬스위치는 빠른 게 맞다(AI 가 사고 친 걸 내리는 용도).
+                    # 그러니 인사는 건너뛰고, 건너뛴다고 말한다.
+                    log.warning("중단 요청 → 마무리 인사 없이 바로 내립니다. "
+                                "인사까지 하고 내리려면 방송이 예정 시간에 "
+                                "스스로 끝나게 두세요.")
+                    self._event("stopped_by_operator")
+                elif (cfg.end_judge.wind_down.enabled
                         and cfg.end_judge.wind_down.closing_greeting):
                     log.info("채팅 유입 차단 → 마무리 인사")
                     await self._safe(bridge.say_to_ai(_CUE_CLOSING))

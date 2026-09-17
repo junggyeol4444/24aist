@@ -46,6 +46,7 @@ _EVENT_LABEL = {
     "obs_gave_up": "송출이 반복해서 내려가 방송을 내림",
     "obs_restart_failed": "송출을 다시 못 켜 방송을 내림",
     "ended_early": "마무리 인사도 못 하고 방송이 끊김",
+    "stopped_by_operator": "운영자가 중단(중단.bat)해서 내림",
     "game": "게임/컨텐츠 진행",
 }
 

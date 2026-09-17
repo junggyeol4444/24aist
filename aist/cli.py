@@ -761,8 +761,9 @@ def cmd_stop(args) -> int:
         return 0
     p = flag.raise_(args.reason or "운영자 중단 요청")
     print(f"중단 스위치를 올렸습니다: {p}")
-    print("  도는 방송이 있으면 몇 초 안에 마무리 절차로 들어갑니다")
-    print("  (OBS 스트림 종료 · 기록 저장까지 하고 끝냅니다).")
+    print("  도는 방송이 있으면 몇 초 안에 내려갑니다")
+    print("  (OBS 스트림 종료 · 기록 저장 · 종료 공지까지 합니다).")
+    print("  마무리 인사는 하지 않습니다 — 사고를 내리는 용도라 빠른 게 맞습니다.")
     print(f"  해제: aist stop --clear   (안 지우면 다음 방송 시작 시 자동으로 지워집니다)")
     return 0
 
