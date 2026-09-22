@@ -142,12 +142,23 @@ def _write_speech_file(out_dir: str, start: str, spoken: List[str]) -> Optional[
         out = Path(out_dir)
         out.mkdir(parents=True, exist_ok=True)
         stem = (start[:16].replace(":", "").replace("T", "_") or "session")
-        # 메모장에서 바로 열리게 .txt 로 둔다.
-        path = unique_path(out / f"{stem}_발화전문.txt")
         body = [f"# AI 발화 전문 — {start[:16]}", ""]
         body += [ln[2:] if ln.startswith("- ") else ln for ln in spoken]
-        path.write_text("\n".join(body), encoding="utf-8")
-        return path
+        text = "\n".join(body)
+        # 메모장에서 바로 열리게 .txt 로 둔다. 이름은 한글이 알아보기 쉬운데,
+        # 파일 이름에 한글을 못 쓰는 환경도 있어서(네트워크 드라이브·일부
+        # 동기화 폴더) 실패하면 영문 이름으로 한 번 더 해본다. 여기서
+        # 포기하면 운영자는 그날 발화 전문을 JSONL 로만 봐야 한다.
+        last = None
+        for name in (f"{stem}_발화전문.txt", f"{stem}_speech.txt"):
+            path = unique_path(out / name)
+            try:
+                path.write_text(text, encoding="utf-8")
+                return path
+            except OSError as e:
+                last = e
+        log.warning("발화 전문 파일을 따로 못 남겼습니다(리포트는 계속): %s", last)
+        return None
     except OSError as e:
         log.warning("발화 전문 파일을 따로 못 남겼습니다(리포트는 계속): %s", e)
         return None

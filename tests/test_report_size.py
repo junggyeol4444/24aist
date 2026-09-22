@@ -70,3 +70,41 @@ def test_전문_파일을_못_써도_리포트는_나온다(tmp_path, monkeypatc
     monkeypatch.setattr(R, "_write_speech_file", lambda *a, **k: None)
     p, txt = _report(tmp_path, 1350)
     assert "트랜스크립트에 그대로 있습니다" in txt
+
+
+def test_한글_파일명을_못_쓰면_영문으로_한_번_더(tmp_path, monkeypatch):
+    """파일 이름에 한글을 못 쓰는 환경이 있다(네트워크 드라이브 등).
+
+    거기서 포기하면 운영자는 그날 발화 전문을 JSONL 로만 봐야 한다.
+    """
+    import aist.report as R
+
+    real_write = R.Path.write_text
+
+    def picky(self, data, **kw):
+        if "발화전문" in self.name:
+            raise OSError(2, "No such file or directory")
+        return real_write(self, data, **kw)
+
+    monkeypatch.setattr(R.Path, "write_text", picky)
+    p, txt = _report(tmp_path, 1350)
+    side = list(p.parent.glob("*_speech.txt"))
+    assert len(side) == 1, "영문 이름으로도 안 만들었다"
+    assert side[0].name in txt
+    assert len(side[0].read_text(encoding="utf-8").splitlines()) >= 1350
+
+
+def test_둘_다_못_쓰면_리포트는_그대로_나온다(tmp_path, monkeypatch):
+    import aist.report as R
+
+    real_write = R.Path.write_text
+
+    def nope(self, data, **kw):
+        if self.suffix == ".txt":
+            raise OSError(13, "Permission denied")
+        return real_write(self, data, **kw)
+
+    monkeypatch.setattr(R.Path, "write_text", nope)
+    p, txt = _report(tmp_path, 1350)
+    assert p.exists()
+    assert "트랜스크립트에 그대로 있습니다" in txt
