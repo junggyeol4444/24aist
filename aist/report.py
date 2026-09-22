@@ -50,6 +50,8 @@ _EVENT_LABEL = {
     "transcript_lost": "방송 기록이 중간에 끊김 (아래 발화 수·발화 전문은 방송 전체가 아님)",
     "chat_never_connected": "채팅 플랫폼에 한 번도 못 붙음 (시청자가 없었던 게 아님)",
     "chat_gave_up": "채팅을 못 살려 혼잣말로 진행",
+    "obs_start_failed": "송출을 시작하지 못함 (시청자에게 아무것도 안 나감)",
+    "announce_failed": "공지가 안 나감 (시청자는 방송 켜진 걸 모른다)",
     "obs_down": "송출이 내려가 있어 다시 켬",
     "obs_reconnected": "OBS 에 다시 붙음",
     "obs_unreachable": "OBS 가 대답이 없어 방송을 내림",
@@ -64,6 +66,7 @@ _EVENT_LABEL = {
 _SERIOUS = ("banned_word", "banned_gave_up",
             "core_lost", "core_gone", "core_mute", "core_stuck",
             "chat_never_connected", "transcript_lost",
+            "obs_start_failed", "announce_failed",
             "core_brain_dead", "chat_lost", "chat_gave_up", "obs_down",
             "obs_unreachable", "obs_gave_up", "obs_restart_failed",
             "ended_early")

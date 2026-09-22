@@ -228,10 +228,12 @@ class Memory:
         self._last_save = now
         self._save_current()
 
-    def record_event(self, kind: str, **data) -> None:
+    def record_event(self, kind: str, /, **data) -> None:
         if self._cur is None:
             return
-        self._cur["events"].append({"t": _now_iso(), "kind": kind, **data})
+        # 이벤트 이름과 시각은 호출자의 데이터가 덮어쓸 수 없다
+        # (kind="start" 같은 키가 들어와 사고 이름이 통째로 바뀐 적이 있다).
+        self._cur["events"].append({**data, "t": _now_iso(), "kind": kind})
         self._checkpoint()
 
     def note_chat(self, msg: ChatMessage) -> None:

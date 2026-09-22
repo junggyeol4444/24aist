@@ -36,3 +36,41 @@ def test_모든_사고_이름에_한국어_설명이_있다():
     """영어 키가 그대로 리포트에 나가면 운영자는 뜻을 모른다."""
     missing = [k for k in _SERIOUS if k not in _EVENT_LABEL]
     assert missing == [], f"설명 없는 이벤트: {missing}"
+
+
+def test_조용히_넘어가던_사고들도_리포트에_남는다():
+    """로그에만 있고 리포트에 없으면 없는 것과 같다.
+
+    아래 셋은 '방송이 통째로 헛돌았다' 는 뜻인데 리포트에 한 줄도 없었다:
+      - 채팅 소스를 아예 못 만든 경우(객체가 없어서 '한 번도 못 붙었나'
+        검사에도 안 걸린다 → 리포트에는 "시청자 0명" 만 남는다)
+      - OBS 시작 실패(송출이 안 켜진 채로 방송이 돈다)
+      - 공지 실패(시청자는 방송 켜진 걸 모른다)
+    """
+    for kind in ("chat_never_connected", "obs_start_failed", "announce_failed"):
+        assert kind in _SERIOUS, kind
+        assert kind in _EVENT_LABEL, kind
+    out = _trouble_lines([{"kind": "obs_start_failed"},
+                          {"kind": "announce_failed"}])
+    assert out
+    assert "송출" in out[0] and "공지" in out[0]
+
+
+def test_이벤트_이름과_같은_키를_넘겨도_안_터진다(tmp_path):
+    """_event(kind=...) 로 부딪혀 방송이 통째로 죽은 적이 있다."""
+    import asyncio
+
+    from aist.config import Config
+    from aist.orchestrator import Orchestrator
+    from aist.persona import Persona
+
+    cfg = Config()
+    cfg.memory.path = str(tmp_path / "mem")
+    o = Orchestrator(cfg, Persona())
+    o.memory.start_session()
+    o._event("announce_failed", kind="start", where="디스코드", t="가짜시각")
+    ev = o.memory._cur["events"][-1]
+    # 사고 이름과 시각은 호출자 데이터가 덮어쓸 수 없어야 한다
+    assert ev["kind"] == "announce_failed"
+    assert ev["t"] != "가짜시각"
+    assert ev["where"] == "디스코드"

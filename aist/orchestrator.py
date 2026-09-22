@@ -110,6 +110,7 @@ class Orchestrator:
         self._banned_interrupted = False
         self._banned_hits = 0
         self._banned_gave_up = False
+        self._obs_start_failed = ""
 
     def request_stop(self):
         self._stop.set()
@@ -255,6 +256,7 @@ class Orchestrator:
         # 오늘 방송을 내리면 안 된다.
         self._banned_hits = 0
         self._banned_gave_up = False
+        self._obs_start_failed = ""
         self._banned_interrupted = False
         # 이전 방송이 남긴 중단 스위치가 있으면 지우고 시작한다(안 지우면
         # 다음 방송이 켜지자마자 다시 꺼진다).
@@ -292,6 +294,7 @@ class Orchestrator:
                     obs.start_stream()
                 except ObsError as e:
                     log.error("OBS 시작 실패: %s", e)
+                    self._obs_start_failed = str(e)[:200]
             # 송출 감시의 첫 확인은 조금 뒤에 한다. StartStream 이 돌아와도
             # OBS 가 실제로 '송출 중'으로 바뀌는 데는 몇 초가 걸린다 —
             # 곧바로 물어보면 멀쩡한 방송을 '내려갔다'고 오해한다.
@@ -303,6 +306,10 @@ class Orchestrator:
             # (한 방송이 회차 여러 개로 쪼개지면 단골 집계·"저번에~"·
             #  리포트가 전부 어긋난다).
             self.memory.start_session(resume=resuming)
+            if self._obs_start_failed:
+                # 송출이 안 켜진 채로 도는 방송이다. 감시가 몇 분 뒤
+                # 내리긴 하지만, 근본 원인은 이 한 줄이다.
+                self._event("obs_start_failed", why=self._obs_start_failed)
             try:
                 await bridge.connect()
             except asyncio.CancelledError:
@@ -389,7 +396,12 @@ class Orchestrator:
                 self._chat_source = source
                 pipeline_task = asyncio.create_task(pipeline.run(source, chat_stop))
             except Exception as e:
+                # 여기로 오면 소스 객체조차 없다. 그래서 방송이 끝날 때
+                # 하는 '한 번도 못 붙었나' 검사(소스를 보고 판단한다)에
+                # 안 걸린다 — 리포트에는 "시청자 0명" 만 남고, 운영자는
+                # 아무도 안 온 줄 안다. 여기서 직접 남긴다.
                 log.error("채팅 소스 시작 실패: %s — 채팅 없이 진행", e)
+                self._event("chat_never_connected", why=str(e)[:200])
 
             # 게임(8단계, 선택): 사이드카 이벤트 → AI 반응. 채팅 소통은 그대로.
             if cfg.game.enabled:
@@ -697,8 +709,12 @@ class Orchestrator:
                 log.error("공지 게시가 %.0f초 안에 안 끝나 넘어갑니다(%s) — "
                           "이번 공지는 안 나갔습니다. 방송은 그대로 진행합니다.",
                           _ANNOUNCE_TIMEOUT_SEC, a.name)
+                self._event("announce_failed", where=a.name, phase=kind,
+                            why="시간 초과")
             except Exception as e:
                 log.error("공지 게시 실패(%s): %s", a.name, e)
+                self._event("announce_failed", where=a.name, phase=kind,
+                            why=str(e)[:200])
             finally:
                 await a.close()
 
@@ -883,7 +899,7 @@ class Orchestrator:
     # 그때는 화면만 계속 깜빡이게 된다.
     _WEB_REFRESH_MAX = 3
 
-    def _event(self, kind: str, **data) -> None:
+    def _event(self, kind: str, /, **data) -> None:
         """이번 방송에 일어난 일을 기억·트랜스크립트에 남긴다.
 
         로그 파일에만 적으면 아무도 안 본다. 운영자가 다음 날 실제로 펴보는

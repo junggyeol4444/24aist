@@ -73,8 +73,8 @@ class Transcript:
         if text:
             self._write({"who": "ai", "text": text})
 
-    def log_event(self, kind: str, **data) -> None:
-        self._write({"who": "system", "event": kind, **data})
+    def log_event(self, kind: str, /, **data) -> None:
+        self._write({**data, "who": "system", "event": kind})
 
     def on_core_message(self, data: dict) -> None:
         """코어 drain 훅 — AI 실제 발화(audio payload 의 display_text)를 기록."""
