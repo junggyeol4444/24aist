@@ -108,6 +108,8 @@ class Orchestrator:
         self._chat_restarts = 0
         self._chat_gave_up = False
         self._banned_interrupted = False
+        self._banned_hits = 0
+        self._banned_gave_up = False
 
     def request_stop(self):
         self._stop.set()
@@ -249,6 +251,10 @@ class Orchestrator:
         self._chat_source = None
         self._chat_restarts = 0
         self._chat_gave_up = False
+        # 금지어 누적도 방송마다 새로 센다 — 어제 걸린 게
+        # 오늘 방송을 내리면 안 된다.
+        self._banned_hits = 0
+        self._banned_gave_up = False
         self._banned_interrupted = False
         # 이전 방송이 남긴 중단 스위치가 있으면 지우고 시작한다(안 지우면
         # 다음 방송이 켜지자마자 다시 꺼진다).
@@ -1019,6 +1025,15 @@ class Orchestrator:
         if not hit:
             return
         log.error("금지어 감지(%r) — 발화를 끊습니다: %s", hit, (text or "")[:120])
+        # 트랜스크립트에만 적으면 리포트에는 한 줄도 안 남는다. 실제로
+        # 돌려보니 발화 4개가 전부 금지어였는데, 다음 날 리포트에는 그
+        # 얘기가 없었다 — '사고 발언 점검' 리포트가 정작 사고를 빠뜨린다.
+        self._banned_hits += 1
+        try:
+            self.memory.record_event("banned_word", word=hit,
+                                     text=(text or "")[:200])
+        except Exception:  # noqa: BLE001 - 기록 실패가 방송을 깨면 안 된다
+            log.debug("금지어 기억 기록 실패", exc_info=True)
         if transcript is not None:
             try:
                 transcript.log_event("banned_word", word=hit, text=text)
@@ -1040,4 +1055,16 @@ class Orchestrator:
             log.debug("끼어들기 예약 실패(이벤트 루프 없음)")
         if self.cfg.safety.stop_broadcast_on_hit:
             log.error("safety.stop_broadcast_on_hit=true → 방송을 내립니다.")
+            self.request_stop()
+            return
+        # 한 번은 오탐일 수 있다. 하지만 계속 걸리는 건 방송인이 그 상태가
+        # 된 것이고, 끼어들기는 이미 나간 말을 되돌리지 못한다.
+        limit = self.cfg.safety.banned_max_strikes
+        if limit > 0 and self._banned_hits >= limit and not self._banned_gave_up:
+            self._banned_gave_up = True
+            log.error("금지어가 %d번 걸렸습니다 — 발화만 끊으며 계속하는 건 "
+                      "여기까지입니다. 이번 방송을 내립니다. "
+                      "(계속 진행하려면 safety.banned_max_strikes 를 0 으로)",
+                      self._banned_hits)
+            self._event("banned_gave_up", hits=self._banned_hits)
             self.request_stop()

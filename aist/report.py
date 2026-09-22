@@ -36,6 +36,8 @@ _SPEECH_HEAD_TAIL = 10
 # 멀쩡히 끝난 줄 알았는데, 실제로는 코어가 죽었다 살아나고 5분 넘게
 # 소리가 안 나간 방송이었다.
 _EVENT_LABEL = {
+    "banned_word": "AI 가 금지어를 말해 발화를 끊음",
+    "banned_gave_up": "금지어가 반복돼 방송을 내림",
     "tts_silent": "목소리가 안 나감(자막만) — TTS 문제",
     "core_lost": "코어 연결이 끊김",
     "core_recovered": "코어에 다시 붙음",
@@ -59,7 +61,8 @@ _EVENT_LABEL = {
 }
 
 # 이 중 하나라도 있으면 "정상적인 방송이 아니었다".
-_SERIOUS = ("core_lost", "core_gone", "core_mute", "core_stuck",
+_SERIOUS = ("banned_word", "banned_gave_up",
+            "core_lost", "core_gone", "core_mute", "core_stuck",
             "chat_never_connected", "transcript_lost",
             "core_brain_dead", "chat_lost", "chat_gave_up", "obs_down",
             "obs_unreachable", "obs_gave_up", "obs_restart_failed",

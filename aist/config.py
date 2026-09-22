@@ -331,6 +331,12 @@ class SafetyConfig:
     banned_words: List[str] = field(default_factory=list)
     # 금지어가 걸렸을 때 방송 자체를 내릴지(true) 발화만 끊을지(false)
     stop_broadcast_on_hit: bool = False
+    # 한 번은 오탐일 수 있지만, 계속 걸리는 건 방송인이 그 상태가 된 것이다.
+    # 이 횟수만큼 걸리면 발화만 끊는 설정이어도 방송을 내린다.
+    # (실제로 돌려보니 발화 4개가 전부 금지어인데 방송은 예정 시간까지
+    #  그대로 돌았다. 끼어들기는 이미 나간 말을 되돌리지 못한다.)
+    # 0 이면 끄기 — 몇 시간이든 발화만 끊으며 계속한다.
+    banned_max_strikes: int = 3
     # 즉시 중단 스위치 파일. `aist stop` 이 만들고 방송 루프가 확인한다.
     stop_flag_path: str = "data/STOP"
 

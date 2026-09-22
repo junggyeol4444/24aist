@@ -809,6 +809,28 @@ def _acquire_single(cfg, rehearsal: bool = False):
     return None
 
 
+def _run_broadcast_loop(orch, method: str, what: str) -> int:
+    """방송 루프를 돌리고, 예상 못 한 오류를 운영자 로그에 남긴다.
+
+    예전에는 여기서 터진 예외가 콘솔에 파이썬 트레이스백으로만 나가고,
+    운영자가 나중에 펴보는 로그 파일(data/logs/aist.log)에는 아무 것도
+    안 남았다 — 로그에는 "방송 시작" 다음 줄이 곧장 "스트림 종료" 라서,
+    왜 3초 만에 끝났는지 알 방법이 없었다(실제로 그렇게 끝난 실행을
+    확인했다). 이건 코드 문제이므로 트레이스백도 같이 남긴다.
+    """
+    import logging as _logging
+    try:
+        asyncio.run(_run_with_signals(orch, method))
+    except KeyboardInterrupt:
+        print("\n중단됨")
+    except Exception:
+        _logging.getLogger("aist").exception(
+            "%s 중 예상 못 한 오류로 멈췄습니다 — 아래 영어 내용을 그대로 "
+            "개발자에게 알려주세요. (로그 파일에도 같이 남았습니다)", what)
+        return 1
+    return 0
+
+
 def cmd_broadcast_now(args) -> int:
     from .orchestrator import Orchestrator
     cfg, persona = _load(args, file_log=True)
@@ -819,12 +841,9 @@ def cmd_broadcast_now(args) -> int:
         return 1
     orch = Orchestrator(cfg, persona)
     try:
-        asyncio.run(_run_with_signals(orch, "run_one_now"))
-    except KeyboardInterrupt:
-        print("\n중단됨")
+        return _run_broadcast_loop(orch, "run_one_now", "방송")
     finally:
         lock.release()
-    return 0
 
 
 def cmd_stop(args) -> int:
@@ -955,13 +974,11 @@ def cmd_rehearse(args) -> int:
     print(f"  코어: {cfg.vtuber.ws_url} (먼저 띄워두세요)\n")
     orch = Orchestrator(cfg, persona)
     try:
-        asyncio.run(_run_with_signals(orch, "run_one_now"))
-    except KeyboardInterrupt:
-        print("\n중단됨")
+        rc = _run_broadcast_loop(orch, "run_one_now", "리허설")
     finally:
         lock.release()
     print("\n리허설 끝. 위 흐름이 어색하면 persona.yaml / config.yaml 을 다듬으세요.")
-    return 0
+    return rc
 
 
 def cmd_run(args) -> int:
@@ -974,12 +991,9 @@ def cmd_run(args) -> int:
         return 1
     orch = Orchestrator(cfg, persona)
     try:
-        asyncio.run(_run_with_signals(orch, "run"))
-    except KeyboardInterrupt:
-        print("\n중단됨")
+        return _run_broadcast_loop(orch, "run", "자동 운영")
     finally:
         lock.release()
-    return 0
 
 
 def build_parser() -> argparse.ArgumentParser:
