@@ -328,14 +328,29 @@ def cmd_plan(args) -> int:
     from .end_judge import EndJudge, Phase
     cfg, _ = _load(args)
     tz = cfg.scheduler.timezone
+    tz_ok = True
     try:
         from zoneinfo import ZoneInfo
         now = datetime.now(ZoneInfo(tz))
     except Exception:
+        # 조용히 PC 로컬 시간으로 떨어지면 안 된다. 예전에는 오타 난
+        # 타임존('Asia/Seoull')으로도 예정표가 멀쩡히 찍혔다 — 그것도
+        # UTC 시각에 한국 타임존 이름을 붙여서. 운영자는 그 표를 믿고
+        # 방송 시각을 맞추는데, 실제로는 9시간 어긋난 채로 돈다.
+        tz_ok = False
         now = datetime.now().astimezone()
 
     sc = Scheduler(cfg.scheduler)
-    print(f"현재({tz}): {now.isoformat(timespec='minutes')}\n다음 방송 예정 {args.count}개:")
+    if not tz_ok:
+        print(f"[!] 타임존 '{tz}' 을 쓸 수 없어 PC 로컬 시간으로 계산합니다 "
+              f"— 아래 시각은 설정한 타임존 기준이 아닙니다.")
+        print("    (윈도우에서 정상적인 이름인데도 이러면 tzdata 미설치입니다. "
+              "자세한 건 aist check)")
+        label = f"PC 로컬({now.tzname() or ''})"
+    else:
+        label = tz
+    print(f"현재({label}): {now.isoformat(timespec='minutes')}\n"
+          f"다음 방송 예정 {args.count}개:")
     cursor = now
     first_start = None
     for i in range(args.count):
