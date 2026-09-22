@@ -101,6 +101,23 @@ def sanitize_incoming(text: str, author: str = "") -> tuple:
     return t, a
 
 
+# 코어는 LLM 에게 "[joy] 같은 표정 키워드를 자주 쓰라"고 시킨다(Live2D 표정용).
+# 시청자에게는 코어가 떼고 보내지만, 우리가 받는 display_text 에는 그대로 있다.
+# 그게 기록·리포트로 들어가면 '사고 발언 점검' 칸이 이렇게 된다:
+#   - [joy] 아 그거요?
+#   - ㅋㅋ [smirk] 저도 어제 그 생각 했어요.
+# 실제 LLM 은 이걸 매 문장 넣으라고 지시받으므로 전문이 통째로 이 꼴이 된다.
+# 영문 한 단어 대괄호만 떼어낸다 — [공지] 같은 한글 대괄호는 진짜 말일 수 있다.
+_EXPRESSION_TAG = re.compile(r"\[[A-Za-z_][A-Za-z0-9_]*\]")
+
+
+def strip_expressions(text: str) -> str:
+    """AI 발화에서 표정 키워드를 떼어낸다(기록·점검용)."""
+    if not text:
+        return text
+    return re.sub(r"\s{2,}", " ", _EXPRESSION_TAG.sub("", text)).strip()
+
+
 def check_output(text: str, banned: List[str]) -> Optional[str]:
     """AI 발화에 운영자가 정한 금지어가 있으면 그 단어를 돌려준다.
 

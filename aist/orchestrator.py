@@ -34,7 +34,7 @@ from .memory import Memory
 from .obs_control import ObsController, ObsError
 from .persona import Persona
 from .report import generate_report
-from .safety import StopFlag, check_output
+from .safety import StopFlag, check_output, strip_expressions
 from .scheduler import Scheduler
 from .transcript import Transcript
 from .vtuber_bridge import VTuberBridge
@@ -1036,8 +1036,8 @@ class Orchestrator:
         if data.get("type") != "audio":
             return
         dt = data.get("display_text") or {}
-        text = dt.get("text") if isinstance(dt, dict) else ""
-        hit = check_output(text or "", banned)
+        text = strip_expressions((dt.get("text") if isinstance(dt, dict) else "") or "")
+        hit = check_output(text, banned)
         if not hit:
             return
         log.error("금지어 감지(%r) — 발화를 끊습니다: %s", hit, (text or "")[:120])

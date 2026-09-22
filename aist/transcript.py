@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import Optional
 
 from .chat.base import ChatMessage
+from .safety import strip_expressions
 from .paths import unique_path
 
 log = logging.getLogger("aist.transcript")
@@ -82,6 +83,9 @@ class Transcript:
             if data.get("type") == "audio":
                 dt = data.get("display_text") or {}
                 text = dt.get("text") if isinstance(dt, dict) else ""
+                # 표정 키워드([joy] 등)는 시청자에게 안 나가는 연출 지시다.
+                # 기록에 남기면 '발화 전문' 이 그걸로 뒤덮인다.
+                text = strip_expressions(text or "")
                 if text:
                     self.log_ai(text)
         except Exception:  # 기록 실패가 방송을 멈추면 안 됨
