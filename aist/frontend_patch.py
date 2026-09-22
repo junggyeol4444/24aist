@@ -55,8 +55,11 @@ def patch_index(frontend_dir, ws_url: Optional[str] = None) -> str:
     ws_url = ws_url or DEFAULT_WS
     index = Path(frontend_dir) / "index.html"
     if not index.is_file():
-        return f"[건너뜀] index.html 이 없습니다: {index}"
-    html = index.read_text(encoding="utf-8", errors="replace")
+        return f"[실패] index.html 이 없습니다: {index}"
+    try:
+        html = index.read_text(encoding="utf-8", errors="replace")
+    except OSError as e:
+        return f"[실패] index.html 을 읽지 못했습니다: {e}"
 
     # 이전에 넣은 블록은 지우고 새로 넣는다(주소가 바뀌었을 수 있다).
     html = re.sub(rf'[ \t]*<script id="{MARK}">.*?</script>\n?', "",
@@ -72,7 +75,11 @@ def patch_index(frontend_dir, ws_url: Optional[str] = None) -> str:
         html = html.replace("</head>", block + "  </head>", 1)
     else:
         return "[실패] index.html 구조를 못 알아보겠습니다(head/script 없음)."
-    index.write_text(html, encoding="utf-8")
+    try:
+        index.write_text(html, encoding="utf-8")
+    except OSError as e:
+        # 읽기 전용 폴더·권한 문제. 트레이스백 대신 사람 말로 돌려준다.
+        return f"[실패] index.html 에 쓰지 못했습니다: {e}"
     return f"웹UI 를 {ws_url} 에 붙게 설정했습니다: {index}"
 
 
@@ -82,8 +89,13 @@ def main(argv=None) -> int:
     if not argv:
         print("사용법: python -m aist.frontend_patch <frontend 경로> [ws_url]")
         return 2
-    print(patch_index(argv[0], argv[1] if len(argv) > 1 else None))
-    return 0
+    msg = patch_index(argv[0], argv[1] if len(argv) > 1 else None)
+    print(msg)
+    # 예전에는 실패해도 0 을 돌려줬다. 그래서 프론트엔드받기.bat 과
+    # fetch_frontend.sh 에 적어둔 "[경고] 웹UI 주소 설정을 못 넣었습니다"
+    # 가 영영 안 뜬다 — 운영자는 "완료" 만 보고 넘어가고, 방송을 켜면
+    # AI 가 말을 해도 OBS 화면에 아무것도 안 나온다(무음 방송).
+    return 1 if msg.startswith(("[실패]", "[건너뜀]")) else 0
 
 
 if __name__ == "__main__":
