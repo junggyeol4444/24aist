@@ -262,10 +262,24 @@ class ChatPipeline:
                 log.exception("on_message 콜백 오류")
         if not self._should_forward():
             return
+        if self._is_empty_after_clean(msg):
+            # 소독하고 나니 내용이 남지 않았다(공백만 친 채팅, 스티커·
+            # 이모지 ID 만 오는 플랫폼, 제어문자만 있는 줄). 그대로 넘기면
+            # 코어에는 "별하나 (치지직)" 처럼 닉네임만 가고, 방송인은 아무
+            # 말도 없는 것에 대답하느라 엉뚱한 소리를 한다.
+            # 후원은 예외다 — 글이 없어도 돈은 들어왔다(1-2: 돈을 낸 걸
+            # 방송인이 모르고 지나가면 안 된다).
+            return
         if self._busy_now():
             self._pending.append(msg)       # 말 끝나면 이어받음
         else:
             await self._send_single(msg)
+
+    def _is_empty_after_clean(self, msg: ChatMessage) -> bool:
+        if msg.is_superchat:
+            return False
+        text, _ = self._clean(msg)
+        return not (text or "").strip()
 
     async def submit(self, msg: ChatMessage):
         """채팅 소스가 아닌 곳(게임 연동 등)에서 들어온 말을 같은 길로 넣는다.
