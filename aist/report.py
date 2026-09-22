@@ -22,6 +22,12 @@ log = logging.getLogger("aist.report")
 
 
 _MAX_LISTED = 20          # 리포트에 직접 나열하는 최대 건수
+# 발화 전문을 리포트 안에 그대로 둘 최대 줄 수.
+# 3시간 방송을 만들어 재보니 리포트 1367줄 중 1352줄(99%)이 이 칸이었다.
+# 기획 2-2 의 "하루 5~10분 점검" 은 1350줄을 읽으라는 뜻이 아니다.
+# 넘치면 옆에 따로 파일로 빼고, 리포트에는 앞뒤 몇 줄과 경로만 남긴다.
+_SPEECH_INLINE_MAX = 40
+_SPEECH_HEAD_TAIL = 10
 
 
 
@@ -124,6 +130,23 @@ def _to_local(iso: str, tz_name: Optional[str]) -> str:
         return iso
 
 
+def _write_speech_file(out_dir: str, start: str, spoken: List[str]) -> Optional[Path]:
+    """발화 전문을 리포트 옆에 따로 적는다. 실패하면 None(리포트는 계속 만든다)."""
+    try:
+        out = Path(out_dir)
+        out.mkdir(parents=True, exist_ok=True)
+        stem = (start[:16].replace(":", "").replace("T", "_") or "session")
+        # 메모장에서 바로 열리게 .txt 로 둔다.
+        path = unique_path(out / f"{stem}_발화전문.txt")
+        body = [f"# AI 발화 전문 — {start[:16]}", ""]
+        body += [ln[2:] if ln.startswith("- ") else ln for ln in spoken]
+        path.write_text("\n".join(body), encoding="utf-8")
+        return path
+    except OSError as e:
+        log.warning("발화 전문 파일을 따로 못 남겼습니다(리포트는 계속): %s", e)
+        return None
+
+
 def generate_report(
     memory: Memory,
     out_dir: str,
@@ -200,13 +223,32 @@ def generate_report(
         lines.append(f"- AI 발화 수: {len(ai_lines)}")
         lines.append(f"- 트랜스크립트: `{transcript_path}`")
         if ai_lines:
-            lines.append("")
-            lines.append("## AI 발화 전문 (사고 발언 점검용)")
             # 같은 말이 연달아 나오면 한 줄로 묶는다. 3시간 방송이면 수천
             # 줄이라, 그대로 두면 정작 이상한 발언을 찾을 수가 없다.
             # (원본은 트랜스크립트 파일에 그대로 있다)
-            for text, count in _collapse([r.get("text") for r in ai_lines]):
-                lines.append(f"- {text}" + (f"  (×{count})" if count > 1 else ""))
+            speech = _collapse([r.get("text") for r in ai_lines])
+            spoken = [f"- {t}" + (f"  (×{c})" if c > 1 else "") for t, c in speech]
+            lines.append("")
+            lines.append("## AI 발화 전문 (사고 발언 점검용)")
+            if len(spoken) <= _SPEECH_INLINE_MAX:
+                lines.extend(spoken)
+            else:
+                side = _write_speech_file(out_dir, start, spoken)
+                head, tail = _SPEECH_HEAD_TAIL, _SPEECH_HEAD_TAIL
+                lines.extend(spoken[:head])
+                lines.append(f"- … (가운데 {len(spoken) - head - tail}줄 줄임) …")
+                lines.extend(spoken[-tail:])
+                lines.append("")
+                if side is not None:
+                    # 리포트 바로 옆에 있으니 파일 이름만 적는다.
+                    lines.append(f"> 전체 {len(spoken)}줄은 따로 뺐습니다: "
+                                 f"`{side.name}` (이 리포트와 같은 폴더)")
+                    lines.append("> (메모장으로 열어 Ctrl+F 로 훑어보세요. "
+                                 "이 리포트에 다 넣으면 1000줄이 넘어가 "
+                                 "정작 이상한 발언을 못 찾습니다.)")
+                else:
+                    lines.append(f"> 전체 {len(spoken)}줄은 트랜스크립트에 "
+                                 f"그대로 있습니다: `{transcript_path}`")
 
     if next_stream:
         lines.append("")
