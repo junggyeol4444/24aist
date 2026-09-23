@@ -7,6 +7,15 @@ from typing import Literal, List, TypedDict, Optional
 from loguru import logger
 
 
+# [24aist 개조] 한 기록 파일에 남기는 메시지 수 상한.
+# store_message 는 메시지 하나마다 파일 전체를 읽고 다시 쓴다. 웹UI 가
+# 새로고침되지 않으면(무인 운영에서 OBS 는 몇 주씩 켜져 있다) 한 파일이
+# 끝없이 커진다. 실측: 2만 개(약 하루)에 저장 1회 0.12초, 14만 개에 0.86초 —
+# 한 턴에 두 번씩, 코어의 이벤트 루프(오디오 전달·모든 웹소켓)를 멈춘 채로.
+# 오래된 대화는 방송 자동화의 트랜스크립트에 전부 남아 있다.
+MAX_HISTORY_MESSAGES = 2000
+
+
 class HistoryMessage(TypedDict):
     role: Literal["human", "ai"]
     timestamp: str
@@ -142,8 +151,21 @@ def store_message(
 
     history_data.append(new_item)
 
-    with open(filepath, "w", encoding="utf-8") as f:
+    # [24aist 개조] 상한을 넘으면 앞(메타데이터는 남긴다)부터 버린다.
+    head = []
+    if history_data and history_data[0].get("role") == "metadata":
+        head, history_data = history_data[:1], history_data[1:]
+    if len(history_data) > MAX_HISTORY_MESSAGES:
+        history_data = history_data[-MAX_HISTORY_MESSAGES:]
+    history_data = head + history_data
+
+    # [24aist 개조] 임시 파일에 다 쓴 뒤 바꿔 끼운다. 예전처럼 원본을 열어
+    # 쓰면, 디스크가 차서 쓰기가 실패하는 순간 원본이 0바이트로 잘려
+    # 지금까지의 기록이 통째로 사라졌다.
+    tmp = filepath + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
         json.dump(history_data, f, ensure_ascii=False, indent=2)
+    os.replace(tmp, filepath)
     logger.debug(f"Successfully stored {role} message")
 
 
