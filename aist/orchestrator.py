@@ -47,6 +47,9 @@ _OBS_FIRST_CHECK_SEC = 15.0
 # 공지 하나에 방송을 붙잡아 두지 않는다. 재시도(최대 3회)와
 # 셀레늄 브라우저 기동까지 감안한 넉넉한 상한이다.
 _ANNOUNCE_TIMEOUT_SEC = 120.0
+# 코어가 대화를 연달아 오류로 끝내도, 이 시간 넘게 계속될 때만 방송을
+# 내린다(잠깐 파일이 잠긴 정도는 파이프라인이 풀고 넘어간다).
+_CORE_ERROR_MIN_SPAN_SEC = 60.0
 
 # 마무리 단계의 '매니저 귓속말' — 페르소나 무대규칙에 따라 AI 는 이 내용을
 # 입 밖에 내지 않고 행동으로만 반영한다. (운영자가 문구 수정 가능)
@@ -101,6 +104,9 @@ class Orchestrator:
         self._web_refreshes = 0
         self._bg: set = set()
         self._core_brain_dead = ""
+        self._core_error_dead = ""
+        self._core_error_since = 0.0
+        self._core_error_streak = 0
         self._next_obs_check = 0.0
         self._obs_restarts = 0
         self._obs_unreachable = 0
@@ -246,6 +252,9 @@ class Orchestrator:
         self._core_mute = False
         self._web_refreshes = 0
         self._core_brain_dead = ""
+        self._core_error_dead = ""
+        self._core_error_since = 0.0
+        self._core_error_streak = 0
         self._next_obs_check = 0.0
         self._obs_restarts = 0
         self._obs_unreachable = 0
@@ -364,6 +373,25 @@ class Orchestrator:
                 self._core_brain_dead = text
                 self._event("core_brain_dead", text=str(text)[:200])
 
+            def on_core_error(message, streak):
+                # 코어가 대화를 오류로 끝냈다. 한 번은 파이프라인이 풀고
+                # 넘어간다. 연달아 나면 방송인이 말을 못 하는 상태다 —
+                # 조용한 화면만 몇 시간 내보내느니 내린다.
+                if streak == 1:
+                    self._event("core_error", message=str(message)[:200])
+                    self._core_error_since = time.monotonic()
+                limit = cfg.broadcast.core_error_max_strikes
+                # 횟수만 보면 안 된다. 실제로 막아보니 채팅이 몰려 있으면
+                # 11초 만에 3번이 찼다 — 백신 검사나 백업 프로그램이 파일을
+                # 몇 초 잡고 있는 정도로 24시간 방송이 내려간다. 잠깐의
+                # 사고는 파이프라인이 풀고 넘어가므로, 계속될 때만 내린다.
+                lasting = (time.monotonic() - self._core_error_since
+                           >= _CORE_ERROR_MIN_SPAN_SEC)
+                if (limit > 0 and streak >= limit and lasting
+                        and not self._core_error_dead):
+                    self._core_error_dead = str(message)[:200] or "(내용 없음)"
+                    self._core_error_streak = streak
+
             def on_tts_silent():
                 # 자막만 나가고 목소리가 없는 상태. 방송을 내리지는 않는다
                 # (일부러 자막만 쓰는 운영자도 있다). 대신 리포트에 남겨
@@ -376,7 +404,8 @@ class Orchestrator:
                                     on_core_mute=on_core_mute,
                                     on_core_stuck=on_core_stuck,
                                     on_core_brain_dead=on_core_brain_dead,
-                                    on_tts_silent=on_tts_silent)
+                                    on_tts_silent=on_tts_silent,
+                                    on_core_error=on_core_error)
 
             # 코어가 보내오는 메시지(자막·오디오·control 등)를 계속 읽는다.
             # 안 읽으면 websockets 수신 버퍼가 무한정 쌓여 장시간 방송에서
@@ -444,6 +473,19 @@ class Orchestrator:
                         "방송인이 LLM 오류 문구만 반복해서 읽고 있습니다 — "
                         "LLM API 키·요금제·네트워크를 확인하세요 (코어가 읽은 문구: %s) "
                         "→ 이번 방송 종료", self._core_brain_dead)
+                    core_gone = True
+                    break
+                # 코어가 대화를 매번 오류로 끝낸다 — 방송인이 말을 못 한다.
+                # 코어가 보낸 오류 문구를 그대로 적어야 운영자가 원인을 찾는다.
+                if self._core_error_dead:
+                    log.error(
+                        "코어가 %.0f초 동안 대화를 %d번 연속 오류로 끝냈습니다 — "
+                        "방송인이 말을 못 하는 상태입니다. 코어 창(코어실행.bat)의 "
+                        "오류를 확인하세요 (코어가 보낸 오류: %s) → 이번 방송 종료",
+                        time.monotonic() - self._core_error_since,
+                        self._core_error_streak, self._core_error_dead)
+                    self._event("core_error_gave_up",
+                                message=self._core_error_dead)
                     core_gone = True
                     break
                 # 송출(OBS)이 혼자 내려가 있지 않은지 본다. 스트림 키 오류나

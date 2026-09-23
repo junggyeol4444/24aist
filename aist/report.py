@@ -45,6 +45,8 @@ _EVENT_LABEL = {
     "core_mute": "소리·자막이 시청자에게 안 나감 — 방송을 내림",
     "core_stuck": "발화가 걸림(말 끝 신호가 안 옴)",
     "core_brain_dead": "AI 가 LLM 오류 문구를 읽음 — 방송을 내림",
+    "core_error": "코어가 대화 중 오류를 냄 (그 대답이 안 나가거나 잘림)",
+    "core_error_gave_up": "코어가 대화를 계속 오류로 끝내 방송을 내림",
     "web_ui_refresh": "웹UI(OBS 브라우저 소스)를 새로고침함",
     "chat_lost": "채팅 연결이 끊김",
     "transcript_lost": "방송 기록이 중간에 끊김 (아래 발화 수·발화 전문은 방송 전체가 아님)",
@@ -69,7 +71,7 @@ _SERIOUS = ("banned_word", "banned_gave_up",
             "obs_start_failed", "announce_failed",
             "core_brain_dead", "chat_lost", "chat_gave_up", "obs_down",
             "obs_unreachable", "obs_gave_up", "obs_restart_failed",
-            "ended_early")
+            "ended_early", "core_error", "core_error_gave_up")
 
 
 def _trouble_lines(events) -> list:
@@ -91,6 +93,26 @@ def _trouble_lines(events) -> list:
         out.append("  - 방송이 예정보다 일찍 스스로 내려갔습니다. "
                    "`docs/OPERATOR.md` 의 '방송이 스스로 내려갔을 때' 를 보세요.")
     return out
+
+
+# 사고의 '이유'가 들어 있는 칸. 예전 리포트는 이름만 적었다 — "OBS 시작
+# 실패" 는 보이는데 왜 실패했는지(비밀번호? 꺼져 있음?)는 로그 파일을
+# 열어야만 알 수 있었다. 운영자는 로그를 안 연다.
+_DETAIL_KEYS = ("why", "message", "word", "text", "where")
+_DETAIL_MAX = 120
+
+
+def _event_detail(e) -> str:
+    parts = []
+    for k in _DETAIL_KEYS:
+        v = e.get(k)
+        if v is None or v == "":
+            continue
+        v = " ".join(str(v).split()).replace("`", "'")
+        if len(v) > _DETAIL_MAX:
+            v = v[:_DETAIL_MAX] + "…"
+        parts.append(f"`{v}`" if k in ("word", "text") else v)
+    return (" — " + " / ".join(parts)) if parts else ""
 
 
 def _won_total(superchats) -> int:
@@ -222,7 +244,8 @@ def generate_report(
             kind = str(e.get("kind", ""))
             label = _EVENT_LABEL.get(kind)
             lines.append(f"  - [{when}] {label or kind}"
-                         + (f" ({kind})" if label else ""))
+                         + (f" ({kind})" if label else "")
+                         + _event_detail(e))
         if len(events) > 20:
             lines.append(f"  - (그 외 {len(events) - 20}건)")
 

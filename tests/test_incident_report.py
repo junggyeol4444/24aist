@@ -74,3 +74,17 @@ def test_이벤트_이름과_같은_키를_넘겨도_안_터진다(tmp_path):
     assert ev["kind"] == "announce_failed"
     assert ev["t"] != "가짜시각"
     assert ev["where"] == "디스코드"
+
+
+def test_사고_이유가_리포트에_같이_적힌다():
+    """이름만 적으면 운영자는 로그 파일을 열어야 원인을 안다 — 안 연다."""
+    from aist.report import _event_detail
+
+    d = _event_detail({"kind": "core_error",
+                       "message": "Conversation error: [Errno 28] No space left on device"})
+    assert "No space left on device" in d
+    assert _event_detail({"kind": "tts_silent"}) == ""
+    long = _event_detail({"kind": "obs_start_failed", "why": "가" * 500})
+    assert len(long) < 200            # 리포트 한 줄이 폭발하지 않게
+    assert "`" not in _event_detail({"kind": "banned_word", "word": "a`b",
+                                     "text": "x"}).replace("`a'b`", "").replace("`x`", "")

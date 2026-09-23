@@ -31,6 +31,14 @@ from .vtuber_bridge import VTuberBridge, format_chat_line
 log = logging.getLogger("aist.chat_pipeline")
 
 _PACE_SEC = 0.3   # 상태 점검 주기(눈치 루프)
+# 코어가 오류를 알린 뒤 '대화 끝' 신호를 기다려 보는 시간(초). 스스로
+# 회복하는 오류는 바로 끝 신호가 온다(실측: 같은 순간). 안 오면 막힌 것이다.
+_ERROR_GRACE_SEC = 3.0
+# 코어가 대화 전체를 포기할 때만 붙이는 머리말(single_conversation.py).
+# 이 오류 뒤에는 '대화 끝' 신호가 오지 않는다. 문장 하나만 실패한 오류
+# ("Error processing response…")는 나머지 문장을 계속 말하고 정상적으로
+# 끝난다 — 그걸 막힌 것으로 보고 끊으면 멀쩡한 말을 중간에 자른다.
+_CHAIN_ABORT_PREFIX = "Conversation error:"
 
 
 class ChatPipeline:
@@ -46,6 +54,7 @@ class ChatPipeline:
         on_core_stuck: Optional[Callable[[int], None]] = None,
         on_core_brain_dead: Optional[Callable[[str], None]] = None,
         on_tts_silent: Optional[Callable[[], None]] = None,
+        on_core_error: Optional[Callable[[str, int], None]] = None,
     ):
         self.bridge = bridge
         self.cfg = cfg
@@ -67,6 +76,8 @@ class ChatPipeline:
         self.on_core_brain_dead = on_core_brain_dead
         # 자막은 나가는데 소리가 비어 있을 때 알린다(TTS 죽음).
         self.on_tts_silent = on_tts_silent
+        # 코어가 {"type": "error"} 로 알려오는 오류(메시지, 연속 실패 수).
+        self.on_core_error = on_core_error
         # 같은 전송 오류를 매 채팅마다 트레이스백으로 찍으면 로그가 폭발한다.
         self._send_fail_streak = 0
         # 종료판단(채팅 저조/눈치 종료)에 쓰는 공유 상태. tz-aware UTC.
@@ -87,6 +98,11 @@ class ChatPipeline:
         self._silent_streak = 0           # 소리 없이 나간 발화가 연속 몇 번인지
         self._silent_reported = False
         self._brain_reported = False
+        self._core_errors = 0             # 코어가 알려온 오류 총수(로그 조절용)
+        self._core_error_streak = 0       # 오류로 끝난 대화가 연속 몇 번인지
+        self._chain_had_core_error = False
+        self._error_deadline = 0.0        # 이 시각까지 끝 신호가 없으면 막힌 것
+        self._in_chain = False            # 코어가 대화 시작을 알리고 아직 안 끝냄
         self._pending: List[ChatMessage] = []
         self._include_platform = False    # 동출일 때만 플랫폼 표기
         # 진행자 혼잣말: 이번 조용한 구간에 말 걸 목표 시각(발화/채팅 후 재설정)
@@ -104,6 +120,9 @@ class ChatPipeline:
         if data.get("type") == "audio":
             self._watch_llm_error(data)
             self._watch_silent_audio(data)
+        if data.get("type") == "error":
+            self._on_core_error(str(data.get("message") or ""))
+            return
         if data.get("type") != "control":
             return
         text = data.get("text")
@@ -111,11 +130,17 @@ class ChatPipeline:
             self._core_busy = True
             self._busy_since = time.monotonic()
             self._chain_had_error = False
+            self._chain_had_core_error = False
+            self._error_deadline = 0.0
+            self._in_chain = True
         elif text == "conversation-chain-end":
             self._core_busy = False
+            self._error_deadline = 0.0
+            self._in_chain = False
             # 한 번이라도 제대로 끝났으면 '연속 실패'는 끊긴 것이다.
             self._busy_streak = 0
             self._close_chain()
+            self._close_core_error_chain()
 
     # 코어가 LLM 에 실패하면, 그 오류 문구를 방송인이 그대로 읽는다.
     # 실제로 코어에 429 를 주고 확인한 문구(세 문장으로 나뉘어 온다):
@@ -171,6 +196,49 @@ class ChatPipeline:
         except Exception as e:  # noqa: BLE001
             log.debug("on_tts_silent 콜백 실패: %s", e)
 
+    def _on_core_error(self, message: str) -> None:
+        """코어가 보낸 오류. 예전에는 통째로 버렸다.
+
+        코어는 대화 중에 예외가 나면 {"type": "error"} 를 보내는데, 경우에
+        따라 '대화 끝' 신호를 안 보낸다. 그러면 코어 쪽 메시지 큐가
+        'active conversation: True' 로 굳어서, 그 뒤 채팅이 전부 쌓이기만
+        하고 처리되지 않는다(실제 코어로 재현 — 끼어들기를 보내야 풀린다).
+        우리는 그걸 몰라서 90초를 기다렸고, 로그에는 엉뚱하게 "웹UI 가
+        안 붙어 있으면…" 이 찍혔다. 세 번 겹치면 웹UI 탓으로 방송을 내렸다.
+        """
+        self._core_errors += 1
+        if self._core_errors in (1, 3, 10) or self._core_errors % 20 == 0:
+            log.error("코어가 오류를 알려왔습니다(%d번째): %s",
+                      self._core_errors, message[:200])
+        self._last_core_error = message[:200]
+        if not self._in_chain:
+            # 대화가 이미 끝난 뒤에 온 오류다. 코어는 말을 다 하고 '끝'
+            # 신호까지 보낸 다음 대화 기록을 저장하는데, 그 저장이 실패하면
+            # 이렇게 온다(디스크 가득, 백신이 파일을 잡고 있음 등). 말은
+            # 이미 나갔고 코어도 막히지 않았다. 여기서 끊으면 방금 보낸
+            # 다음 채팅의 대답을 멀쩡한데도 자른다.
+            self._chain_had_core_error = True
+            self._close_core_error_chain()
+            return
+        self._chain_had_core_error = True
+        if self._core_busy and message.startswith(_CHAIN_ABORT_PREFIX):
+            self._error_deadline = time.monotonic() + _ERROR_GRACE_SEC
+
+    def _close_core_error_chain(self) -> None:
+        """대화 하나가 끝났다 — 오류로 끝났는지로 연속 횟수를 센다."""
+        if not self._chain_had_core_error:
+            self._core_error_streak = 0
+            return
+        self._chain_had_core_error = False
+        self._core_error_streak += 1
+        if self.on_core_error is None:
+            return
+        try:
+            self.on_core_error(getattr(self, "_last_core_error", ""),
+                               self._core_error_streak)
+        except Exception as e:  # noqa: BLE001 - 콜백 사고가 방송을 깨지 않게
+            log.debug("on_core_error 콜백 실패: %s", e)
+
     def _close_chain(self) -> None:
         """대화 한 덩어리가 끝났다 — 오류였는지 아닌지로 연속 횟수를 센다."""
         if not self._chain_had_error:
@@ -205,6 +273,8 @@ class ChatPipeline:
         self._core_busy = False
         self._busy_since = 0.0
         self._busy_streak = 0
+        self._in_chain = False
+        self._error_deadline = 0.0
 
     def is_speaking(self) -> bool:
         return self._core_busy
@@ -329,6 +399,17 @@ class ChatPipeline:
     def _busy_now(self) -> bool:
         if not self._core_busy:
             return False
+        if self._error_deadline and time.monotonic() >= self._error_deadline:
+            # 코어가 오류를 알렸고, 끝 신호가 안 왔다 = 코어 큐가 굳었다.
+            # 90초를 기다릴 이유가 없다. 끼어들기로 풀고 다음으로 넘어간다.
+            # 웹UI 문제가 아니므로 '말 끝 신호 없음' 횟수에는 넣지 않는다.
+            self._error_deadline = 0.0
+            log.warning("코어 대화가 오류로 멈췄습니다 — 풀고 다음 채팅으로 넘어갑니다.")
+            self._unstick_core()
+            self._core_busy = False
+            self._in_chain = False
+            self._close_core_error_chain()
+            return False
         if time.monotonic() - self._busy_since > self._busy_timeout():
             # 말이 끝났다는 신호(conversation-chain-end)가 안 왔다.
             # 코어는 '웹UI 가 재생을 마쳤다'는 응답을 받아야 이 신호를 보낸다.
@@ -350,6 +431,7 @@ class ChatPipeline:
             # 끼어들기 신호를 보내면 코어가 그 대화를 취소하고 큐가 풀린다.
             self._unstick_core()
             self._core_busy = False
+            self._in_chain = False
             # 큐만 풀고 끝내면 다음 발화도 똑같이 걸린다. 고칠 수단이
             # 있는 쪽(오케스트레이터 → OBS 브라우저 소스 새로고침)에
             # 몇 번째인지 알려준다.
