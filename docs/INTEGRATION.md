@@ -41,6 +41,10 @@ aist build-persona --conf Open-LLM-VTuber/conf.yaml --live2d <모델명>
 - `character_config.live2d_model_name` — 아바타 모델.
 - `system_config.host/port` — 기본 `localhost:12393`. 이 값이 `config.yaml`
   의 `vtuber.ws_url` 과 일치해야 한다(`ws://<host>:<port>/proxy-ws`).
+  포트를 바꿨다면 `ws_url` 도 같이 바꾼다(`점검.bat` 이 다르면 알려준다).
+  웹UI 는 자기가 열린 주소로 코어에 붙으므로, OBS 브라우저 소스에는
+  `http://127.0.0.1:<port>/` 만 넣으면 된다(다른 PC 의 OBS 면 그 PC 에서
+  보이는 코어 PC 주소).
 - `system_config.enable_proxy: true` — **필수**. 이게 꺼져 있으면 `/proxy-ws`
   자체가 안 열린다. 우리가 넣은 채팅의 결과(목소리·자막)가 웹UI 로 안 가서
   시청자는 멈춘 아바타와 무음만 본다. (`conf.korean.yaml` 에는 켜져 있다)

@@ -26,7 +26,10 @@ scheduler: { enabled: false }
 """
 
 
-def test_코어가_죽어_있으면_켜면_안_된다고_말한다(tmp_path, capsys):
+def test_코어가_죽어_있으면_켜면_안_된다고_말한다(tmp_path, capsys, monkeypatch):
+    # 이 PC 의 코어 conf.yaml 이 다른 포트면 '포트가 안 맞다' 가 맨 앞에
+    # 온다(그건 따로 시험한다). 여기서는 코어가 정말로 꺼진 경우만 본다.
+    monkeypatch.setattr("aist.preflight.core_port_mismatch", lambda *a, **k: "")
     rc = cmd_doctor(_args(tmp_path, _DEAD))
     out = capsys.readouterr().out
     assert rc == 1

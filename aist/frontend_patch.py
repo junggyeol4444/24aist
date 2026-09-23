@@ -20,23 +20,71 @@ from typing import Optional
 
 MARK = "aist-proxy-ws-bootstrap"
 DEFAULT_WS = "ws://127.0.0.1:12393/proxy-ws"
-_OLD_DEFAULTS = ("ws://127.0.0.1:12393/client-ws", "ws://localhost:12393/client-ws")
+_OLD_DEFAULTS = ("ws://127.0.0.1:12393/client-ws", "ws://localhost:12393/client-ws",
+                 # 예전 버전의 이 패치가 넣던 값. 코어 포트를 바꾸면 이 값이
+                 # OBS 브라우저 소스에 남아 옛 포트로 붙으려 한다.
+                 "ws://127.0.0.1:12393/proxy-ws", "ws://localhost:12393/proxy-ws")
+# 웹UI 의 모델·배경 주소 기본값(웹UI 코드에 박혀 있다).
+_OLD_BASES = ("http://127.0.0.1:12393", "http://localhost:12393")
 
 
 def _script(ws_url: str) -> str:
     olds = ", ".join(f'"{u}"' for u in _OLD_DEFAULTS)
+    old_bases = ", ".join(f'"{u}"' for u in _OLD_BASES)
     return (
         f'    <script id="{MARK}">\n'
+        # 함수로 감싼다. 감싸지 않으면 var 들이 전역(window.b 등)이 되어,
+        # 뒤에 오는 평범한 script 가 같은 이름을 let/const 로 선언하는 순간
+        # 그 script 가 SyntaxError 로 통째로 죽는다(node 로 재현).
+        "      (function () {\n"
         "      // 방송 자동화(aist)가 넣은 줄 — 웹UI 를 /proxy-ws 에 붙인다.\n"
         "      // (웹UI 는 localStorage 에 JSON 문자열로 저장한다)\n"
+        # 이 페이지는 코어가 직접 내준다. 그러니 '지금 이 페이지의 주소'가
+        # 곧 코어 주소다. 예전에는 127.0.0.1:12393 을 박아 넣어서, 코어
+        # 포트를 바꾸면(윈도우가 12393 을 예약해 코어가 못 뜨는 경우가 있다)
+        # 웹UI 가 없는 포트로 붙으려다 빈 화면만 나왔다 — 실제 크로미움으로
+        # 12500 에서 띄워 확인. 다른 PC 의 OBS 가 LAN 주소로 열 때도 같다.
         "      try {\n"
         f'        var want = "{ws_url}";\n'
+        "        var base = null;\n"
+        "        try {\n"
+        '          if (location.protocol === "http:" || location.protocol === "https:") {\n'
+        '            want = (location.protocol === "https:" ? "wss://" : "ws://")\n'
+        '                   + location.host + "/proxy-ws";\n'
+        "            base = location.protocol + \"//\" + location.host;\n"
+        "          }\n"
+        "        } catch (e) {}\n"
         f"        var stale = [{olds}];\n"
-        '        var cur = window.localStorage.getItem("wsUrl");\n'
-        "        var val = null;\n"
-        "        if (cur) { try { val = JSON.parse(cur); } catch (e) { val = cur; } }\n"
-        "        if (!val || stale.indexOf(val) !== -1) {\n"
+        "        var read = function (k) {\n"
+        "          var cur = window.localStorage.getItem(k);\n"
+        "          if (!cur) return null;\n"
+        "          try { return JSON.parse(cur); } catch (e) { return cur; }\n"
+        "        };\n"
+        '        var val = read("wsUrl");\n'
+        "        if (!val || (val !== want && stale.indexOf(val) !== -1)) {\n"
         '          window.localStorage.setItem("wsUrl", JSON.stringify(want));\n'
+        "        }\n"
+        "        if (base) {\n"
+        f"          var staleBase = [{old_bases}];\n"
+        '          var b = read("baseUrl");\n'
+        "          if ((!b && base !== staleBase[0]) ||\n"
+        "              (b && b !== base && staleBase.indexOf(b) !== -1)) {\n"
+        '            window.localStorage.setItem("baseUrl", JSON.stringify(base));\n'
+        "          }\n"
+        # 배경 그림 주소는 웹UI 가 baseUrl 설정과 상관없이 박힌 기본값
+        # (12393)으로 만들어 저장해 버린다 — 실제 크로미움에서 확인.
+        # 옛 주소로 저장돼 있으면 앞부분만 지금 주소로 바꾼다.
+        '          var bg = read("backgroundUrl");\n'
+        "          if (!bg && base !== staleBase[0]) {\n"
+        '            bg = staleBase[0] + "/bg/ceiling-window-room-night.jpeg";\n'
+        "          }\n"
+        "          for (var i = 0; bg && i < staleBase.length; i++) {\n"
+        "            if (base !== staleBase[i] && bg.indexOf(staleBase[i] + \"/\") === 0) {\n"
+        '              window.localStorage.setItem("backgroundUrl",\n'
+        "                JSON.stringify(base + bg.slice(staleBase[i].length)));\n"
+        "              break;\n"
+        "            }\n"
+        "          }\n"
         "        }\n"
         "      } catch (e) {}\n"
         # --- 무대 뒤 자막 차단 ---
@@ -82,6 +130,7 @@ def _script(ws_url: str) -> str:
         "          window.WebSocket = Patched;\n"
         "        }\n"
         "      } catch (e) {}\n"
+        "      })();\n"
         "    </script>\n"
     )
 
@@ -89,6 +138,8 @@ def _script(ws_url: str) -> str:
 # 지금 버전의 패치에만 있는 표식. 예전에 패치해 둔 웹UI 는 MARK 는 있어도
 # 귓속말 필터가 없다 — MARK 만 보면 "설정됨" 으로 나와서 운영자는 모른다.
 CURRENT_FEATURE = "__aistCueFilter"
+# 코어 주소를 페이지 주소에서 읽는 버전(예전 것은 12393 을 박아 넣었다).
+_CURRENT_ADDR = "location.host"
 
 
 def is_patched(index_html: Path) -> bool:
@@ -104,7 +155,9 @@ def patch_state(index_html: Path) -> str:
         return "none"
     if MARK not in html:
         return "none"
-    return "current" if CURRENT_FEATURE in html else "old"
+    if CURRENT_FEATURE in html and _CURRENT_ADDR in html:
+        return "current"
+    return "old"
 
 
 def patch_index(frontend_dir, ws_url: Optional[str] = None) -> str:

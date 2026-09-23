@@ -113,7 +113,7 @@ def _old_patch_html():
     """귓속말 필터가 없던 예전 버전 패치를 흉내낸다."""
     s = _script("ws://127.0.0.1:12393/proxy-ws")
     cut = s.index("        var OrigWS = window.WebSocket;")
-    end = s.index("      } catch (e) {}\n    </script>")
+    end = s.rindex("      } catch (e) {}\n")
     old = s[:cut] + s[end:]
     return ('<html><head><title>x</title>\n' + old + '</head><body>'
             '<script type="module" src="/a.js"></script></body></html>')

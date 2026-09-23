@@ -234,6 +234,33 @@ def core_proxy_ready(root: Path | None = None) -> tuple[bool, str]:
     )
 
 
+def core_port_mismatch(ws_url: str, root: Path | None = None) -> str:
+    """코어 conf.yaml 의 포트와 우리 vtuber.ws_url 의 포트가 다르면 그 설명.
+
+    코어 포트만 바꾸고(윈도우가 12393 을 예약 범위로 잡아 코어가 못 뜨는
+    경우가 있다) config.yaml 을 안 고치면 '코어에 못 붙습니다' 만 뜬다.
+    코어는 멀쩡히 떠 있는데 운영자는 코어를 다시 켜 보기만 한다.
+    """
+    from urllib.parse import urlparse
+    root = root or repo_root()
+    core = root / "Open-LLM-VTuber"
+    conf = core / "conf.yaml"
+    if not conf.is_file():
+        conf = core / "conf.korean.yaml"
+    try:
+        import yaml
+        data = yaml.safe_load(conf.read_text(encoding="utf-8", errors="replace")) or {}
+        port = int(str((data.get("system_config") or {}).get("port")).strip())
+        mine = urlparse(ws_url).port
+    except Exception:  # noqa: BLE001 - 못 읽으면 판단하지 않는다
+        return ""
+    if mine is None or mine == port:
+        return ""
+    return (f"코어는 {conf.name} 에서 포트 {port} 로 뜨는데, config.yaml 의 "
+            f"vtuber.ws_url 은 포트 {mine} 입니다 — ws_url 을 "
+            f"ws://127.0.0.1:{port}/proxy-ws 로 맞추세요")
+
+
 def frontend_proxy_ready(root: Path | None = None) -> tuple[bool, str]:
     """받아온 웹UI 가 /proxy-ws 로 붙게 설정돼 있는지."""
     root = root or repo_root()
@@ -247,7 +274,8 @@ def frontend_proxy_ready(root: Path | None = None) -> tuple[bool, str]:
     if state == "old":
         return False, (
             "웹UI 설정이 예전 것입니다 → 매니저 귓속말이 OBS 화면에 자막으로 "
-            "뜰 수 있습니다. " + hint(*CMD_FRONTEND) + " 를 다시 실행하세요"
+            "뜨거나, 코어 포트를 바꾸면 화면이 안 나올 수 있습니다. "
+            + hint(*CMD_FRONTEND) + " 를 다시 실행하세요"
         )
     return False, (
         "웹UI 가 /client-ws 로 붙습니다 → OBS 화면에 아무것도 안 나옵니다. "

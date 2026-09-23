@@ -477,11 +477,18 @@ def cmd_doctor(args) -> int:
     except Exception as e:  # 연결 실패(코어 미실행 등)
         ok = False
         core_dead = True
-        first.append(("코어에 못 붙습니다",
-                      "코어(Open-LLM-VTuber)를 먼저 켜세요: "
-                      + preflight.hint(*preflight.CMD_CORE_RUN)))
+        # 코어는 떠 있는데 포트만 다른 경우 "코어를 켜세요" 는 틀린 처방이다.
+        port_msg = preflight.core_port_mismatch(cfg.vtuber.ws_url)
+        if port_msg:
+            first.append(("코어와 주소(포트)가 안 맞습니다", port_msg))
+        else:
+            first.append(("코어에 못 붙습니다",
+                          "코어(Open-LLM-VTuber)를 먼저 켜세요: "
+                          + preflight.hint(*preflight.CMD_CORE_RUN)))
         print(f"  [X] 코어 WS 연결 실패 ({cfg.vtuber.ws_url}): {e}")
         print("       → Open-LLM-VTuber 가 실행 중인지 확인 (uv run run_server.py)")
+        if port_msg:
+            print(f"       → {port_msg}")
         if cfg.vtuber.ws_url.rstrip("/").endswith("/proxy-ws"):
             ok2, msg2 = preflight.core_proxy_ready()
             if not ok2:
