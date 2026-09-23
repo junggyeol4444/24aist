@@ -39,15 +39,72 @@ def _script(ws_url: str) -> str:
         '          window.localStorage.setItem("wsUrl", JSON.stringify(want));\n'
         "        }\n"
         "      } catch (e) {}\n"
+        # --- 무대 뒤 자막 차단 ---
+        # 코어는 우리가 보내는 text-input 을 그대로 복사해서
+        # user-input-transcription 으로 다른 클라이언트(= 이 웹UI)에 뿌린다
+        # (proxy_message_queue._forward_message). 웹UI 는 그걸 "사용자가 한 말"
+        # 자막으로 띄운다. 그러면 매니저 귓속말이 OBS 화면에 그대로 나간다:
+        #   (매니저 귓속말: 방송 방금 시작했어. 방송 여는 인사로 시작해줘...)
+        # 코어에는 이걸 끄는 설정이 없고, 다른 입력 방식도 없다
+        # (ai-speak-signal 은 우리 문장을 못 싣는다). 그래서 여기서 막는다.
+        #
+        # 괄호로 시작하는 것만 버린다 — 그게 무대 뒤 신호의 약속이고,
+        # 시청자 채팅은 소독 단계에서 괄호로 시작할 수 없게 해뒀다.
+        # 무슨 일이 생겨도 원래대로 흘려보낸다(웹UI 를 깨뜨리는 게 최악이다).
+        "      try {\n"
+        "        var OrigWS = window.WebSocket;\n"
+        "        if (OrigWS && !OrigWS.__aistCueFilter) {\n"
+        "          var isCue = function (raw) {\n"
+        "            try {\n"
+        '              if (typeof raw !== "string") return false;\n'
+        '              if (raw.indexOf("user-input-transcription") === -1) return false;\n'
+        "              var d = JSON.parse(raw);\n"
+        '              if (!d || d.type !== "user-input-transcription") return false;\n'
+        '              var t = (d.text || "").replace(/^[\\s\\u200b]+/, "");\n'
+        '              return t.charAt(0) === "(" || t.charAt(0) === "\\uff08";\n'
+        "            } catch (e) { return false; }\n"
+        "          };\n"
+        "          var Patched = function (url, protocols) {\n"
+        "            var ws = arguments.length > 1 ? new OrigWS(url, protocols)\n"
+        "                                          : new OrigWS(url);\n"
+        "            try {\n"
+        '              ws.addEventListener("message", function (ev) {\n'
+        "                if (isCue(ev.data)) { ev.stopImmediatePropagation(); }\n"
+        "              });\n"
+        "            } catch (e) {}\n"
+        "            return ws;\n"
+        "          };\n"
+        "          Patched.prototype = OrigWS.prototype;\n"
+        '          ["CONNECTING", "OPEN", "CLOSING", "CLOSED"].forEach(function (k) {\n'
+        "            try { Patched[k] = OrigWS[k]; } catch (e) {}\n"
+        "          });\n"
+        "          Patched.__aistCueFilter = true;\n"
+        "          window.WebSocket = Patched;\n"
+        "        }\n"
+        "      } catch (e) {}\n"
         "    </script>\n"
     )
 
 
+# 지금 버전의 패치에만 있는 표식. 예전에 패치해 둔 웹UI 는 MARK 는 있어도
+# 귓속말 필터가 없다 — MARK 만 보면 "설정됨" 으로 나와서 운영자는 모른다.
+CURRENT_FEATURE = "__aistCueFilter"
+
+
 def is_patched(index_html: Path) -> bool:
+    """웹UI 가 지금 버전의 설정으로 패치돼 있는지."""
+    return patch_state(index_html) == "current"
+
+
+def patch_state(index_html: Path) -> str:
+    """none | old | current"""
     try:
-        return MARK in index_html.read_text(encoding="utf-8", errors="replace")
+        html = index_html.read_text(encoding="utf-8", errors="replace")
     except OSError:
-        return False
+        return "none"
+    if MARK not in html:
+        return "none"
+    return "current" if CURRENT_FEATURE in html else "old"
 
 
 def patch_index(frontend_dir, ws_url: Optional[str] = None) -> str:
@@ -85,6 +142,16 @@ def patch_index(frontend_dir, ws_url: Optional[str] = None) -> str:
 
 def main(argv=None) -> int:
     import sys
+    # 배치에서 직접 불리는 진입점이다(프론트엔드받기.bat). aist CLI 는 출력
+    # 인코딩을 UTF-8 로 맞추는데 여기는 그 길을 안 거친다. 그래서 콘솔이
+    # 한글을 못 쓰는 코드페이지면 결과 문장을 print 하다가 UnicodeEncodeError
+    # 로 죽고 종료코드 1 을 낸다 — 패치는 이미 성공했는데도. 배치는 그걸
+    # 보고 "웹UI 주소 설정을 못 넣었습니다" 경고를 띄운다(실제로 그랬다).
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(encoding="utf-8", errors="replace")
+        except (AttributeError, ValueError, OSError):
+            pass
     argv = list(sys.argv[1:] if argv is None else argv)
     if not argv:
         print("사용법: python -m aist.frontend_patch <frontend 경로> [ws_url]")

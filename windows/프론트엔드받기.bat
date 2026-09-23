@@ -24,7 +24,7 @@ set "ZIPURL=https://github.com/%REPO%/archive/refs/heads/build.zip"
 if exist "%DEST%\index.html" (
   echo 이미 받아져 있습니다: %DEST%\index.html
   echo 다시 받으려면 %DEST% 안의 파일을 지우고 실행하세요.
-  pause & exit /b 0
+  goto patch_only
 )
 
 set "TMP_DIR=%TEMP%\aist_frontend"
@@ -75,6 +75,9 @@ if not exist "%DEST%\index.html" goto failed
 
 REM 웹UI 가 /proxy-ws 에 붙게 한다. 안 하면 웹UI 는 /client-ws 로 붙는데,
 REM 그 경로는 채팅을 넣은 쪽에만 결과를 돌려줘서 화면에 아무것도 안 나온다.
+:patch_only
+REM 받는 건 건너뛰어도 설정은 다시 넣는다. 예전 버전으로 넣어둔 설정에는
+REM 매니저 귓속말이 화면에 뜨지 않게 하는 필터가 없다.
 set PATCH_FAILED=0
 if exist ".venv\Scripts\python.exe" (
   ".venv\Scripts\python.exe" -m aist.frontend_patch "%DEST%"

@@ -240,9 +240,15 @@ def frontend_proxy_ready(root: Path | None = None) -> tuple[bool, str]:
     index = root / "Open-LLM-VTuber" / "frontend" / "index.html"
     if not index.is_file():
         return False, "웹UI 가 아직 없습니다 — " + hint(*CMD_FRONTEND)
-    from .frontend_patch import is_patched
-    if is_patched(index):
+    from .frontend_patch import patch_state
+    state = patch_state(index)
+    if state == "current":
         return True, "설정됨"
+    if state == "old":
+        return False, (
+            "웹UI 설정이 예전 것입니다 → 매니저 귓속말이 OBS 화면에 자막으로 "
+            "뜰 수 있습니다. " + hint(*CMD_FRONTEND) + " 를 다시 실행하세요"
+        )
     return False, (
         "웹UI 가 /client-ws 로 붙습니다 → OBS 화면에 아무것도 안 나옵니다. "
         + hint(*CMD_FRONTEND) + " 를 다시 실행하세요"
