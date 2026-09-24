@@ -209,3 +209,17 @@ def test_끊겨_있을_때_보낸_채팅은_연결_문제로_알린다():
     b = VTuberBridge(VTuberConfig())
     with pytest.raises(ConnectionError):
         asyncio.run(b.say_to_ai("안녕"))
+
+
+def test_사고_기록은_프로그램이_바로_죽어도_남는다(tmp_path):
+    """30초 간격 저장만 믿으면 코어 유실·조기 종료 기록이 사라졌다."""
+    cfg = MemoryConfig(path=str(tmp_path / "mem"))
+    m = Memory(cfg)
+    m.start_session()
+    m.record_event("core_gone", tries=3)
+    m.record_event("ended_early", why="코어")
+    # 여기서 프로그램이 끝남(end_session 없이)
+    m2 = Memory(cfg)
+    m2.start_session(resume=True)
+    kinds = [e["kind"] for e in m2._cur["events"]]
+    assert kinds == ["core_gone", "ended_early"]

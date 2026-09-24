@@ -248,7 +248,19 @@ class Memory:
         # 이벤트 이름과 시각은 호출자의 데이터가 덮어쓸 수 없다
         # (kind="start" 같은 키가 들어와 사고 이름이 통째로 바뀐 적이 있다).
         self._cur["events"].append({**data, "t": _now_iso(), "kind": kind})
-        self._checkpoint()
+        # 사고 기록은 바로 남긴다. 30초 간격 저장만 믿으면, 코어가 죽어
+        # 프로그램을 끝내는 바로 그 순간의 사고(코어 유실·조기 종료)가
+        # 저장 전에 사라진다 — 실제로 다시 켠 방송의 리포트에서 빠졌다.
+        # 게임 이벤트는 잦아서 평소 간격대로 둔다.
+        if kind == "game":
+            self._checkpoint()
+        else:
+            self.flush()
+
+    def flush(self) -> None:
+        """진행 중인 회차를 지금 바로 디스크에 남긴다."""
+        self._last_save = time.monotonic()
+        self._save_current()
 
     def note_chat(self, msg: ChatMessage) -> None:
         """채팅 한 줄을 기억에 반영(단골/슈퍼챗 추적). 파이프라인 콜백용."""

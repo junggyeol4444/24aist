@@ -47,6 +47,7 @@ _EVENT_LABEL = {
     "core_brain_dead": "AI 가 LLM 오류 문구를 읽음 — 방송을 내림",
     "core_error": "코어가 대화 중 오류를 냄 (그 대답이 안 나가거나 잘림)",
     "core_error_gave_up": "코어가 대화를 계속 오류로 끝내 방송을 내림",
+    "resumed": "사고 뒤 같은 방송을 이어서 다시 켬",
     "web_ui_refresh": "웹UI(OBS 브라우저 소스)를 새로고침함",
     "chat_lost": "채팅 연결이 끊김",
     "transcript_lost": "방송 기록이 중간에 끊김 (아래 발화 수·발화 전문은 방송 전체가 아님)",

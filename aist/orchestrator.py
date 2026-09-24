@@ -458,6 +458,11 @@ class Orchestrator:
             # (한 방송이 회차 여러 개로 쪼개지면 단골 집계·"저번에~"·
             #  리포트가 전부 어긋난다).
             self.memory.start_session(resume=resuming)
+            if resuming:
+                # 리포트에 "끊겼다" 만 있고 "다시 켰다" 가 없으면, 운영자는
+                # 방송이 거기서 끝난 줄 안다.
+                self._event("resumed",
+                            since=(resume or {}).get("start", ""))
             if self._obs_start_failed:
                 # 송출이 안 켜진 채로 도는 방송이다. 감시가 몇 분 뒤
                 # 내리긴 하지만, 근본 원인은 이 한 줄이다.
@@ -857,6 +862,13 @@ class Orchestrator:
         if not will_retry:
             try:
                 self.memory.end_session()
+            except Exception:
+                log.exception("세션 기억 저장 실패(방송 종료는 계속)")
+        else:
+            # 다시 켤 회차다. 프로그램이 통째로 다시 뜰 수도 있으니(코어가
+            # 죽은 경우) 지금까지를 디스크에 남겨 둔다.
+            try:
+                self.memory.flush()
             except Exception:
                 log.exception("세션 기억 저장 실패(방송 종료는 계속)")
 
