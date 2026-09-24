@@ -127,7 +127,11 @@ class VTuberBridge:
 
     async def _send(self, payload: dict):
         if self._ws is None:
-            raise RuntimeError("VTuber 코어에 먼저 connect() 해야 합니다.")
+            # 코어가 끊겨 다시 붙는 중에도 여기로 온다(재연결 사이에 채팅이
+            # 들어온 경우). 연결 문제로 알려야 한다 — RuntimeError 로 두면
+            # 채팅 파이프라인이 '코드 문제' 로 보고 운영자 로그에 파이썬
+            # 트레이스백을 찍었다(실제로 방송 중 코어를 죽여서 확인).
+            raise ConnectionError("VTuber 코어와 연결돼 있지 않습니다(끊김·재연결 중).")
         async with self._lock:
             await self._ws.send(json.dumps(payload, ensure_ascii=False))
 

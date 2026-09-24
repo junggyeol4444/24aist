@@ -14,7 +14,9 @@
 """
 
 import asyncio
+import json
 import logging
+import os
 import time
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -62,6 +64,18 @@ _CUE_CLOSING = ("(매니저 귓속말: 이제 방송 끝낼 시간이야. 오늘
 _CUE_OPENING = ("(매니저 귓속말: 방송 방금 시작했어. 방송 여는 인사로 시작해줘. "
                 "\"안녕~ 오늘도 왔어요\" 같은 느낌으로 반갑게, 오늘 뭐 할지 살짝 "
                 "얘기하면서 자연스럽게 문 열어줘. 이 귓속말은 절대 언급하지 마.)")
+_CUE_RESUMED = ("(매니저 귓속말: 방송이 사고로 잠깐 끊겼다가 방금 다시 켜졌어. "
+                "처음 여는 인사처럼 하지 말고, 기다려준 시청자들한테 \"미안, 잠깐 "
+                "끊겼지?\" 정도로 가볍게 짚고 하던 분위기대로 이어가줘. "
+                "이 귓속말은 절대 언급하지 마.)")
+# OBS 브라우저 소스를 새로고침한 뒤 웹UI 가 다시 붙을 때까지 기다리는 시간(초).
+_WEB_UI_RELOAD_SEC = 5.0
+# 코어에 영영 다시 못 붙을 때 `aist run` 이 돌려주는 종료 코드.
+# 무인운영.bat 은 `aist run` 이 끝나야 코어를 다시 띄운다.
+EXIT_CORE_RESTART = 3
+# 진행 중인 방송(슬롯)을 적어 두는 파일. 프로그램이 통째로 다시 떠도
+# 같은 방송을 이어 켤 수 있게 한다.
+_SLOT_FILE = "active_broadcast.json"
 # 마무리 인사하고 실제 스트림을 내리기까지의 여유(초). 사람도 인사 후 바로
 # 안 끄고 30초~1분 정도 여운을 둔다. config.end_judge.wind_down 에서 조정.
 
@@ -97,6 +111,12 @@ class Orchestrator:
         self.llm = LLMClient(cfg.llm, cfg.secrets)
         self._stop = asyncio.Event()
         self.stop_flag = StopFlag(cfg.safety.stop_flag_path)
+        # `aist run` 의 종료 코드. 코어에 못 붙어서 코어부터 다시 띄워야 할
+        # 때 EXIT_CORE_RESTART 가 된다.
+        self.exit_code = 0
+        self._core_unreachable = False
+        self._last_ej = None
+        self._last_transcript_path: Optional[str] = None
         # 방송 한 사이클 안에서만 쓰는 상태
         self._core_lost = False
         self._chat_source_dead = False
@@ -138,6 +158,28 @@ class Orchestrator:
             return
         log.info("오케스트레이터 시작 — 24시간 대기 모드")
         used_slot = None      # 이번 루프에서 이미 방송한 슬롯
+        # 프로그램이 방송 도중에 통째로 다시 떴으면(코어가 죽어 무인운영이
+        # 코어부터 다시 띄움, 프로그램 오류, 정전 뒤 재부팅) 그 방송을 잇는다.
+        # 예전에는 다음 슬롯만 봐서 그날 방송이 통째로 날아갔다.
+        pending = self._pending_slot()
+        if pending is not None:
+            slot = datetime.fromisoformat(pending["slot"])
+            used_slot = slot
+            if pending.get("start"):
+                pending["resumes"] = int(pending.get("resumes", 0)) + 1
+                self._write_slot(pending)
+                log.warning("끊긴 방송을 이어서 켭니다 (처음 시작 %s, 예정 종료 %s, "
+                            "%d번째 이어 켜기)", pending["start"],
+                            pending["planned_end"], pending["resumes"])
+                if not await self._run_slot(slot, skip_announce=True,
+                                            resume=pending):
+                    return
+            else:
+                log.warning("시작하지 못했던 방송을 지금 시작합니다 (예정 %s)",
+                            pending["slot"])
+                if not await self._run_slot(
+                        slot, skip_announce=bool(pending.get("announced"))):
+                    return
         while not self._stop.is_set():
             now = _now(self.cfg.scheduler.timezone)
             if used_slot is not None and now <= used_slot:
@@ -190,30 +232,125 @@ class Orchestrator:
                 used_slot = slot
                 continue
             used_slot = slot
-            # 사고로 일찍 끝나면 같은 슬롯을 다시 해본다. 예전에는 한 번
-            # 죽으면 그 날 방송이 통째로 날아갔다 — 19시에 켜서 19시 2분에
-            # 인터넷이 잠깐 끊기면, 운영자가 자는 사이 2분짜리 방송만 남고
-            # 다음 방송은 내일이었다. 무인 운영에서는 그게 정상일 수 없다.
-            left = max(0, self.cfg.scheduler.retry_max)
-            skip_announce = pre_announced
-            resuming = False
-            while not self._stop.is_set():
-                try:
-                    result = await self._run_broadcast(
-                        skip_start_announce=skip_announce, retries_left=left,
-                        resuming=resuming)
-                except Exception:
-                    log.exception("방송 사이클 중 오류 — 루프는 계속 유지")
-                    break
-                if result != "retry" or left <= 0:
-                    break
-                left -= 1
-                skip_announce = True      # 시작 공지는 이미 나갔다
-                resuming = True           # 같은 방송을 이어서 켜는 것이다
-                log.warning("방송이 사고로 일찍 끝났습니다 — %.0f초 뒤 같은 슬롯을 "
-                            "다시 켭니다(남은 재시도 %d회).",
-                            self.cfg.scheduler.retry_backoff_sec, left)
-                await self._sleep_or_stop(self.cfg.scheduler.retry_backoff_sec)
+            if not await self._run_slot(slot, skip_announce=pre_announced):
+                return
+
+    # ------------------------------------------------------- 슬롯 한 개
+    async def _run_slot(self, slot, skip_announce: bool = False,
+                        resume: Optional[dict] = None) -> bool:
+        """슬롯 하나를 방송한다(사고 시 재시도 포함).
+
+        False 를 돌려주면 `aist run` 이 끝나야 한다는 뜻이다 — 코어에 다시
+        붙을 수 없어서, 코어부터 다시 띄워야 한다(무인운영.bat 은 `aist run`
+        이 끝나야 코어를 다시 띄운다). 예전에는 방송만 내리고 다음 슬롯을
+        기다렸다. 실제로 방송 중에 코어를 죽여 보니 "다음 방송: 7일 뒤" 를
+        찍고 그대로 대기했다 — 코어는 아무도 다시 안 띄우니 다음 슬롯도
+        실패하고, 운영자가 오기 전까지 방송이 영영 안 나간다.
+        """
+        # 사고로 일찍 끝나면 같은 슬롯을 다시 해본다.
+        # 예전에는 한 번
+        # 죽으면 그 날 방송이 통째로 날아갔다 — 19시에 켜서 19시 2분에
+        # 인터넷이 잠깐 끊기면, 운영자가 자는 사이 2분짜리 방송만 남고
+        # 다음 방송은 내일이었다. 무인 운영에서는 그게 정상일 수 없다.
+        state = dict(resume) if resume else {"slot": slot.isoformat(), "resumes": 0}
+        left = max(0, self.cfg.scheduler.retry_max - int(state.get("resumes", 0)))
+        resuming = resume is not None
+        while not self._stop.is_set():
+            try:
+                result = await self._run_broadcast(
+                    skip_start_announce=skip_announce, retries_left=left,
+                    resuming=resuming, resume=state if resuming else None,
+                    slot_state=state)
+            except Exception:
+                log.exception("방송 사이클 중 오류 — 루프는 계속 유지")
+                self._clear_slot()
+                break
+            if self._core_unreachable and not self._stop.is_set():
+                # 이 프로세스 안에서 몇 번을 다시 해도 코어는 안 살아난다.
+                # 이어 켤 수 있으면 슬롯 기록을 남겨 두고(다시 뜬 프로그램이
+                # 이어 켠다) 끝낸다.
+                if result == "aborted" and not state.get("start"):
+                    # 시작도 못 했다 — 다시 떴을 때 늦게라도 시작하게 적어 둔다.
+                    state["announced"] = bool(skip_announce or state.get("announced"))
+                    self._write_slot(state)
+                log.error("코어에 다시 붙을 수 없습니다 — 코어를 다시 띄우도록 "
+                          "프로그램을 끝냅니다. 무인운영.bat 으로 돌고 있으면 코어부터 "
+                          "다시 켜고 %s", "이 방송을 이어서 켭니다."
+                          if self._slot_file().is_file() else "다음 방송을 기다립니다.")
+                self.exit_code = EXIT_CORE_RESTART
+                return False
+            if result != "retry" or left <= 0:
+                break
+            left -= 1
+            skip_announce = True      # 시작 공지는 이미 나갔다
+            resuming = True           # 같은 방송을 이어서 켜는 것이다
+            state["resumes"] = int(state.get("resumes", 0)) + 1
+            self._write_slot(state)
+            log.warning("방송이 사고로 일찍 끝났습니다 — %.0f초 뒤 같은 슬롯을 "
+                        "다시 켭니다(남은 재시도 %d회).",
+                        self.cfg.scheduler.retry_backoff_sec, left)
+            await self._sleep_or_stop(self.cfg.scheduler.retry_backoff_sec)
+        return True
+
+    # ------------------------------------------------- 진행 중 슬롯 기록
+    def _slot_file(self) -> Path:
+        return Path(self.cfg.memory.path) / _SLOT_FILE
+
+    def _write_slot(self, state: dict) -> None:
+        p = self._slot_file()
+        try:
+            p.parent.mkdir(parents=True, exist_ok=True)
+            tmp = p.with_suffix(".tmp")
+            tmp.write_text(json.dumps(state, ensure_ascii=False), encoding="utf-8")
+            os.replace(tmp, p)
+        except OSError as e:
+            log.warning("진행 중 방송 기록을 못 남겼습니다(다시 떠도 이어 켜지 "
+                        "못할 수 있음): %s", e)
+
+    def _clear_slot(self) -> None:
+        try:
+            self._slot_file().unlink()
+        except FileNotFoundError:
+            pass
+        except OSError as e:
+            log.warning("진행 중 방송 기록을 못 지웠습니다: %s", e)
+
+    def _pending_slot(self) -> Optional[dict]:
+        """프로그램이 다시 떴을 때 이어 켤 방송이 있으면 그 기록.
+
+        이어 켜기 조건은 프로그램 안에서 다시 켤 때와 같다: 원래 끝 시각까지
+        충분히 남았고 재시도 횟수가 남았을 것. 시작도 못 한 슬롯이면 늦은
+        시작 허용 범위(late_start_grace_min) 안일 것.
+        """
+        p = self._slot_file()
+        if not p.is_file():
+            return None
+        try:
+            state = json.loads(p.read_text(encoding="utf-8"))
+            slot = datetime.fromisoformat(state["slot"])
+            end = state.get("planned_end")
+            end = datetime.fromisoformat(end) if end else None
+            start = state.get("start")
+            if start:
+                datetime.fromisoformat(start)
+        except (OSError, ValueError, KeyError, TypeError) as e:
+            log.warning("진행 중 방송 기록을 못 읽었습니다 — 무시합니다: %s", e)
+            self._clear_slot()
+            return None
+        now = _now(self.cfg.scheduler.timezone)
+        sch = self.cfg.scheduler
+        if end is not None:
+            ok = ((end - now).total_seconds() >= max(600, sch.retry_min_left_min * 60)
+                  and int(state.get("resumes", 0)) < max(0, sch.retry_max))
+        else:
+            grace = sch.late_start_grace_min
+            ok = 0 <= (now - slot).total_seconds() <= max(0, grace) * 60
+        if not ok:
+            log.info("끊긴 방송 기록이 있지만 이어 켜기엔 늦었습니다 — 다음 슬롯을 "
+                     "기다립니다.")
+            self._clear_slot()
+            return None
+        return state
 
     async def run_one_now(self):
         """지금 한 방송만 진행(시작 수동). 끄는 건 종료 판단이 한다."""
@@ -222,7 +359,9 @@ class Orchestrator:
     # ------------------------------------------------------------ 한 사이클
     async def _run_broadcast(self, skip_start_announce: bool = False,
                             retries_left: int = 0,
-                            resuming: bool = False) -> str:
+                            resuming: bool = False,
+                            resume: Optional[dict] = None,
+                            slot_state: Optional[dict] = None) -> str:
         """방송 한 사이클. 어떤 경로로 빠져나가든 뒷정리는 반드시 돈다.
 
         돌려주는 값: "normal"(정상 종료) | "aborted"(시작도 못 함) |
@@ -247,6 +386,7 @@ class Orchestrator:
         aborted = False
         ej = None
         core_gone = False
+        self._core_unreachable = False
         self._core_lost = False
         self._chat_source_dead = False
         self._core_mute = False
@@ -277,7 +417,10 @@ class Orchestrator:
         if cfg.logging.transcript:
             try:
                 transcript = Transcript(str(Path(cfg.logging.dir) / "transcripts"))
-                transcript.open_session(start_dt)
+                # 이어 켜는 방송이면 같은 기록 파일에 이어 쓴다.
+                prev = (resume or {}).get("transcript")
+                transcript.open_session(start_dt,
+                                        continue_path=Path(prev) if prev else None)
                 self._transcript = transcript
             except Exception as e:
                 log.warning("트랜스크립트 시작 실패(기록 없이 진행): %s", e)
@@ -325,6 +468,7 @@ class Orchestrator:
                 raise
             except Exception as e:
                 log.error("Open-LLM-VTuber 코어 연결 실패: %s — 이번 사이클 중단", e)
+                self._core_unreachable = True
                 aborted = True
                 return
 
@@ -448,11 +592,36 @@ class Orchestrator:
                 log.info("게임 연동 켜짐 (%s)", cfg.game.ws_url)
 
             # 방송 오프닝(4-1): 켜지면 여는 인사로 문을 연다
+            # 이어 켜는 방송이면 코어가 새로 떴을 가능성이 크다. 그러면 OBS 의
+            # 웹UI 는 옛 코어와 함께 끊긴 채로 남는다(스스로 다시 안 붙는다 —
+            # 진짜 웹UI 를 크로미움에 띄우고 코어를 죽였다 살려서 확인). 그대로
+            # 두면 다시 켠 인사부터 시청자에게 안 나가고, 90초 뒤에야 알아챈다.
+            if resuming:
+                await self._refresh_web_ui(obs)
+                if self._web_refreshes:
+                    await self._sleep_or_stop(_WEB_UI_RELOAD_SEC)
+
+            # 끊겼다가 다시 켠 방송에서 "안녕~ 오늘도 왔어요" 로 처음처럼
+            # 열면, 방금까지 보던 시청자에게는 어색한 사고로 보인다.
             if cfg.broadcast.opening_greeting:
-                await self._safe(bridge.say_to_ai(_CUE_OPENING))
+                await self._safe(bridge.say_to_ai(
+                    _CUE_RESUMED if resuming else _CUE_OPENING))
 
             # 4) 종료 판단 루프
-            ej = EndJudge(cfg.end_judge, start_dt)
+            if resume and resume.get("start") and resume.get("planned_end"):
+                ej = EndJudge(cfg.end_judge,
+                              datetime.fromisoformat(resume["start"]),
+                              planned_end=datetime.fromisoformat(resume["planned_end"]))
+            else:
+                ej = EndJudge(cfg.end_judge, start_dt)
+            self._last_ej = ej
+            if slot_state is not None:
+                if not slot_state.get("start"):
+                    slot_state["start"] = ej.start.isoformat()
+                slot_state["planned_end"] = ej.planned_end.isoformat()
+                if transcript is not None and transcript.path is not None:
+                    slot_state["transcript"] = str(transcript.path)
+                self._write_slot(slot_state)
             log.info("예정 종료: %s (%s)", ej.planned_end.isoformat(), ej.planned_trigger)
             pre_notified = False
             core_gone = False
@@ -514,6 +683,13 @@ class Orchestrator:
                             drain_task.cancel()
                             await asyncio.gather(drain_task, return_exceptions=True)
                         drain_task = asyncio.create_task(self._drain_core(bridge, on_core))
+                        # 코어가 다시 떴으면 웹UI 는 끊긴 채로 남는다 — 진짜
+                        # 웹UI 는 스스로 다시 붙지 않는다(실제 크로미움으로
+                        # 확인). 90초 동안 말이 안 나가길 기다리지 말고 바로
+                        # 새로고침한다.
+                        t = asyncio.create_task(self._refresh_web_ui(obs))
+                        self._bg.add(t)
+                        t.add_done_callback(self._bg.discard)
                     else:
                         core_gone = True
                         break
@@ -584,6 +760,11 @@ class Orchestrator:
             will_retry = (core_gone and retries_left > 0 and not self._stop.is_set()
                           and ej is not None
                           and self._enough_time_left(ej))
+            # 끝난 방송이면 진행 중 기록을 지운다. 시작도 못 한 경우(코어
+            # 연결 실패)는 부르는 쪽이 판단한다 — 이어 켜기 도중이면 기록을
+            # 남겨야 다시 뜬 프로그램이 또 시도한다.
+            if slot_state is not None and not will_retry and not aborted:
+                self._clear_slot()
             # Ctrl+C·예외·코어 유실 어느 경우에도 뒷정리는 반드시 돈다.
             # shield 로 감싸 취소 중에도 끝까지 돌게 한다.
             await asyncio.shield(self._teardown(
@@ -996,6 +1177,7 @@ class Orchestrator:
         if not vt.reconnect_during_broadcast:
             log.error("코어 연결이 끊겼고 방송 중 재연결이 꺼져 있습니다 → 방송 종료")
             self._event("core_gone", why="reconnect_during_broadcast=false")
+            self._core_unreachable = True
             return False
         for i in range(1, max(1, vt.reconnect_max_attempts) + 1):
             if self._stop.is_set():
@@ -1012,6 +1194,7 @@ class Orchestrator:
         log.error("코어 재연결 %d회 모두 실패 → 이번 방송을 정상 종료합니다. "
                   "(끊긴 채로 계속 송출하지 않습니다)", vt.reconnect_max_attempts)
         self._event("core_gone", tries=vt.reconnect_max_attempts)
+        self._core_unreachable = True
         return False
 
     async def _restart_chat(self, cfg, pipeline, pipeline_task, chat_stop):

@@ -187,6 +187,20 @@ class Memory:
         """
         if resume and self._cur is not None:
             return
+        if resume and self._orphan is not None:
+            # 프로그램이 통째로 다시 떠서 같은 방송을 잇는 경우다(코어가
+            # 죽어 무인운영이 코어부터 다시 띄운 경우 등). 끊긴 회차를 그대로
+            # 이어서 쓴다 — 새로 열면 한 방송이 회차 둘로 쪼개진다.
+            cur, self._orphan = self._orphan, None
+            cur.pop("crashed", None)
+            cur.pop("crashed_at", None)
+            cur["end"] = None
+            self._cur = cur
+            # 진행 중 회차는 current 파일에만 둔다(전체 기억 파일에 같이
+            # 쓰면 또 끊겼을 때 같은 회차가 두 번 살아난다).
+            self._save_current()
+            self._last_save = time.monotonic()
+            return
         return self._start_session_now()
 
     def _start_session_now(self) -> None:

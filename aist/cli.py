@@ -835,7 +835,8 @@ def _run_broadcast_loop(orch, method: str, what: str) -> int:
             "%s 중 예상 못 한 오류로 멈췄습니다 — 아래 영어 내용을 그대로 "
             "개발자에게 알려주세요. (로그 파일에도 같이 남았습니다)", what)
         return 1
-    return 0
+    # 코어에 다시 못 붙어서 끝난 경우 등 — 무인운영.bat 이 코어부터 다시 띄운다.
+    return int(getattr(orch, "exit_code", 0) or 0)
 
 
 def cmd_broadcast_now(args) -> int:

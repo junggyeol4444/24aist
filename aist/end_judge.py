@@ -52,6 +52,7 @@ class EndJudge:
         cfg: EndJudgeConfig,
         start: datetime,
         rng: Optional[random.Random] = None,
+        planned_end: Optional[datetime] = None,
     ):
         self.cfg = cfg
         self.start = start
@@ -78,6 +79,14 @@ class EndJudge:
         else:
             self.planned_end = candidate
         self.planned_trigger = reason
+        # 사고로 끊겼다가 같은 방송을 이어 켤 때는 처음 정한 끝 시각을
+        # 그대로 쓴다. 새로 재면 19~22시 방송이 21:30 에 끊겼다 다시 켜질 때
+        # 새벽 0:30 까지 가 버린다(재시작 시각부터 3시간을 다시 센다).
+        if planned_end is not None:
+            self.planned_end = planned_end
+            self.hard_end = planned_end
+            if self.min_end > planned_end:
+                self.min_end = planned_end
 
     def _scheduled_end_dt(self, start: datetime) -> Optional[datetime]:
         if not self.cfg.scheduled_end_hhmm:

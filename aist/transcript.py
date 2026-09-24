@@ -33,8 +33,19 @@ class Transcript:
         self.path: Optional[Path] = None
         self._write_failed = False
 
-    def open_session(self, start_dt: datetime) -> Path:
+    def open_session(self, start_dt: datetime,
+                     continue_path: Optional[Path] = None) -> Path:
+        """continue_path 를 주면 그 파일에 이어 쓴다(끊겼다 다시 켠 같은 방송).
+
+        예전에는 다시 켤 때마다 새 파일을 만들었고, 리포트는 마지막 파일만
+        읽었다. 끊기기 전에 AI 가 한 말은 '사고 발언 점검' 에서 통째로 빠졌다.
+        """
         self.dir.mkdir(parents=True, exist_ok=True)
+        if continue_path is not None and Path(continue_path).is_file():
+            self.path = Path(continue_path)
+            self._fh = self.path.open("a", encoding="utf-8")
+            self.log_event("broadcast_resume")
+            return self.path
         name = start_dt.strftime("%Y-%m-%d_%H%M") + ".jsonl"
         # 같은 분에 방송이 두 번 시작하면 한 파일에 섞인다(append 모드).
         self.path = unique_path(self.dir / name)

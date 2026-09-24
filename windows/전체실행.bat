@@ -24,6 +24,13 @@ echo   [중요] 이 창도, 코어 창도 X 로 닫지 마세요.
 echo          끄려면 중단.bat 을 더블클릭하세요 ^(다른 창에서^).
 echo.
 aist --config config.yaml --persona persona.yaml run
+if errorlevel 3 (
+  echo.
+  echo [안내] 방송 코어가 죽어서 방송을 멈췄습니다.
+  echo        코어 창을 닫고 전체실행.bat 을 다시 실행하면, 아직 방송 시간이
+  echo        남아 있을 때 같은 방송을 이어서 켭니다.
+  echo        사람 없이 돌릴 때는 무인운영.bat 을 쓰세요 ^(코어를 알아서 다시 띄웁니다^).
+)
 
 echo.
 echo (참고) OBS 는 미리 켜두거나, config.yaml 의 obs.launch_if_not_running 을
