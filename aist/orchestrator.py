@@ -1147,6 +1147,15 @@ class Orchestrator:
                             self._obs_unreachable)
                 self._event("obs_reconnected", tries=self._obs_unreachable)
                 self._obs_unreachable = 0
+                # OBS 가 죽었다 다시 켜졌으면 송출은 꺼진 상태다. 다음 확인
+                # (기본 60초)까지 기다리면 그만큼 시청자 화면이 끊겨 있고,
+                # '송출이 내려감' 으로 세어 재시작 한도까지 깎는다(실제로
+                # OBS 를 죽였다 되살려 보니 20초 확인 간격에서도 그랬다).
+                # 이미 송출 중이면 start_stream 은 아무것도 안 한다.
+                try:
+                    await asyncio.to_thread(obs.start_stream)
+                except Exception as e:  # noqa: BLE001 - 다음 확인이 다시 본다
+                    log.warning("OBS 에 다시 붙었지만 송출을 못 켰습니다: %s", e)
                 return True
             if self._obs_unreachable >= max(1, oc.unreachable_max):
                 self._event("obs_unreachable", tries=self._obs_unreachable)

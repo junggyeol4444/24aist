@@ -178,3 +178,14 @@ def test_no_obs_connection_when_operator_runs_the_stream(tmp_path, monkeypatch):
     o.request_stop()                 # 방송은 바로 접는다 — OBS 만 본다
     asyncio.run(o._run_broadcast())
     assert touched == []
+
+
+def test_obs_relaunched_resumes_stream_right_away():
+    """OBS 가 죽었다 다시 켜지면 송출은 꺼져 있다 — 다음 확인까지 기다리지
+    않고 바로 켠다. 기다리면 그만큼 화면이 끊기고 '송출 내려감' 으로 세어
+    재시작 한도까지 깎였다(OBS 흉내를 죽였다 되살려 실제로 확인)."""
+    o, _ = _orc(stream_restart_max=1)
+    obs = _FakeObs(["unreachable", "live"], reconnect_ok=True)
+    assert _run(o, obs, 2) == [True, True]
+    assert obs.starts == 1
+    assert o._obs_restarts == 0
