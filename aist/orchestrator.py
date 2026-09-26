@@ -466,11 +466,7 @@ class Orchestrator:
                 transcript = None
 
         try:
-            # 1) 시작 공지 (실패해도 방송은 진행). 사전 공지 했으면 중복 방지.
-            if not skip_start_announce:
-                await self._announce("start", start_dt)
-
-            # 2) OBS 시작
+            # 1) OBS 시작
             #
             # 송출도 안 하고 OBS 를 켜지도 않는 설정(리허설·테스트 단계)이면
             # 애초에 붙지 않는다. 예전에는 무조건 붙어보고 실패해서, "OBS 를
@@ -492,7 +488,7 @@ class Orchestrator:
             self._next_obs_check = time.monotonic() + max(
                 cfg.obs.stream_check_sec, _OBS_FIRST_CHECK_SEC)
 
-            # 3) 코어 연결 + 채팅 파이프라인
+            # 2) 코어 연결 + 채팅 파이프라인
             # 같은 슬롯을 다시 켜는 중이면 회차를 새로 열지 않는다
             # (한 방송이 회차 여러 개로 쪼개지면 단골 집계·"저번에~"·
             #  리포트가 전부 어긋난다).
@@ -514,7 +510,17 @@ class Orchestrator:
                 log.error("Open-LLM-VTuber 코어 연결 실패: %s — 이번 사이클 중단", e)
                 self._core_unreachable = True
                 aborted = True
-                return
+                # 값 없이 return 하면 None 이 나간다(뒤의 "aborted" 반환까지
+                # 안 간다). 그러면 시작도 못 한 슬롯을 적어 두는 쪽이 영영
+                # 안 돌아, 코어를 살려 다시 떠도 그 방송을 켜지 않았다.
+                return "aborted"
+
+            # 3) 시작 공지 (실패해도 방송은 진행). 사전 공지 했으면 중복 방지.
+            # 코어에 붙은 '뒤에' 낸다. 예전에는 붙기 전에 먼저 냈다 — 코어가
+            # 죽어 있으면 "방송 시작!" 공지만 나가고 방송은 시작도 못 했고,
+            # 코어를 살려 다시 켜면 같은 공지가 한 번 더 나갔다.
+            if not skip_start_announce:
+                await self._announce("start", start_dt)
 
             def on_chat(msg):
                 # 채팅이 실제로 들어왔다 = 정말로 복구된 것이다.

@@ -295,3 +295,26 @@ def test_코어_포트_확인은_진짜로_연결해_본다(tmp_path):
     assert asyncio.run(o._core_reachable()) is True
     srv.close()
     assert asyncio.run(o._core_reachable()) is False
+
+
+def test_코어에_못_붙으면_시작_공지를_내지_않는다(tmp_path, monkeypatch):
+    """예전에는 코어에 붙기 전에 공지부터 냈다(실제로 코어를 끈 채 켜 보니
+    디스코드에 '방송 시작' 이 나가고 방송은 시작도 못 했다)."""
+    o = _orch(tmp_path)
+    o.cfg.logging.transcript = False
+    o.cfg.logging.auto_report = False
+    o.cfg.logging.auto_content = False
+    posted = []
+
+    async def fake_announce(kind, now):
+        posted.append(kind)
+
+    class DeadBridge:
+        def __init__(self, cfg): pass
+        async def connect(self): raise OSError("Connect call failed")
+        async def close(self): pass
+
+    o._announce = fake_announce
+    monkeypatch.setattr("aist.orchestrator.VTuberBridge", DeadBridge)
+    assert asyncio.run(o._run_broadcast()) == "aborted"
+    assert "start" not in posted
