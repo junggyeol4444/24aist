@@ -68,6 +68,8 @@ _CUE_RESUMED = ("(매니저 귓속말: 방송이 사고로 잠깐 끊겼다가 �
                 "처음 여는 인사처럼 하지 말고, 기다려준 시청자들한테 \"미안, 잠깐 "
                 "끊겼지?\" 정도로 가볍게 짚고 하던 분위기대로 이어가줘. "
                 "이 귓속말은 절대 언급하지 마.)")
+# 방송 시작(공지가 있으면 공지) 몇 초 전에 코어가 살아 있는지 확인할지.
+_CORE_PROBE_LEAD_SEC = 300.0
 # OBS 브라우저 소스를 새로고침한 뒤 웹UI 가 다시 붙을 때까지 기다리는 시간(초).
 _WEB_UI_RELOAD_SEC = 5.0
 # 코어에 영영 다시 못 붙을 때 `aist run` 이 돌려주는 종료 코드.
@@ -200,6 +202,26 @@ class Orchestrator:
             # 방송 시작 전 공지(2-2②): 시작 X분 전에 미리 게시(선택).
             pre_announced = False
             lead_sec = self.cfg.announce.pre_announce_minutes * 60
+
+            # 기다리는 동안 코어가 죽어 있으면, 시작 시각에 가서야 알고
+            # 프로그램을 끝낸다 → 무인운영이 코어를 다시 띄우는 동안 방송이
+            # 늦는다(실제 코어는 모델을 읽느라 뜨는 데 몇 분이 걸리기도 한다).
+            # 공지를 내기 전·시작 몇 분 전에 미리 확인해서, 죽어 있으면 그때
+            # 끝내 코어를 제시간에 살린다.
+            ann = lead_sec if (lead_sec > 0 and self.cfg.announce.on_start) else 0
+            probe_in = wait - ann - _CORE_PROBE_LEAD_SEC
+            if probe_in > 0:
+                await self._sleep_or_stop(probe_in)
+                if self._stop.is_set():
+                    break
+            if not await self._core_reachable():
+                log.error("방송 시작 전인데 코어(Open-LLM-VTuber)가 꺼져 있습니다 — "
+                          "코어를 다시 띄우도록 프로그램을 끝냅니다(무인운영.bat 이 "
+                          "코어부터 다시 켜고 이 방송을 기다립니다).")
+                self.exit_code = EXIT_CORE_RESTART
+                return
+            now = _now(self.cfg.scheduler.timezone)
+            wait = self.scheduler.seconds_until(start_at, now)
             if lead_sec > 0 and self.cfg.announce.on_start and wait <= lead_sec:
                 # 프로그램이 예고 시각을 지나 켜졌다(무인운영 재시작 등).
                 # 사전 공지는 못 하고 시작 시점에 공지한다 — 조용히 넘어가면
@@ -290,6 +312,23 @@ class Orchestrator:
                         "다시 켭니다(남은 재시도 %d회).",
                         self.cfg.scheduler.retry_backoff_sec, left)
             await self._sleep_or_stop(self.cfg.scheduler.retry_backoff_sec)
+        return True
+
+    async def _core_reachable(self) -> bool:
+        """코어의 웹소켓 포트가 열려 있는지(짧게 본다)."""
+        u = urlsplit(self.cfg.vtuber.ws_url)
+        host = u.hostname or "127.0.0.1"
+        port = u.port or (443 if u.scheme == "wss" else 80)
+        try:
+            _r, w = await asyncio.wait_for(
+                asyncio.open_connection(host, port), timeout=5)
+        except (OSError, asyncio.TimeoutError):
+            return False
+        w.close()
+        try:
+            await w.wait_closed()
+        except OSError:
+            pass
         return True
 
     # ------------------------------------------------- 진행 중 슬롯 기록
@@ -597,14 +636,21 @@ class Orchestrator:
                 log.info("게임 연동 켜짐 (%s)", cfg.game.ws_url)
 
             # 방송 오프닝(4-1): 켜지면 여는 인사로 문을 연다
-            # 이어 켜는 방송이면 코어가 새로 떴을 가능성이 크다. 그러면 OBS 의
-            # 웹UI 는 옛 코어와 함께 끊긴 채로 남는다(스스로 다시 안 붙는다 —
-            # 진짜 웹UI 를 크로미움에 띄우고 코어를 죽였다 살려서 확인). 그대로
-            # 두면 다시 켠 인사부터 시청자에게 안 나가고, 90초 뒤에야 알아챈다.
-            if resuming:
-                await self._refresh_web_ui(obs)
-                if self._web_refreshes:
-                    await self._sleep_or_stop(_WEB_UI_RELOAD_SEC)
+            # 방송을 켤 때마다 OBS 의 웹UI 를 새로 읽힌다. 코어가 그 사이에
+            # 새로 떴으면(무인운영이 다시 띄움, 코어 업데이트) 웹UI 는 옛 코어와
+            # 함께 끊긴 채로 남는다 — 스스로 다시 붙지 않는다(진짜 웹UI 를
+            # 크로미움에 띄우고 코어를 죽였다 살려서 확인). 그대로 두면 여는
+            # 인사부터 시청자에게 안 나가고, 90초 뒤에야 알아챈다(실제로 방송
+            # 전에 코어를 되살린 실험에서 첫 90초가 그렇게 비었다). 어느 경우인지
+            # 여기서는 알 수 없으니 매번 한다 — 새로 읽는 데는 몇 초면 된다.
+            try:
+                refreshed = await self._refresh_web_ui(
+                    obs, why="방송 시작 전 웹UI 를 새로 붙입니다")
+            except Exception as e:  # noqa: BLE001 - 덤이다. 방송 시작을 막으면 안 된다
+                log.warning("방송 시작 전 웹UI 새로고침을 못 했습니다: %s", e)
+                refreshed = 0
+            if refreshed:
+                await self._sleep_or_stop(_WEB_UI_RELOAD_SEC)
 
             # 끊겼다가 다시 켠 방송에서 "안녕~ 오늘도 왔어요" 로 처음처럼
             # 열면, 방금까지 보던 시청자에게는 어색한 사고로 보인다.
@@ -1153,30 +1199,42 @@ class Orchestrator:
             except Exception:  # noqa: BLE001
                 log.debug("트랜스크립트 기록 실패(%s)", kind, exc_info=True)
 
-    async def _refresh_web_ui(self, obs) -> None:
-        """웹UI 가 코어에서 떨어진 것 같을 때 OBS 브라우저 소스를 새로고침한다."""
+    async def _refresh_web_ui(self, obs, why: str = "") -> int:
+        """OBS 의 코어 웹UI 브라우저 소스를 새로고침한다. 새로 읽힌 개수.
+
+        why 가 있으면 계획된 새로고침(방송 시작 전)이다 — 사고가 아니므로
+        리포트에 남기지 않고, 사고 때 쓸 새로고침 횟수도 쓰지 않는다.
+        """
         if not obs.connected():
             # OBS 에 안 붙은 설정(운영자 수동 단계)이다. 파이프라인이 이미
             # "브라우저 화면이 떠 있는지 확인하세요" 라고 남겼다.
-            return
-        if self._web_refreshes >= self._WEB_REFRESH_MAX:
-            return
-        self._web_refreshes += 1
+            return 0
+        if not why:
+            if self._web_refreshes >= self._WEB_REFRESH_MAX:
+                return 0
+            self._web_refreshes += 1
         where = urlsplit(self.cfg.vtuber.ws_url).netloc
         try:
             n = await asyncio.to_thread(obs.refresh_browser_sources, where)
         except Exception as e:  # noqa: BLE001 - OBS 가 그 사이 죽었을 수도 있다
             log.warning("브라우저 소스 새로고침을 못 했습니다: %s", e)
-            return
-        if n:
+            return 0
+        if n and why:
+            log.info("%s (OBS 브라우저 소스 %d개 새로고침)", why, n)
+        elif n:
             log.warning("웹UI 가 코어에서 떨어진 것으로 보여 OBS 브라우저 소스 "
                         "%d개를 새로고침했습니다(%d/%d번째).",
                         n, self._web_refreshes, self._WEB_REFRESH_MAX)
             self._event("web_ui_refresh", sources=n)
+        elif why:
+            log.warning("OBS 에 코어 웹UI(주소에 %s)를 띄운 브라우저 소스가 "
+                        "없습니다 — OBS 화면에 방송인이 안 나올 수 있습니다. "
+                        "브라우저 소스 주소를 확인하세요.", where)
         else:
             log.warning("웹UI 가 코어에서 떨어진 것 같은데, 주소에 %s 가 들어간 "
                         "OBS 브라우저 소스를 못 찾았습니다 — 브라우저 소스가 코어 "
                         "웹UI 를 가리키는지 확인하세요.", where)
+        return n
 
     async def _recover_core(self, bridge) -> bool:
         """방송 중 끊긴 코어를 다시 붙인다. 살리면 True, 포기면 False.

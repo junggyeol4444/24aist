@@ -26,6 +26,10 @@ def _setup(tmp_path, monkeypatch, oversleep_min, grace=30):
     o = Orchestrator(cfg, Persona())
     clock = {"t": datetime(2026, 9, 14, 18, 50, tzinfo=timezone.utc)}
     monkeypatch.setattr(orch_mod, "_now", lambda tz=None: clock["t"])
+    # 여기서 보는 건 스케줄 판단이다 — 코어는 떠 있는 것으로 둔다.
+    async def _alive():
+        return True
+    monkeypatch.setattr(o, "_core_reachable", _alive)
 
     starts = []
     slept = {"n": 0}
@@ -61,4 +65,6 @@ def test_slightly_late_wakeup_still_broadcasts(tmp_path, monkeypatch):
 
 def test_grace_zero_always_starts(tmp_path, monkeypatch):
     starts = _setup(tmp_path, monkeypatch, oversleep_min=8 * 60, grace=0)
-    assert starts and starts[0].hour == 3    # 무조건 시작(운영자 선택)
+    # 무조건 시작(운영자 선택) — 깨어난 새벽에 바로 켠다. 절전이 시작 5분
+    # 전 코어 확인 대기 중에 끼어들든 시작 대기 중에 끼어들든 같다.
+    assert starts and starts[0].date().day == 15 and starts[0].hour < 4

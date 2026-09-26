@@ -223,3 +223,75 @@ def test_사고_기록은_프로그램이_바로_죽어도_남는다(tmp_path):
     m2.start_session(resume=True)
     kinds = [e["kind"] for e in m2._cur["events"]]
     assert kinds == ["core_gone", "ended_early"]
+
+
+# ------------------------------------------------ 기다리는 동안 코어가 죽었으면
+def test_시작_전에_코어가_꺼져_있으면_미리_끝내서_코어를_살린다(tmp_path):
+    """시작 시각에 가서야 알면, 코어가 다시 뜨는 동안 방송이 늦는다."""
+    o = _orch(tmp_path)
+    started = []
+
+    async def dead():
+        return False
+
+    async def must_not_run(*a, **k):
+        started.append(1)
+        return True
+
+    o._core_reachable = dead
+    o._run_slot = must_not_run
+    o.scheduler.next_slot = lambda now: now + timedelta(hours=1)
+    o.scheduler.next_start = lambda now: now + timedelta(hours=1)
+    slept = []
+
+    async def fake_sleep(sec):
+        slept.append(sec)
+
+    o._sleep_or_stop = fake_sleep
+    asyncio.run(o.run())
+    assert started == []
+    assert o.exit_code == EXIT_CORE_RESTART
+    # 시작 5분 전에 확인했다(한 시간을 통째로 기다리지 않았다)
+    assert slept and abs(slept[0] - 3300) < 5
+
+
+def test_코어가_살아_있으면_시작_시각까지_기다린다(tmp_path, monkeypatch):
+    import aist.orchestrator as orch_mod
+    o = _orch(tmp_path)
+    clock = {"t": datetime(2026, 9, 24, 18, 0, tzinfo=timezone.utc)}
+    monkeypatch.setattr(orch_mod, "_now", lambda tz=None: clock["t"])
+    start = clock["t"] + timedelta(hours=1)
+
+    async def alive():
+        return True
+
+    ran = []
+
+    async def slot(*a, **k):
+        ran.append(clock["t"])
+        o._stop.set()
+        return True
+
+    async def fake_sleep(sec):
+        clock["t"] = clock["t"] + timedelta(seconds=sec)
+
+    o._core_reachable = alive
+    o._run_slot = slot
+    o._sleep_or_stop = fake_sleep
+    o.scheduler.next_slot = lambda now: start
+    o.scheduler.next_start = lambda now: start
+    asyncio.run(o.run())
+    assert ran == [start] and o.exit_code == 0     # 제시각에 시작
+
+
+def test_코어_포트_확인은_진짜로_연결해_본다(tmp_path):
+    import socket
+    o = _orch(tmp_path)
+    srv = socket.socket()
+    srv.bind(("127.0.0.1", 0))
+    srv.listen(1)
+    port = srv.getsockname()[1]
+    o.cfg.vtuber.ws_url = f"ws://127.0.0.1:{port}/proxy-ws"
+    assert asyncio.run(o._core_reachable()) is True
+    srv.close()
+    assert asyncio.run(o._core_reachable()) is False

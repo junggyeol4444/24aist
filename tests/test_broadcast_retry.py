@@ -54,6 +54,10 @@ def test_retry_loop_stops_after_retry_max():
         return "retry" if retries_left > 0 else "normal"
 
     o._run_broadcast = fake_run
+
+    async def _alive():
+        return True
+    o._core_reachable = _alive
     o.scheduler.next_slot = lambda now: now
     o.scheduler.next_start = lambda now: now
     o.scheduler.seconds_until = lambda at, now: 0

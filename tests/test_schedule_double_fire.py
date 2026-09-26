@@ -30,6 +30,10 @@ def _run_loop_with_clock(tmp_path, monkeypatch, start_times, jitter_mode="symmet
 
     clock = {"t": datetime(2026, 9, 14, 18, 50, tzinfo=timezone.utc)}  # 월요일
     monkeypatch.setattr(orch_mod, "_now", lambda tz=None: clock["t"])
+    # 여기서 보는 건 스케줄 판단이다 — 코어는 떠 있는 것으로 둔다.
+    async def _alive():
+        return True
+    monkeypatch.setattr(o, "_core_reachable", _alive)
 
     # 변주는 항상 -5분(일찍 시작)
     class _Rng:

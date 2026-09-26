@@ -68,3 +68,31 @@ def test_버튼이_없는_OBS_버전이어도_방송을_안_깬다():
 
     c._client.press_input_properties_button = boom
     assert c.refresh_browser_sources("127.0.0.1:12393") == 0
+
+
+def test_방송_시작_전_새로고침은_사고로_세지_않는다(tmp_path):
+    """코어가 새로 뜬 뒤 방송을 켜면 웹UI 는 끊긴 채다(진짜 웹UI 로 확인).
+
+    그래서 방송 시작 때마다 새로 읽히는데, 이건 계획된 일이라 리포트의
+    사고 목록에 오르거나 사고 때 쓸 새로고침 횟수(3번)를 깎으면 안 된다.
+    """
+    import asyncio
+
+    from aist.config import Config
+    from aist.orchestrator import Orchestrator
+    from aist.persona import Persona
+
+    cfg = Config()
+    cfg.memory.path = str(tmp_path / "m")
+    o = Orchestrator(cfg, Persona())
+    o.memory.start_session()
+    c = _controller()
+    c.connected = lambda: True
+    n = asyncio.run(o._refresh_web_ui(c, why="방송 시작 전"))
+    assert n == 1 and c._client.pressed
+    assert o._web_refreshes == 0
+    assert not [e for e in o.memory._cur["events"] if e["kind"] == "web_ui_refresh"]
+    # 사고 때는 예전처럼 센다
+    asyncio.run(o._refresh_web_ui(c))
+    assert o._web_refreshes == 1
+    assert [e for e in o.memory._cur["events"] if e["kind"] == "web_ui_refresh"]
