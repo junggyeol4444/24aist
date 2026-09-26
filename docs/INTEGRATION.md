@@ -90,6 +90,13 @@ LLM+페르소나가 대답을 만들고 TTS+Live2D 로 출력합니다. **여기
    # {in} 이 TTS 오디오 파일 경로로 치환됨. 명령은 제자리(in-place) 변환.
    export AIST_TTS_POST_CMD="bash /path/to/rvc_convert.sh {in}"
    ```
+   윈도우는 코어를 켜기 전에(같은 창에서, 또는 시스템 환경 변수로):
+   ```bat
+   set AIST_TTS_POST_CMD=C:\rvc\rvc_convert.bat {in}
+   ```
+   (경로에 빈칸이 있으면 `"C:\my tools\rvc_convert.bat" {in}` 처럼 따옴표.
+    `.bat` 은 알아서 `cmd /c` 로 돌린다.) 명령이 실패로 끝나면 코어 창에
+   `TTS 후처리 명령이 실패로 끝났습니다` 가 뜬다 — 그때는 원본 목소리로 나간다.
    RVC 프로젝트의 추론 CLI 를 감싼 스크립트를 지정하면 모든 TTS 출력이
    송출 전에 변조된다. 실패하면 원본 오디오로 방송은 계속(best-effort).
    개조 위치: `Open-LLM-VTuber/src/.../tts_manager.py` (`NOTICE-vendored.md` 참고)

@@ -182,26 +182,30 @@ class TTSTaskManager:
         예: AIST_TTS_POST_CMD="bash /path/rvc_convert.sh {in}"
         """
         import os
-        import shlex
 
         cmd = os.environ.get("AIST_TTS_POST_CMD", "").strip()
         if not cmd or not audio_path:
             return audio_path
         try:
-            if "{in}" in cmd:
-                args = [a.replace("{in}", audio_path) for a in shlex.split(cmd)]
-            else:
-                args = shlex.split(cmd) + [audio_path]
+            args = post_cmd_args(cmd, audio_path)
             proc = await asyncio.create_subprocess_exec(
                 *args,
                 stdout=asyncio.subprocess.DEVNULL,
-                stderr=asyncio.subprocess.DEVNULL,
+                stderr=asyncio.subprocess.PIPE,
             )
             try:
-                await asyncio.wait_for(proc.wait(), timeout=30)
+                _out, err = await asyncio.wait_for(proc.communicate(), timeout=30)
             except asyncio.TimeoutError:
                 proc.kill()
                 logger.warning("TTS 후처리 명령 시간 초과(30s) — 원본 오디오 사용")
+                return audio_path
+            # [24aist 개조] 명령이 실패로 끝나도 예전에는 아무 말이 없었다 —
+            # 목소리 변조가 빠진 채 방송이 나가는데 운영자는 모른다.
+            if proc.returncode != 0:
+                tail = (err or b"").decode("utf-8", "replace").strip()[-300:]
+                logger.warning(
+                    f"TTS 후처리 명령이 실패로 끝났습니다(종료 코드 {proc.returncode})"
+                    f" — 원본 오디오 사용. {tail}")
         except Exception as e:
             logger.warning(f"TTS 후처리 실패({e}) — 원본 오디오 사용")
         return audio_path
@@ -215,3 +219,28 @@ class TTSTaskManager:
         self._next_sequence_to_send = 0
         # Create a new queue to clear any pending items
         self._payload_queue = asyncio.Queue()
+
+
+def post_cmd_args(cmd: str, audio_path: str) -> list:
+    """[24aist 개조] AIST_TTS_POST_CMD 를 실행할 인자 목록으로 바꾼다.
+
+    윈도우에서 POSIX 방식으로 쪼개면 경로의 역슬래시가 전부 사라진다:
+    'C:\\rvc\\convert.bat {in}' → 'C:rvcconvert.bat' (없는 파일 → 매번 실패,
+    원본 목소리로 방송이 나가는데 경고 한 줄만 남는다). 윈도우에서는 윈도우
+    방식으로 쪼개고 따옴표만 벗긴다. .bat/.cmd 는 cmd /c 로 돌린다.
+    """
+    import os
+    import shlex
+
+    if os.name == "nt":
+        parts = [a[1:-1] if len(a) >= 2 and a[0] == a[-1] == '"' else a
+                 for a in shlex.split(cmd, posix=False)]
+    else:
+        parts = shlex.split(cmd)
+    if any("{in}" in a for a in parts):
+        args = [a.replace("{in}", audio_path) for a in parts]
+    else:
+        args = parts + [audio_path]
+    if os.name == "nt" and args and args[0].lower().endswith((".bat", ".cmd")):
+        args = ["cmd", "/c"] + args
+    return args
