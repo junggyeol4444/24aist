@@ -88,3 +88,9 @@ def test_사고_이유가_리포트에_같이_적힌다():
     assert len(long) < 200            # 리포트 한 줄이 폭발하지 않게
     assert "`" not in _event_detail({"kind": "banned_word", "word": "a`b",
                                      "text": "x"}).replace("`a'b`", "").replace("`x`", "")
+
+
+def test_이어_켠_방송은_정상_방송으로_보이지_않는다():
+    """프로그램이 강제로 죽었다 다시 뜨면 남는 흔적은 '이어 켬' 하나뿐이다."""
+    out = _trouble_lines([{"kind": "resumed"}])
+    assert out and "이어서" in out[0]

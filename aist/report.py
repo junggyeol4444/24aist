@@ -72,7 +72,10 @@ _SERIOUS = ("banned_word", "banned_gave_up",
             "obs_start_failed", "announce_failed",
             "core_brain_dead", "chat_lost", "chat_gave_up", "obs_down",
             "obs_unreachable", "obs_gave_up", "obs_restart_failed",
-            "ended_early", "core_error", "core_error_gave_up")
+            "ended_early", "core_error", "core_error_gave_up",
+            # 프로그램이 통째로 죽었다 다시 뜬 경우(정전·강제 종료)에는
+            # 이것 말고는 사고 흔적이 남지 않는다.
+            "resumed")
 
 
 def _trouble_lines(events) -> list:
