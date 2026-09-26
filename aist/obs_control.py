@@ -116,11 +116,18 @@ class ObsController:
         """OBS 프로그램을 직접 실행(백그라운드). 성공 여부만 반환."""
         import subprocess
         try:
+            import os
             args = self._split_command(self.cfg.launch_command)
+            # 실행 파일이 있는 폴더에서 켠다. 시작 메뉴의 OBS 바로가기도
+            # '시작 위치' 를 bin\64bit 로 두고 켠다 — 다른 폴더(여기서는
+            # 방송 자동화 폴더)에서 켜면 OBS 가 자기 파일(locale 등)을 못
+            # 찾고 멈췄다는 사례가 알려져 있다.
+            exe_dir = os.path.dirname(args[0]) if args else ""
+            cwd = exe_dir if exe_dir and os.path.isdir(exe_dir) else None
             subprocess.Popen(
                 args,
                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                start_new_session=True,
+                start_new_session=True, cwd=cwd,
             )
             log.info("OBS 자동 실행: %s", self.cfg.launch_command)
             return True

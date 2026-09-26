@@ -197,3 +197,23 @@ def test_normal_broadcast_keeps_the_configured_notice():
     ej = EndJudge(cfg, start)
     gap = (ej.planned_end - ej.pre_notice_at()).total_seconds() / 60
     assert gap == cfg.wind_down.pre_notice_minutes_before_end
+
+
+def test_obs_is_launched_from_its_own_folder(monkeypatch, tmp_path):
+    """시작 메뉴 바로가기처럼 실행 파일 폴더에서 켠다(윈도우 파이썬으로 확인:
+    자식 프로세스의 현재 폴더 = 실행 파일 폴더)."""
+    from aist.obs_control import ObsController
+    import subprocess
+    seen = {}
+
+    def fake_popen(args, **kw):
+        seen.update(kw)
+        return object()
+
+    monkeypatch.setattr(subprocess, "Popen", fake_popen)
+    exe = tmp_path / "obs64"
+    exe.write_text("")
+    c = ObsController(ObsConfig(launch_if_not_running=True,
+                                launch_command=f"{exe} --disable-shutdown-check"))
+    assert c._launch_obs() is True
+    assert seen["cwd"] == str(tmp_path)
