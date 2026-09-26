@@ -96,3 +96,25 @@ def test_방송_시작_전_새로고침은_사고로_세지_않는다(tmp_path):
     asyncio.run(o._refresh_web_ui(c))
     assert o._web_refreshes == 1
     assert [e for e in o.memory._cur["events"] if e["kind"] == "web_ui_refresh"]
+
+
+def test_코어_창에_찍힌_localhost_주소도_같은_코어로_본다():
+    """코어는 'Uvicorn running on http://localhost:12393' 을 찍고, 운영자는
+    그걸 OBS 에 그대로 넣는다. 우리 기본 주소는 127.0.0.1:12393 이라 글자
+    비교로는 한 번도 안 맞아 새로고침이 영영 안 됐다."""
+    from aist.obs_control import same_core_address as same
+    assert same("http://localhost:12393/", "127.0.0.1:12393")
+    assert same("http://127.0.0.1:12393", "localhost:12393")
+    assert same("http://192.168.0.5:12393/", "127.0.0.1:12393")   # 다른 PC 의 OBS
+    assert not same("http://localhost:9999/", "127.0.0.1:12393")
+    assert not same("https://alerts.example.com/w/abc", "127.0.0.1:12393")
+    assert not same("", "127.0.0.1:12393")
+
+
+def test_localhost_로_넣은_브라우저_소스도_새로고침한다():
+    c = _controller()
+    c._client.get_input_settings = lambda name: c._client._R(
+        input_settings={"url": {"웹UI": "http://localhost:12393/",
+                                "알림창": "https://alerts.example.com/w/abc"}[name]})
+    assert c.refresh_browser_sources("127.0.0.1:12393") == 1
+    assert c._client.pressed == [("웹UI", "refreshnocache")]

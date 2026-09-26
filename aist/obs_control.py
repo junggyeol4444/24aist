@@ -213,7 +213,7 @@ class ObsController:
                         cl.get_input_settings(name), "input_settings", {}) or {}
                 except Exception:  # noqa: BLE001 - 소스 하나 때문에 멈추지 않는다
                     continue
-                if url_contains not in str(settings.get("url", "")):
+                if not same_core_address(str(settings.get("url", "")), url_contains):
                     continue
             try:
                 cl.press_input_properties_button(name, "refreshnocache")
@@ -327,3 +327,32 @@ class ObsController:
                 client.disconnect()
             except Exception:
                 pass
+
+
+_LOOPBACK = {"localhost", "127.0.0.1", "::1", "0.0.0.0"}
+
+
+def same_core_address(source_url: str, core: str) -> bool:
+    """브라우저 소스 주소가 코어 웹UI 를 가리키는지.
+
+    core 는 "호스트:포트"(우리 vtuber.ws_url 의 netloc). 글자 그대로 비교하면
+    안 된다 — 코어 창에는 "Uvicorn running on http://localhost:12393" 이
+    찍히고 운영자는 그걸 OBS 에 그대로 넣는데, 우리 기본 주소는
+    127.0.0.1:12393 이라서 한 번도 안 맞았다(웹UI 새로고침이 영영 안 됨).
+    포트가 같고, 호스트가 같거나 둘 중 하나가 이 PC 를 뜻하면(localhost,
+    127.0.0.1 — 다른 PC 의 OBS 가 LAN 주소로 여는 경우 포함) 같은 코어로 본다.
+    """
+    from urllib.parse import urlsplit
+    if not core:
+        return True
+    try:
+        src = urlsplit(source_url if "//" in source_url else "//" + source_url)
+        want = urlsplit("//" + core)
+        sport = src.port or (443 if src.scheme == "https" else 80)
+        wport = want.port or 80
+    except ValueError:
+        return core in source_url
+    if not src.hostname or sport != wport:
+        return False
+    sh, wh = src.hostname.lower(), (want.hostname or "").lower()
+    return sh == wh or sh in _LOOPBACK or wh in _LOOPBACK
