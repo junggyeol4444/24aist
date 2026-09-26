@@ -16,13 +16,16 @@ import asyncio
 import logging
 from typing import AsyncIterator, List, Optional, Tuple
 
-from .base import ChatMessage, ChatSource
+from .base import (ChatMessage, ChatSource, ProbeResult, RetryLog,
+                   import_problem, probe_fail, probe_ok, probe_warn)
 
 log = logging.getLogger("aist.chat.soop")
 
 ESC = "\x1b\t"          # 패킷 헤더 태그
 F = "\x0c"              # 필드 구분자 (chr 12)
 _SVC_CHAT = 5
+# 접속 스킴(테스트에서 평문 서버로 바꿔 끼울 수 있게 상수로 둔다)
+_WS_SCHEME = "wss"
 _LIVE_API = "https://live.afreecatv.com/afreeca/player_live_api.php"
 _UA = {"User-Agent": "Mozilla/5.0", "Referer": "https://play.sooplive.co.kr/"}
 
@@ -83,6 +86,8 @@ class SoopChat(ChatSource):
         self.bj_id = bj_id
         self._ws = None
         self._closed = False
+        self._reconnect = RetryLog(log, "SOOP 연결 끊김", base=3.0)
+        self._retry = RetryLog(log, "SOOP 라이브 정보 획득 실패")
 
     def _fetch_live_info(self) -> dict:
         import requests
@@ -103,10 +108,14 @@ class SoopChat(ChatSource):
                 domain = ch["CHDOMAIN"].lower()
                 port = int(ch["CHPT"]) + 1            # wss 는 보통 +1
                 chatno = str(ch["CHATNO"])
-                url = f"wss://{domain}:{port}/Websocket/{self.bj_id}"
+                url = f"{_WS_SCHEME}://{domain}:{port}/Websocket/{self.bj_id}"
             except Exception as e:
-                log.error("SOOP 라이브 정보 획득 실패: %s (5초 후 재시도)", e)
-                await asyncio.sleep(5)
+                fatal = import_problem(e, "requests")
+                if fatal:
+                    log.error("%s", fatal)
+                    self.fatal = fatal
+                    return
+                await asyncio.sleep(self.wait_after(self._retry, e))
                 continue
             try:
                 async with websockets.connect(url, subprotocols=["chat"],
@@ -116,6 +125,9 @@ class SoopChat(ChatSource):
                     await asyncio.sleep(0.3)
                     await ws.send(_join_packet(chatno))
                     log.info("SOOP 채팅 연결됨 (bj=%s, %s)", self.bj_id, url)
+                    self.connected_once = True
+                    self._reconnect.success()
+                    self._retry.success()
                     async for raw in ws:
                         text = raw.decode("utf-8", "ignore") if isinstance(raw, bytes) else raw
                         for frame in text.split(ESC):
@@ -128,15 +140,17 @@ class SoopChat(ChatSource):
             except Exception as e:
                 if self._closed:
                     break
-                log.warning("SOOP 연결 끊김: %s (재연결)", e)
-                await asyncio.sleep(3)
+                # 플랫폼이 점검 중이면 이 자리가 3초마다 영원히 돈다.
+                # 같은 사유는 간격을 늘리고 로그도 줄인다(회전 로그 보호).
+                await asyncio.sleep(self.wait_after(self._reconnect, e))
 
-    async def probe(self) -> str:
+    async def probe(self) -> ProbeResult:
         try:
             ch = await asyncio.to_thread(self._fetch_live_info)
-            return f"온에어(CHATNO {ch.get('CHATNO')})"
+            return probe_ok(f"온에어(CHATNO {ch.get('CHATNO')})")
         except Exception as e:
-            return f"방송중 아님/실패: {e}"
+            return probe_warn(f"지금은 못 붙음(방송 전이면 정상, 방송 중이면 "
+                              f"bj_id 확인): {e}")
 
     async def close(self) -> None:
         self._closed = True

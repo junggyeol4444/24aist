@@ -76,3 +76,14 @@ private/
 mcp_servers.json
 
 .vscode/
+
+# --- 24aist 개조: 코어가 시작할 때 이 디렉터리들이 '존재'해야 한다 ---
+# server.py 가 StaticFiles(directory=...) 로 마운트하는데, 없으면
+# "Directory 'avatars' does not exist" 로 코어가 아예 안 뜬다.
+# git 은 빈 디렉터리를 추적하지 못하므로 .gitkeep 만 예외로 둔다.
+!/avatars/.gitkeep
+!/logs/.gitkeep
+
+# 코어가 시작할 때 이 파일이 있어야 한다(없으면 ServerRegistry 가 예외를 올려
+# 서버가 아예 안 뜬다). 빈 목록으로 하나 넣어 둔다.
+!/mcp_servers.json

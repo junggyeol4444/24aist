@@ -83,6 +83,10 @@ class AgentFactory:
                 tool_manager=tool_manager,
                 tool_executor=tool_executor,
                 mcp_prompt_string=mcp_prompt_string,
+                # 24aist 개조: 긴 방송에서 컨텍스트가 무한히 늘지 않게
+                max_memory_messages=basic_memory_settings.get(
+                    "max_memory_messages", 0
+                ),
             )
 
         elif conversation_agent_choice == "mem0_agent":

@@ -45,7 +45,8 @@ class ObsController:
         except Exception as first_err:  # noqa: BLE001 - 연결 실패 사유는 다양
             # OBS 자동 실행(2-2③): 안 떠 있으면 직접 켜고 기다렸다 재시도
             if not (self.cfg.launch_if_not_running and self.cfg.launch_command):
-                raise ObsError(f"OBS 연결 실패: {first_err}") from first_err
+                raise ObsError(
+                    f"OBS 연결 실패: {first_err}{self._why(first_err)}") from first_err
             if not self._launch_obs():
                 raise ObsError(f"OBS 연결 실패(자동 실행도 실패): {first_err}") from first_err
             deadline = time.monotonic() + max(5, self.cfg.launch_wait_sec)
@@ -60,16 +61,73 @@ class ObsController:
                     last = e
             raise ObsError(f"OBS 자동 실행 후에도 연결 실패: {last}") from last
 
+    def _why(self, err: Exception) -> str:
+        """연결 실패 사유를 운영자 말로 덧붙인다.
+
+        라이브러리 메시지는 영어라 "failed to identify client with the server"
+        만 보면 무엇을 고쳐야 할지 알 수 없다. 이건 대부분 비밀번호 문제다.
+        """
+        text = str(err).lower()
+        if "identify" in text or "authentication" in text or "4009" in text:
+            if self.cfg.password:
+                return ("\n  → 비밀번호가 틀린 것 같습니다. OBS 의 [도구] - "
+                        "[obs-websocket 설정] 의 비밀번호와 .env 의 OBS_PASSWORD "
+                        "가 같은지 확인하세요.")
+            return ("\n  → OBS 쪽에 비밀번호가 설정돼 있는데 여기는 비어 있습니다. "
+                    ".env 에 OBS_PASSWORD 를 넣으세요.")
+        if "refused" in text or "timed out" in text or "timeout" in text:
+            return ("\n  → OBS 가 켜져 있는지, [도구] - [obs-websocket 설정] 에서 "
+                    "'웹소켓 서버 활성화' 가 켜져 있는지, 포트가 맞는지 확인하세요.")
+        return ""
+
+    @staticmethod
+    def _split_command(cmd: str):
+        """실행 명령 문자열을 인자 목록으로 쪼갠다.
+
+        shlex 의 기본(POSIX) 모드는 윈도우 경로를 망가뜨린다:
+          "C:/Program Files/obs-studio/bin/64bit/obs64.exe --x"
+            → ['C:/Program', 'Files/obs-studio/bin/64bit/obs64.exe', '--x']
+          "C:\\Program Files\\obs-studio\\bin\\64bit\\obs64.exe --x"
+            → ['C:Program', 'Filesobs-studiobin64bitobs64.exe', '--x']
+        둘 다 실행이 실패한다. 첫 번째 형태는 config.example.yaml 에 예시로
+        적혀 있던 바로 그 문자열이다.
+
+        윈도우에서는 posix=False 로 쪼개고(역슬래시를 이스케이프로 안 먹음),
+        따옴표가 없는데 공백이 있는 경로는 전체를 한 덩어리로 본다.
+        """
+        import os
+        import shlex
+        if os.name != "nt":
+            return shlex.split(cmd)
+        lex = shlex.shlex(cmd, posix=False)
+        lex.whitespace_split = True
+        parts = [p.strip('"') for p in lex]
+        if not parts:
+            return parts
+        # 따옴표 없이 공백 있는 경로를 쓴 경우: 실행 파일 조각을 다시 붙인다.
+        # (.exe 로 끝나는 지점까지가 실행 파일)
+        if not parts[0].lower().endswith((".exe", ".bat", ".cmd", ".com")):
+            for i, part in enumerate(parts):
+                if part.lower().endswith((".exe", ".bat", ".cmd", ".com")):
+                    return [" ".join(parts[: i + 1])] + parts[i + 1:]
+        return parts
+
     def _launch_obs(self) -> bool:
         """OBS 프로그램을 직접 실행(백그라운드). 성공 여부만 반환."""
-        import shlex
         import subprocess
         try:
-            args = shlex.split(self.cfg.launch_command)
+            import os
+            args = self._split_command(self.cfg.launch_command)
+            # 실행 파일이 있는 폴더에서 켠다. 시작 메뉴의 OBS 바로가기도
+            # '시작 위치' 를 bin\64bit 로 두고 켠다 — 다른 폴더(여기서는
+            # 방송 자동화 폴더)에서 켜면 OBS 가 자기 파일(locale 등)을 못
+            # 찾고 멈췄다는 사례가 알려져 있다.
+            exe_dir = os.path.dirname(args[0]) if args else ""
+            cwd = exe_dir if exe_dir and os.path.isdir(exe_dir) else None
             subprocess.Popen(
                 args,
                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                start_new_session=True,
+                start_new_session=True, cwd=cwd,
             )
             log.info("OBS 자동 실행: %s", self.cfg.launch_command)
             return True
@@ -82,6 +140,104 @@ class ObsController:
             raise ObsError("OBS 에 먼저 connect() 해야 합니다.")
         return self._client
 
+    def _is_streaming(self) -> Optional[bool]:
+        """지금 송출 중인지. 알 수 없으면 None."""
+        try:
+            status = self._require().get_stream_status()
+            return bool(getattr(status, "output_active", False))
+        except Exception:  # noqa: BLE001 - 상태 조회 실패는 치명적이지 않음
+            return None
+
+    def is_streaming(self) -> Optional[bool]:
+        """지금 송출 중인지(외부용). 알 수 없으면 None."""
+        return self._is_streaming()
+
+    def stream_state(self) -> str:
+        """송출 상태를 세 가지로 구분한다: live | down | unreachable.
+
+        '못 물어봤다'와 '안 하고 있다'는 다르다. OBS 프로그램이 죽으면
+        물어볼 수조차 없는데, 그건 '모르겠다'가 아니라 '송출이 확실히
+        끊겼다'는 뜻이다(인코더가 없으니까). 예전에는 둘을 같이 None 으로
+        묶어서, OBS 를 꺼도 방송이 아무 말 없이 계속 돌았다.
+        """
+        if self._client is None:
+            return "unreachable"
+        try:
+            status = self._client.get_stream_status()
+        except Exception:  # noqa: BLE001 - 끊김·타임아웃 등 사유는 다양
+            return "unreachable"
+        return "live" if getattr(status, "output_active", False) else "down"
+
+    def connected(self) -> bool:
+        """지금 OBS 에 붙어 있는지(외부용)."""
+        return self._client is not None
+
+    def refresh_browser_sources(self, url_contains: str = "") -> int:
+        """웹UI 를 띄운 브라우저 소스를 새로고침한다. 새로고친 개수를 돌려준다.
+
+        코어가 재시작되거나 순단이 나면 브라우저 소스가 물고 있던 웹소켓이
+        끊긴다. 우리 프로세스는 다시 붙지만 브라우저 소스는 끊긴 채로
+        남을 수 있고, 그러면 AI 가 말을 해도 시청자에게는 아무것도 안
+        나간다(코어는 '재생 끝' 응답을 기다리느라 대화가 영영 안 끝난다).
+        실제로 코어를 죽였다 살린 실행에서, 우리 쪽은 "재연결 성공" 인데
+        그 뒤 90초마다 발화가 걸리고 화면은 조용한 상태가 재현됐다.
+
+        운영자에게 "브라우저 소스를 새로고침하세요" 라고 로그로 부탁만
+        하는 건 무인 운영에서 아무 의미가 없다. OBS 가 우리 손에 있으면
+        우리가 직접 누른다.
+
+        url_contains 가 있으면 그 문자열이 주소에 든 소스만 건드린다
+        (알림창·오버레이 같은 다른 브라우저 소스를 괜히 깜빡이게 하지
+        않기 위해서다).
+        """
+        cl = self._client
+        if cl is None:
+            return 0
+        try:
+            inputs = getattr(cl.get_input_list(), "inputs", []) or []
+        except Exception as e:  # noqa: BLE001 - OBS 가 막 죽었을 수도 있다
+            log.warning("브라우저 소스 목록을 못 읽었습니다: %s", e)
+            return 0
+        done = 0
+        for item in inputs:
+            if not isinstance(item, dict):
+                continue
+            if "browser" not in str(item.get("inputKind", "")).lower():
+                continue
+            name = item.get("inputName") or ""
+            if not name:
+                continue
+            if url_contains:
+                try:
+                    settings = getattr(
+                        cl.get_input_settings(name), "input_settings", {}) or {}
+                except Exception:  # noqa: BLE001 - 소스 하나 때문에 멈추지 않는다
+                    continue
+                if not same_core_address(str(settings.get("url", "")), url_contains):
+                    continue
+            try:
+                cl.press_input_properties_button(name, "refreshnocache")
+            except Exception as e:  # noqa: BLE001 - 버튼 이름은 OBS 버전마다 다를 수 있다
+                log.warning("브라우저 소스 새로고침 실패(%s): %s", name, e)
+                continue
+            log.info("OBS 브라우저 소스 새로고침: %s", name)
+            done += 1
+        return done
+
+    def reconnect(self) -> bool:
+        """끊긴 OBS 에 다시 붙어본다(꺼져 있으면 설정에 따라 켜기도 한다)."""
+        try:
+            self.close()
+        except Exception:  # noqa: BLE001
+            pass
+        self._client = None
+        try:
+            self.connect()
+            return True
+        except ObsError as e:
+            log.debug("OBS 재연결 실패: %s", e)
+            return False
+
     def start_stream(self):
         """스트림 시작. start_stream=false 면 (테스트 단계) 건너뛴다.
 
@@ -91,14 +247,17 @@ class ObsController:
             log.info("obs.start_stream=false → 스트림 시작은 운영자 수동(건너뜀)")
             return
         cl = self._require()
+        if self._is_streaming():
+            log.info("이미 스트리밍 중 → 시작 생략")
+            return
         try:
-            status = cl.get_stream_status()
-            if getattr(status, "output_active", False):
-                log.info("이미 스트리밍 중 → 시작 생략")
-                return
-        except Exception:  # 상태 조회 실패는 치명적이지 않음
-            pass
-        cl.start_stream()
+            cl.start_stream()
+        except ObsError:
+            raise
+        except Exception as e:  # noqa: BLE001 - obsws 는 자기 예외를 던진다
+            # 호출자는 ObsError 만 잡는다. 정규화하지 않으면 방송 사이클이
+            # 엉뚱한 곳에서 끊긴다.
+            raise ObsError(f"스트림 시작 실패: {e}") from e
         log.info("OBS 스트림 시작")
         self._simulcast(start=True)
 
@@ -106,9 +265,26 @@ class ObsController:
         if not self.cfg.start_stream:
             log.info("obs.start_stream=false → 스트림 종료도 운영자 수동(건너뜀)")
             return
+        if self._client is None:
+            # OBS 가 죽어서 방송을 내리는 길로 들어온 경우다. 여기서
+            # "먼저 connect() 해야 합니다" 를 ERROR 로 찍으면 운영자에게는
+            # 프로그램이 잘못된 것처럼 보인다. 이미 아는 사실을 조용히 넘긴다.
+            log.info("OBS 연결이 이미 끊겨 있습니다 → 스트림 종료 생략")
+            return
         cl = self._require()
         self._simulcast(start=False)
-        cl.stop_stream()
+        if self._is_streaming() is False:
+            # 이미 꺼져 있다. 그냥 stop 을 부르면 obsws 가 예외를 던지고,
+            # 그게 방송 종료 절차 전체를 깨뜨린다(운영자가 OBS 에서 직접
+            # 껐거나 스트림 키 오류로 자동 중단된 경우에 실제로 일어난다).
+            log.info("이미 스트리밍이 아님 → 종료 생략")
+            return
+        try:
+            cl.stop_stream()
+        except ObsError:
+            raise
+        except Exception as e:  # noqa: BLE001 - obsws 는 자기 예외를 던진다
+            raise ObsError(f"스트림 종료 실패: {e}") from e
         log.info("OBS 스트림 종료")
 
     def _simulcast(self, start: bool):
@@ -151,3 +327,32 @@ class ObsController:
                 client.disconnect()
             except Exception:
                 pass
+
+
+_LOOPBACK = {"localhost", "127.0.0.1", "::1", "0.0.0.0"}
+
+
+def same_core_address(source_url: str, core: str) -> bool:
+    """브라우저 소스 주소가 코어 웹UI 를 가리키는지.
+
+    core 는 "호스트:포트"(우리 vtuber.ws_url 의 netloc). 글자 그대로 비교하면
+    안 된다 — 코어 창에는 "Uvicorn running on http://localhost:12393" 이
+    찍히고 운영자는 그걸 OBS 에 그대로 넣는데, 우리 기본 주소는
+    127.0.0.1:12393 이라서 한 번도 안 맞았다(웹UI 새로고침이 영영 안 됨).
+    포트가 같고, 호스트가 같거나 둘 중 하나가 이 PC 를 뜻하면(localhost,
+    127.0.0.1 — 다른 PC 의 OBS 가 LAN 주소로 여는 경우 포함) 같은 코어로 본다.
+    """
+    from urllib.parse import urlsplit
+    if not core:
+        return True
+    try:
+        src = urlsplit(source_url if "//" in source_url else "//" + source_url)
+        want = urlsplit("//" + core)
+        sport = src.port or (443 if src.scheme == "https" else 80)
+        wport = want.port or 80
+    except ValueError:
+        return core in source_url
+    if not src.hostname or sport != wport:
+        return False
+    sh, wh = src.hostname.lower(), (want.hostname or "").lower()
+    return sh == wh or sh in _LOOPBACK or wh in _LOOPBACK

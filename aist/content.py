@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import List, Optional, Tuple
 
 from .llm import LLMClient
+from .paths import unique_path
 from .persona import Persona
 from .transcript import read_transcript
 
@@ -137,7 +138,8 @@ def generate_content_pack(
 
     out = Path(out_dir)
     out.mkdir(parents=True, exist_ok=True)
-    path = out / (Path(transcript_path).stem + ".md")
+    # 같은 분에 두 번 방송하면 앞 컨텐츠 팩을 덮어쓴다.
+    path = unique_path(out / (Path(transcript_path).stem + ".md"))
     path.write_text("\n".join(lines), encoding="utf-8")
     log.info("컨텐츠 팩 생성: %s", path)
     return path

@@ -24,7 +24,12 @@ TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 
 if [ -f "$DEST/index.html" ]; then
-  echo "==> 이미 받아져 있음: $DEST/index.html (건너뜀)"
+  echo "==> 이미 받아져 있음: $DEST/index.html (다운로드는 건너뜀)"
+  # 받는 건 건너뛰어도 설정은 다시 넣는다. 예전 버전으로 넣어둔 설정에는
+  # 매니저 귓속말이 화면에 뜨지 않게 하는 필터가 없다.
+  python3 -m aist.frontend_patch "$DEST" 2>/dev/null \
+    || python -m aist.frontend_patch "$DEST" 2>/dev/null \
+    || echo "    [경고] 웹UI 설정을 다시 넣지 못했습니다 — aist check 로 확인하세요."
   exit 0
 fi
 
@@ -71,5 +76,11 @@ if [ ! -f "$DEST/index.html" ]; then
   echo "[오류] 풀긴 했는데 index.html 이 없습니다. 저장소 구조를 확인하세요." >&2
   exit 1
 fi
+# 웹UI 가 /proxy-ws 에 붙게 한다. 안 하면 웹UI 는 /client-ws 로 붙고,
+# 그 경로는 채팅을 넣은 쪽에만 결과를 돌려줘서 화면에 아무것도 안 나온다.
+python3 -m aist.frontend_patch "$DEST" 2>/dev/null \
+  || python -m aist.frontend_patch "$DEST" 2>/dev/null \
+  || echo "    [경고] 웹UI 주소 설정을 못 넣었습니다 — 웹UI 설정에서 WebSocket URL 을 /proxy-ws 로 바꾸세요."
+
 echo "==> 완료. $DEST 에 index.html / assets / libs 가 들어왔습니다."
 echo "   (이 파일들은 .gitignore 로 커밋에서 제외됩니다)"

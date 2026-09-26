@@ -243,3 +243,222 @@ def test_installer_checks_python_version():
     assert "PYMIN" in text, "파이썬 버전을 파싱하지 않는다"
     assert "GEQ 13" in text, "3.13 이상을 막지 않는다"
     assert "LSS 10" in text, "3.10 미만을 막지 않는다"
+
+
+# =========================================================================
+# 방송을 끄는 방법 — Wine 으로 .bat 을 실제로 돌려보다 찾은 것.
+#
+# 윈도우에서 cmd 창을 X 로 닫으면 CTRL_CLOSE_EVENT 가 가는데 파이썬은
+# 그걸 시그널로 처리하지 않는다. 정상 종료가 안 돌아 OBS 스트림이 켜진 채
+# 남는다(시청자에겐 멈춘 화면이 계속 나감). 그런데 방송시작.bat 이
+# "창을 닫으면 멈춥니다" 라고 그 방법을 권하고 있었다.
+# =========================================================================
+_RUNNING_BATS = ["방송시작.bat", "테스트방송.bat", "전체실행.bat", "리허설.bat"]
+
+
+def _bat(name):
+    return (WINDOWS_DIR / name).read_text(encoding="utf-8")
+
+
+def test_stop_bat_exists():
+    """터미널 없이 방송을 안전하게 끌 수단이 있어야 한다.
+
+    aist stop 은 있었지만 .bat 이 없었다. README 는 "터미널 몰라도 됨"을
+    표방하는데 끄는 안전한 방법만 터미널 명령이었다.
+    """
+    p = WINDOWS_DIR / "중단.bat"
+    assert p.exists(), "중단.bat 이 없습니다"
+    assert "stop" in p.read_text(encoding="utf-8")
+
+
+def test_stop_bat_has_no_bom_and_is_crlf():
+    raw = (WINDOWS_DIR / "중단.bat").read_bytes()
+    assert raw[:3] != b"\xef\xbb\xbf"
+    assert b"\r\n" in raw
+
+
+@pytest.mark.parametrize("name", _RUNNING_BATS)
+def test_running_bats_do_not_recommend_closing_window(name):
+    """창 닫기를 '끄는 방법'으로 안내하면 안 된다."""
+    text = _bat(name)
+    assert "창을 닫으면 멈춥니다" not in text, (
+        f"{name}: 창 닫기는 OBS 스트림을 켜진 채 남긴다"
+    )
+
+
+@pytest.mark.parametrize("name", _RUNNING_BATS)
+def test_running_bats_point_at_stop_bat(name):
+    """방송이 도는 .bat 은 안전하게 끄는 법을 알려줘야 한다."""
+    assert "중단.bat" in _bat(name), f"{name}: 중단.bat 안내가 없습니다"
+
+
+def test_docs_warn_about_closing_window():
+    for path in (Path("README.md"), WINDOWS_DIR / "사용법.md"):
+        text = path.read_text(encoding="utf-8")
+        assert "중단.bat" in text, f"{path}: 중단.bat 안내 없음"
+        assert "X 로 닫" in text, f"{path}: 창 닫기 경고 없음"
+
+
+# =========================================================================
+# cmd.exe 의 괄호 함정 — Wine 으로 설치.bat 을 처음부터 돌려보다 찾았다.
+#
+# if/for 의 ( ) 블록 안에서 echo 에 이스케이프 안 된 괄호를 쓰면, cmd 가
+# 그 ')' 를 블록의 끝으로 읽는다. 실제 cmd.exe 에서 재현한 결과:
+#
+#   echo [1/5] 가상환경(.venv) 생성...
+#     → [1/5] 가상환경
+#       '.venv'은(는) 내부 또는 외부 명령이 아닙니다.
+#       '생성...'은(는) 내부 또는 외부 명령이 아닙니다.
+#
+# 설치가 정상인데도 빨간 에러가 뜬다. 더 나쁜 건 코어실행.bat 의
+# "웹UI(화면)가 없습니다. 코어준비.bat 을 먼저 실행하세요" 였다 —
+# 정작 해야 할 안내가 에러 메시지 안에 파묻혀 운영자가 뭘 할지 모르게 된다.
+# =========================================================================
+def _unescaped_paren_echoes(path: Path):
+    """if/for 블록 안에서 이스케이프 안 된 괄호를 쓰는 echo 줄을 찾는다."""
+    import re
+    out = []
+    depth = 0
+    for lineno, line in enumerate(path.read_text(encoding="utf-8").split("\n"), 1):
+        s = line.strip()
+        if depth > 0 and s.lower().startswith("echo"):
+            body = s[4:].replace("^(", "").replace("^)", "")
+            if "(" in body or ")" in body:
+                out.append((lineno, s))
+        t = re.sub(r"\^.", "", s)
+        t = re.sub(r'"[^"]*"', "", t)
+        depth = max(depth + t.count("(") - t.count(")"), 0)
+    return out
+
+
+@pytest.mark.parametrize("name", [p.name for p in sorted(WINDOWS_DIR.glob("*.bat"))])
+def test_no_unescaped_parens_inside_blocks(name):
+    hits = _unescaped_paren_echoes(WINDOWS_DIR / name)
+    assert not hits, (
+        f"{name}: if/for 블록 안 echo 의 괄호를 ^( ^) 로 이스케이프해야 합니다. "
+        f"안 하면 cmd 가 블록을 거기서 끊고 뒷부분을 명령으로 실행합니다 → "
+        f"{hits}"
+    )
+
+
+def test_detector_catches_the_original_bug(tmp_path):
+    """검출기가 실제로 동작하는지 — 원래 버그 형태를 넣어 확인한다."""
+    bad = tmp_path / "bad.bat"
+    bad.write_text(
+        '@echo off\r\n'
+        'if not exist "X" (\r\n'
+        '  echo [1/5] 가상환경(.venv) 생성...\r\n'
+        ')\r\n', encoding="utf-8")
+    assert _unescaped_paren_echoes(bad)
+
+    good = tmp_path / "good.bat"
+    good.write_text(
+        '@echo off\r\n'
+        'if not exist "X" (\r\n'
+        '  echo [1/5] 가상환경^(.venv^) 생성...\r\n'
+        ')\r\n', encoding="utf-8")
+    assert not _unescaped_paren_echoes(good)
+
+
+def test_block_outside_echo_parens_are_fine(tmp_path):
+    """블록 밖 echo 의 괄호는 문제가 없다 — 과잉 검출하면 안 된다."""
+    p = tmp_path / "ok.bat"
+    p.write_text('@echo off\r\necho 이건 블록 밖이라 (괜찮다)\r\n', encoding="utf-8")
+    assert not _unescaped_paren_echoes(p)
+
+
+# =========================================================================
+# 작업 스케줄러 기본값은 24시간 무인 운영에 맞지 않는다.
+# schtasks 로 만든 작업의 기본값:
+#   - 실행 시간 제한 72시간 → 3일 뒤 방송인이 강제 종료된다
+#   - 배터리면 시작 안 함    → 노트북은 전원 뽑으면 안 켜진다
+#   - 배터리로 바뀌면 중지   → 방송 중에 꺼진다
+# 기획안 7-8 "서버에 올려두고 며칠씩 알아서 돌게" 가 3일에서 멈춘다.
+# =========================================================================
+def test_autostart_removes_execution_time_limit():
+    t = _bat("자동시작등록.bat")
+    assert "PT0S" in t, "실행 시간 제한을 해제하지 않으면 3일 뒤 작업이 종료된다"
+
+
+def test_autostart_handles_battery_settings():
+    t = _bat("자동시작등록.bat")
+    assert "AllowStartIfOnBatteries" in t
+    assert "DontStopIfGoingOnBatteries" in t
+
+
+def test_autostart_does_not_stack_instances():
+    """재시작 루프와 겹쳐 인스턴스가 쌓이면 방송인이 여러 개 뜬다."""
+    assert "IgnoreNew" in _bat("자동시작등록.bat")
+
+
+def test_autostart_still_succeeds_if_hardening_fails():
+    """세부 설정 실패가 등록 자체를 실패로 만들면 안 된다 — 경고만."""
+    t = _bat("자동시작등록.bat")
+    assert "[경고]" in t, "실패 시 경고가 있어야 한다"
+    assert "exit /b 0" in t, "harden 은 실패해도 0 을 돌려줘야 한다"
+
+
+def test_autostart_tells_operator_how_to_fix_by_hand():
+    """자동 설정이 실패하면 손으로 고치는 법을 알려줘야 한다."""
+    t = _bat("자동시작등록.bat")
+    assert "작업 스케줄러" in t and "속성" in t
+
+
+# =========================================================================
+# 무인운영 재시작 루프 — Wine 에서 실제로 돌려보다 다듬은 것들.
+#
+# 루프 자체는 돌지만, 설정이 잘못돼 켜자마자 죽으면 10초마다 같은 실패를
+# 영원히 반복했다. 사람이 안 보는 자리라 아무도 모른다.
+# =========================================================================
+def test_unattended_backs_off_on_repeated_fast_failure():
+    t = _bat("무인운영.bat")
+    assert "FAST_FAILS" in t, "빠른 실패를 세지 않으면 영원히 같은 간격으로 돈다"
+    assert "SLOW_WAIT" in t, "간격을 늘리는 값이 없다"
+
+
+def test_unattended_tells_operator_what_to_check_when_stuck():
+    """막혔을 때 화면에 뭘 봐야 하는지 남겨야 한다."""
+    t = _bat("무인운영.bat")
+    assert "점검.bat" in t
+    assert "aist.log" in t
+
+
+def test_unattended_does_not_parse_locale_dependent_time():
+    """%time% 을 잘라 쓰면 로캘에 따라 깨진다.
+
+    한국어 윈도우는 "오후 3:52:10", 12시간제면 "3:52:10 AM" 이라
+    %T:~0,2% 같은 자릿수 파싱이 엉뚱한 값을 만든다.
+    (Wine 에서 실제로 빈 값이 나오는 걸 확인하고 고쳤다)
+    """
+    t = _bat("무인운영.bat")
+    assert "%time:~" not in t and "%T:~" not in t, \
+        "시각을 자릿수로 자르면 로캘에 따라 깨진다"
+
+
+def test_unattended_survives_missing_powershell():
+    """시각을 못 재면 실패 횟수를 세지 않아야 한다.
+
+    잘못 세면 멀쩡히 도는 방송의 재시도 간격을 5분으로 늘려버린다.
+    """
+    t = _bat("무인운영.bat")
+    assert 'if "%START_SEC%"=="0" goto :skip_count' in t
+    assert ":skip_count" in t
+
+
+def test_unattended_still_has_no_pause():
+    """무인 자리에 pause 가 하나라도 있으면 창이 영영 서 있는다."""
+    t = _bat("무인운영.bat")
+    for line in t.split("\n"):
+        s = line.strip().lower()
+        assert not (s == "pause" or s.startswith("pause ")), \
+            f"무인운영.bat 에 pause 가 있습니다: {line}"
+
+
+def test_exe_build_includes_timezone_data():
+    """윈도우에는 시간대 데이터가 없다.
+
+    tzdata 를 exe 에 안 넣으면 timezone 설정(Asia/Seoul)이 조용히 무시되고
+    PC 로컬 시간으로 돈다 — 예약 시각이 통째로 어긋난다.
+    """
+    text = _text("EXE만들기.bat")
+    assert "tzdata" in text, "exe 빌드에 tzdata 가 빠졌습니다"

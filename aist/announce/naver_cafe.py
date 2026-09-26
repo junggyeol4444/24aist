@@ -20,11 +20,39 @@ from urllib.parse import quote
 from ..config import NaverCafeAnnounce
 from ..config import Secrets
 from .base import Announcer
+from .retry import post_with_retry, retry_after_of
 
 log = logging.getLogger("aist.announce.naver")
 
 _ARTICLE_API = "https://openapi.naver.com/v1/cafe/{cafe_id}/menu/{menu_id}/articles"
 _TOKEN_API = "https://nid.naver.com/oauth2.0/token"
+
+
+def _euckr_safe(s: str) -> str:
+    """EUC-KR 로 못 보내는 글자(이모지 등)를 빼낸다.
+
+    네이버 카페 글쓰기 API 는 subject/content 를 EUC-KR 로 인코딩해
+    보내야 한다. 그런데 공지 문구에는 기본으로 이모지가 섞인다
+    (announce 의 varied 스타일). 이모지가 하나만 있어도 인코딩이 통째로
+    실패해서 공지가 안 올라갔다 — 그것도 "예외" 로만 찍혀서 왜 안 되는지
+    알기 어려웠다. 못 보내는 글자만 빼고 나머지는 그대로 올린다.
+    """
+    try:
+        s.encode("euc-kr")
+        return s
+    except UnicodeEncodeError:
+        pass
+    kept, dropped = [], 0
+    for ch in s:
+        try:
+            ch.encode("euc-kr")
+        except UnicodeEncodeError:
+            dropped += 1
+            continue
+        kept.append(ch)
+    log.info("네이버 카페: EUC-KR 로 못 보내는 글자 %d개를 빼고 올립니다(이모지 등).",
+             dropped)
+    return "".join(kept)
 
 
 class NaverCafeAnnouncer(Announcer):
@@ -52,20 +80,41 @@ class NaverCafeAnnouncer(Announcer):
         return False
 
     # --- 경로 A: 공식 API --------------------------------------------------
-    def _official_post(self, subject: str, content: str, _retry: bool = True) -> bool:
+    def _official_post(self, subject: str, content: str) -> bool:
+        """공식 API 로 글을 올린다. 실패 사유에 따라 짧게 재시도한다.
+
+        예전에는 네트워크 예외만 한 번 더 해보고, 서버 오류(5xx)나 레이트
+        리밋(429)은 그대로 포기했다 — 네이버가 잠깐 흔들린 것뿐인데 그날
+        시작 공지가 통째로 안 나간다(기획안 2-2② 의 기본 동선이 빠진다).
+        디스코드와 같은 규칙을 쓴다: 4xx 는 설정 문제라 재시도 안 함,
+        5xx·429·네트워크는 재시도, 서버가 기다리라고 한 시간은 지킨다.
+        카페는 계정 리스크가 있어(기획안 5-2 "빈도 낮게") 횟수는 2회로 둔다.
+        """
         try:
-            import requests  # 지연 import
+            import requests  # noqa: F401 - 미설치 확인용
         except ImportError:
             log.error("requests 미설치: `pip install requests`")
             return False
         if not (self.cfg.cafe_id and self.cfg.menu_id and self._access_token):
             log.warning("네이버 카페 cafe_id/menu_id/access_token 미설정 → 생략")
             return False
+        from ..safety import token_problem
+        problem = token_problem("NAVER_ACCESS_TOKEN", self._access_token)
+        if problem:
+            log.error("%s 공지는 건너뜁니다.", problem)
+            return False
+        return post_with_retry(
+            lambda: self._post_once(subject, content),
+            what="네이버 카페 공지", attempts=2, backoff_sec=3.0)
+
+    def _post_once(self, subject: str, content: str, allow_refresh: bool = True):
+        """(성공여부, 상태코드, 사유, 서버가 알려준 대기초)."""
+        import requests
         url = _ARTICLE_API.format(cafe_id=self.cfg.cafe_id, menu_id=self.cfg.menu_id)
         # 네이버 카페 글쓰기 API 는 subject/content 를 EUC-KR 로 인코딩해야 함
         body = (
-            "subject=" + quote(subject, encoding="euc-kr")
-            + "&content=" + quote(content, encoding="euc-kr")
+            "subject=" + quote(_euckr_safe(subject), encoding="euc-kr")
+            + "&content=" + quote(_euckr_safe(content), encoding="euc-kr")
         )
         try:
             r = requests.post(
@@ -77,16 +126,15 @@ class NaverCafeAnnouncer(Announcer):
                 data=body.encode("ascii"),
                 timeout=15,
             )
-            if r.status_code == 200:
-                log.info("네이버 카페 공지 게시 완료(공식 API)")
-                return True
-            if r.status_code == 401 and _retry and self._refresh_token():
-                return self._official_post(subject, content, _retry=False)
-            log.error("네이버 카페 공지 실패 (%s): %s", r.status_code, r.text[:300])
-            return False
-        except Exception as e:  # noqa: BLE001
-            log.error("네이버 카페 공지 예외: %s", e)
-            return False
+        except Exception as e:  # noqa: BLE001 - 네트워크 사유 다양
+            return False, None, str(e), None
+        if r.status_code == 200:
+            log.info("네이버 카페 공지 게시 완료(공식 API)")
+            return True, 200, "", None
+        if r.status_code == 401 and allow_refresh and self._refresh_token():
+            # 토큰이 만료됐을 뿐이다 — 갱신하고 그 자리에서 한 번 더.
+            return self._post_once(subject, content, allow_refresh=False)
+        return False, r.status_code, r.text[:300], retry_after_of(r)
 
     def _refresh_token(self) -> bool:
         try:
@@ -110,6 +158,15 @@ class NaverCafeAnnouncer(Announcer):
             data = r.json()
             tok = data.get("access_token")
             if tok:
+                # 받아온 값도 검사한다. 헤더에 실을 수 없는 값이 오면
+                # (오류 페이지·프록시 응답 등) 그 뒤 요청이 전부
+                # "'latin-1' codec can't encode..." 로 죽는데, 그 메시지로는
+                # 운영자가 고칠 방법이 없다. 여기서 사유를 말해준다.
+                from ..safety import token_problem
+                bad = token_problem("네이버 갱신 토큰", str(tok))
+                if bad:
+                    log.error("%s", bad)
+                    return False
                 self._access_token = tok
                 log.info("네이버 access token 갱신됨")
                 return True
@@ -157,6 +214,11 @@ class NaverCafeAnnouncer(Announcer):
         driver = None
         try:
             driver = webdriver.Chrome(options=opts)
+            # 페이지가 안 열리면 driver.get() 은 기본적으로 영원히 기다린다.
+            # 이건 방송 시작 직전에 도는 코드다 — 여기서 멎으면 방송이
+            # 아예 안 켜진다(무인 운영에서는 아무도 모른 채 밤이 지나간다).
+            driver.set_page_load_timeout(20)
+            driver.set_script_timeout(20)
             wait = WebDriverWait(driver, 15)
 
             log.info("셀레늄 STEP1: 쿠키 로그인")
@@ -181,7 +243,15 @@ class NaverCafeAnnouncer(Announcer):
             # SmartEditor 본문은 보통 contenteditable 영역 or iframe.
             body_written = self._selenium_type_body(driver, By, content)
             if not body_written:
-                log.warning("셀레늄: 본문 입력 영역을 못 찾음(셀렉터 조정 필요)")
+                # 여기서 그냥 등록을 누르면 제목만 있고 내용이 빈 글이
+                # 카페에 올라간다. 게다가 이 함수는 True 를 돌려줘서
+                # 운영자에게는 "공지 성공" 으로 보인다. 공지를 못 올리는
+                # 것보다 빈 글을 올리는 게 나쁘다 — 여기서 멈춘다.
+                log.error("네이버 카페: 본문 입력 영역을 못 찾아 게시를 "
+                          "중단했습니다(빈 글이 올라가지 않게). 카페 글쓰기 "
+                          "화면 구조가 바뀐 것으로 보입니다 — 셀렉터 조정이 "
+                          "필요합니다. 이번 공지는 안 나갔습니다.")
+                return False
 
             log.info("셀레늄 STEP5: 등록 버튼 클릭")
             btn = wait.until(EC.element_to_be_clickable(

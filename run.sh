@@ -27,11 +27,21 @@ case "$CMD" in
     [ -f .env ]         || cp .env.example .env
     # 방송 코어 준비: 웹UI(커밋 안 된 컴파일 산출물) + conf.yaml + 코어 의존성.
     # 이걸 빠뜨리면 aist 만 설치되고 정작 방송은 안 된다.
-    bash scripts/setup_openllm_vtuber.sh \
-      || echo "[경고] 코어 준비 실패 — bash scripts/setup_openllm_vtuber.sh 로 다시 시도하세요"
+    CORE_OK=1
+    bash scripts/setup_openllm_vtuber.sh || CORE_OK=0
     # check 는 '아직 방송 불가'면 1 을 돌려준다(정상). set -e 로 죽지 않게.
     aist --config config.yaml --persona persona.yaml check || true
-    echo "설치 끝. config.yaml / persona.yaml / .env 를 채운 뒤 ./run.sh doctor" ;;
+    if [ "$CORE_OK" = "1" ]; then
+      echo "설치 끝. config.yaml / persona.yaml / .env 를 채운 뒤 ./run.sh doctor"
+    else
+      # 실패를 "설치 끝"이라고 말하지 않는다. 사용자가 다 된 줄 알고
+      # 다음 단계로 넘어가면 원인을 못 찾는다.
+      echo
+      echo "[실패] 코어 준비가 덜 끝났습니다. 위 '실행 준비 상태' 에서 [X] 인 줄을"
+      echo "       먼저 해결하세요. aist 자체와 설정 파일은 준비됐습니다."
+      echo "       다시 시도: bash scripts/setup_openllm_vtuber.sh"
+      exit 1
+    fi ;;
   doctor)  ensure_venv; aist --config config.yaml --persona persona.yaml doctor ;;
   wait-core) ensure_venv; shift || true
            aist --config config.yaml --persona persona.yaml wait-core "$@" ;;

@@ -49,6 +49,7 @@ class BasicMemoryAgent(AgentInterface):
         tool_manager: Optional[ToolManager] = None,
         tool_executor: Optional[ToolExecutor] = None,
         mcp_prompt_string: str = "",
+        max_memory_messages: int = 0,
     ):
         """Initialize agent with LLM and configuration."""
         super().__init__()
@@ -66,6 +67,11 @@ class BasicMemoryAgent(AgentInterface):
         self._tool_manager = tool_manager
         self._tool_executor = tool_executor
         self._mcp_prompt_string = mcp_prompt_string
+        # 24aist 개조: 대화 기록 상한(0 이면 무제한 — 원래 동작).
+        # 방송은 몇 시간씩 돌고 채팅이 계속 들어온다. 여기에 상한이 없으면
+        # 매 응답마다 지금까지의 모든 대화를 LLM 에 다시 보내게 되어,
+        # 시간이 갈수록 느려지다가 컨텍스트 한도에서 응답이 끊긴다.
+        self._max_memory_messages = int(max_memory_messages or 0)
         self._json_detector = StreamJSONDetector()
 
         self._formatted_tools_openai = []
@@ -172,6 +178,19 @@ class BasicMemoryAgent(AgentInterface):
             return
 
         self._memory.append(message_data)
+        self._trim_memory()
+
+    def _trim_memory(self) -> None:
+        """오래된 대화를 잘라 상한을 지킨다(24aist 개조).
+
+        시스템 프롬프트(페르소나)는 _memory 에 들어있지 않으므로 잘라도
+        캐릭터는 그대로다. 최근 것부터 남긴다.
+        """
+        limit = getattr(self, "_max_memory_messages", 0)
+        if limit and len(self._memory) > limit:
+            dropped = len(self._memory) - limit
+            self._memory = self._memory[-limit:]
+            logger.debug(f"Trimmed {dropped} old message(s) from memory (limit {limit}).")
 
     def set_memory_from_history(self, conf_uid: str, history_uid: str) -> None:
         """Load memory from chat history."""
@@ -190,6 +209,7 @@ class BasicMemoryAgent(AgentInterface):
                 )
             else:
                 logger.warning(f"Skipping invalid message from history: {msg}")
+        self._trim_memory()
         logger.info(f"Loaded {len(self._memory)} messages from history.")
 
     def handle_interrupt(self, heard_response: str) -> None:

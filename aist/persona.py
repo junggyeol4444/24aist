@@ -8,12 +8,56 @@
 character_config.persona_prompt 에 그대로 들어간다.
 """
 
+import difflib
+import logging
 import os
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, fields
 from pathlib import Path
 from typing import Dict, List, Union
 
 import yaml
+
+log = logging.getLogger("aist.persona")
+
+
+def _as_list(key, value):
+    """목록이어야 하는 항목. 한 줄로 적었으면 한 항목으로 본다."""
+    if value is None:
+        return [], None
+    if isinstance(value, str):
+        return [value], (f"'{key}' 는 목록인데 한 줄로 적혀 있습니다 "
+                         f"— 한 항목으로 봅니다. 여러 개면 '- ' 로 나열하세요.")
+    if isinstance(value, dict):
+        return [f"{k}: {v}" for k, v in value.items()], (
+            f"'{key}' 는 목록인데 항목:값 형태로 적혀 있습니다 — 줄로 폅니다.")
+    if isinstance(value, (list, tuple)):
+        return [str(v) for v in value if v is not None], None
+    return [str(value)], f"'{key}' 형식이 예상과 달라 한 항목으로 봅니다."
+
+
+def _as_dict(key, value):
+    """항목:값 형태여야 하는 항목."""
+    if value is None:
+        return {}, None
+    if isinstance(value, dict):
+        return {str(k): str(v) for k, v in value.items()}, None
+    if isinstance(value, (list, tuple)):
+        return {}, (f"'{key}' 는 '상황: 방향' 형태여야 하는데 목록으로 "
+                    f"적혀 있습니다 — 무시합니다.")
+    return {}, f"'{key}' 형식이 예상과 달라 무시합니다."
+
+
+def _as_text(key, value, default):
+    """한 줄 문자열 항목."""
+    if value is None:
+        return default, (f"'{key}' 에 값이 없습니다 — 기본값({default!r})을 씁니다."
+                         if default else None)
+    if isinstance(value, str):
+        return value, None
+    if isinstance(value, (list, tuple)):
+        return " ".join(str(v) for v in value), (
+            f"'{key}' 는 한 줄인데 목록으로 적혀 있습니다 — 이어 붙입니다.")
+    return str(value), None
 
 
 @dataclass
@@ -32,11 +76,53 @@ class Persona:
     reaction_directions: Dict[str, str] = field(default_factory=dict)
     example_lines: List[str] = field(default_factory=list)  # 대사 예시집(선택)
 
+    def __post_init__(self):
+        # 형식이 어긋나 고쳐 쓴 항목들(점검에서 보여준다). 파일에서 읽지 않는다.
+        if not hasattr(self, "problems"):
+            self.problems: List[str] = []
+
     @classmethod
     def from_dict(cls, data: Dict) -> "Persona":
+        """YAML dict → Persona. 형식이 어긋나도 캐릭터를 망가뜨리지 않는다.
+
+        운영자는 이 파일을 메모장으로 직접 고친다. 그래서 실제로 이런
+        일이 생긴다:
+          personality: 밝음        (목록이어야 하는데 한 줄)
+             → 예전에는 글자 단위로 쪼개져 "성격: 밝, 음." 이 됐다
+          name:                    (값을 안 적음)
+             → 예전에는 방송인 이름이 'None' 이 됐다
+          reaction_directions: [악플, 무시]
+             → 예전에는 AttributeError 로 프로그램이 죽었다
+        고쳐서 쓰되, 무엇을 고쳤는지 problems 에 남겨 점검에서 보여준다.
+        """
         data = data or {}
-        known = {f.name for f in cls.__dataclass_fields__.values()}
-        return cls(**{k: v for k, v in data.items() if k in known})
+        types = {f.name: f for f in fields(cls)}
+        clean: Dict = {}
+        notes: List[str] = []
+        for key, value in data.items():
+            if key not in types:
+                from .config import suggest_key
+                close = suggest_key(str(key), types)
+                hint = f" (혹시 {close}?)" if close else ""
+                notes.append(f"모르는 항목 '{key}' 는 무시됩니다{hint}")
+                continue
+            default = types[key].default_factory() if callable(
+                getattr(types[key], "default_factory", None)
+            ) and types[key].default_factory is not None else types[key].default
+            if isinstance(default, list):
+                cleaned, note = _as_list(key, value)
+            elif isinstance(default, dict):
+                cleaned, note = _as_dict(key, value)
+            else:
+                cleaned, note = _as_text(key, value, default)
+            if note:
+                notes.append(note)
+            clean[key] = cleaned
+        obj = cls(**clean)
+        obj.problems = notes
+        for n in notes:
+            log.warning("persona.yaml: %s", n)
+        return obj
 
     @classmethod
     def load(cls, path: Union[str, Path]) -> "Persona":
@@ -46,8 +132,9 @@ class Persona:
                 f"페르소나 파일이 없습니다: {p}\n"
                 f"config/persona.example.yaml 을 복사해서 만드세요."
             )
-        with p.open("r", encoding="utf-8") as fh:
-            return cls.from_dict(yaml.safe_load(fh) or {})
+        # 메모장이 만든 인코딩(BOM/UTF-16/CP949)도 읽는다 — config.py 참고.
+        from .config import read_text_lenient
+        return cls.from_dict(yaml.safe_load(read_text_lenient(p)) or {})
 
     def render_system_prompt(self) -> str:
         """LLM 시스템 프롬프트(= Open-LLM-VTuber persona_prompt) 텍스트.

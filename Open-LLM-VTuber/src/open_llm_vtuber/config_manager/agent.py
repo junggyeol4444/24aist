@@ -32,6 +32,8 @@ class BasicMemoryAgentConfig(I18nMixin, BaseModel):
     faster_first_response: Optional[bool] = Field(True, alias="faster_first_response")
     segment_method: Literal["regex", "pysbd"] = Field("pysbd", alias="segment_method")
     use_mcpp: Optional[bool] = Field(False, alias="use_mcpp")
+    # 24aist 개조: 대화 기록 상한(0 이면 무제한 — 원래 동작)
+    max_memory_messages: Optional[int] = Field(0, alias="max_memory_messages")
     mcp_enabled_servers: Optional[List[str]] = Field([], alias="mcp_enabled_servers")
 
     DESCRIPTIONS: ClassVar[Dict[str, Description]] = {

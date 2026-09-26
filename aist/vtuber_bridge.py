@@ -1,6 +1,13 @@
 """Open-LLM-VTuber 브릿지 — 방송 코어(두뇌+입+얼굴)에 입력을 흘려보낸다.
 
-Open-LLM-VTuber 는 WebSocket 서버(`/client-ws`, 기본 포트 12393)를 연다.
+Open-LLM-VTuber 는 WebSocket 서버(기본 포트 12393)를 연다. 우리는 반드시
+`/proxy-ws` 로 붙는다. `/client-ws` 는 1:1 경로라서, 우리가 채팅을 넣으면
+AI 의 목소리·자막이 **우리 프로세스로만** 오고 OBS 가 잡는 웹UI 에는 아무
+것도 안 간다(시청자에게는 멈춘 아바타와 무음). 게다가 코어는 '재생이
+끝났다'는 응답을 우리에게서 기다리며 conversation-chain-end 를 영영 안
+보낸다(코어의 finalize_conversation_turn 에는 타임아웃이 없다).
+`/proxy-ws` 는 웹UI 와 우리를 같은 대화에 물리고 코어의 모든 출력을 양쪽에
+뿌린다. 코어 conf.yaml 의 system_config.enable_proxy 가 true 여야 열린다.
 우리가 보내는 메시지 타입(코어 소스 기준):
   - {"type": "text-input", "text": "..."}   → AI 가 그 입력에 반응(대화 트리거)
   - {"type": "ai-speak-signal"}             → 능동 발화(혼잣말) 트리거
@@ -31,17 +38,32 @@ _PLATFORM_KR = {
 
 
 def format_chat_line(text: str, source: Optional[str] = None,
-                     platform: Optional[str] = None) -> str:
+                     platform: Optional[str] = None,
+                     donation: Optional[str] = None) -> str:
     """채팅 한 줄을 자연스러운 형식으로. 로봇 태그([닉/twitch]) 금지.
 
-    - "neo: 안녕"                (기본)
-    - "neo (치지직): 안녕"       (동출 등 플랫폼 구분이 필요할 때만)
+    - "neo: 안녕"                        (기본)
+    - "neo (치지직): 안녕"               (동출 등 플랫폼 구분이 필요할 때만)
+    - "neo (10,000원 후원): 안녕"        (후원)
+    - "neo (치지직, 10,000원 후원): 안녕"
+
+    후원 표기가 없으면 AI 는 후원을 받은 줄 모른다. 기억과 리포트에는
+    남는데 정작 방송인만 모르는 상태가 된다 — 시청자가 돈을 냈는데
+    말 한마디 없이 지나간다. 기획안 4-3 의 "방금 온 후원 중엔 안 끊고"
+    도 AI 가 후원을 인지해야 성립한다.
     """
     if not source:
         return text
+    tags = []
     if platform:
-        kr = _PLATFORM_KR.get(platform, platform)
-        return f"{source} ({kr}): {text}"
+        tags.append(_PLATFORM_KR.get(platform, platform))
+    if donation is not None:
+        tags.append(f"{donation} 후원" if donation else "후원")
+    if not text:
+        # 메시지 없이 금액만 온 후원 — 콜론 뒤가 비면 어색하게 읽힌다.
+        return f"{source} ({', '.join(tags)})" if tags else source
+    if tags:
+        return f"{source} ({', '.join(tags)}): {text}"
     return f"{source}: {text}"
 
 
@@ -77,14 +99,45 @@ class VTuberBridge:
                     await asyncio.sleep(wait)
         raise last_err
 
+    async def reconnect_once(self) -> bool:
+        """방송 중 끊긴 연결을 한 번 다시 붙여본다. 성공 여부만 돌려준다.
+
+        방송 중에는 예외를 올리지 않는다 — 실패해도 판단은 호출자가 한다.
+        """
+        try:
+            import websockets
+            old, self._ws = self._ws, None
+            if old is not None:
+                try:
+                    await old.close()
+                except Exception:  # noqa: BLE001 - 이미 끊긴 소켓
+                    pass
+            self._ws = await asyncio.wait_for(
+                websockets.connect(self.cfg.ws_url, max_size=None),
+                timeout=self.cfg.connect_timeout_sec,
+            )
+            log.info("코어 재연결 성공 (%s)", self.cfg.ws_url)
+            return True
+        except Exception as e:  # noqa: BLE001 - 사유 다양
+            log.warning("코어 재연결 실패: %s", e)
+            return False
+
+    def is_connected(self) -> bool:
+        return self._ws is not None
+
     async def _send(self, payload: dict):
         if self._ws is None:
-            raise RuntimeError("VTuber 코어에 먼저 connect() 해야 합니다.")
+            # 코어가 끊겨 다시 붙는 중에도 여기로 온다(재연결 사이에 채팅이
+            # 들어온 경우). 연결 문제로 알려야 한다 — RuntimeError 로 두면
+            # 채팅 파이프라인이 '코드 문제' 로 보고 운영자 로그에 파이썬
+            # 트레이스백을 찍었다(실제로 방송 중 코어를 죽여서 확인).
+            raise ConnectionError("VTuber 코어와 연결돼 있지 않습니다(끊김·재연결 중).")
         async with self._lock:
             await self._ws.send(json.dumps(payload, ensure_ascii=False))
 
     async def say_to_ai(self, text: str, source: Optional[str] = None,
-                        platform: Optional[str] = None):
+                        platform: Optional[str] = None,
+                        donation: Optional[str] = None):
         """채팅/입력을 AI 에게 전달해 반응을 만들게 한다.
 
         source(닉네임)가 있으면 "닉: 내용" 자연 형식으로, platform 은
@@ -92,7 +145,7 @@ class VTuberBridge:
         AI 가 따라 읽어도 어색하지 않은 형식만 쓴다.
         """
         await self._send({"type": "text-input",
-                          "text": format_chat_line(text, source, platform)})
+                          "text": format_chat_line(text, source, platform, donation)})
 
     async def proactive_speak(self):
         """채팅이 정말 없을 때 혼잣말 트리거(능동 발화)."""

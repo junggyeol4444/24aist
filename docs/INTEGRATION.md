@@ -40,13 +40,32 @@ aist build-persona --conf Open-LLM-VTuber/conf.yaml --live2d <모델명>
   `text_lang: ko` 를 채운다.
 - `character_config.live2d_model_name` — 아바타 모델.
 - `system_config.host/port` — 기본 `localhost:12393`. 이 값이 `config.yaml`
-  의 `vtuber.ws_url` 과 일치해야 한다(`ws://<host>:<port>/client-ws`).
+  의 `vtuber.ws_url` 과 일치해야 한다(`ws://<host>:<port>/proxy-ws`).
+  포트를 바꿨다면 `ws_url` 도 같이 바꾼다(`점검.bat` 이 다르면 알려준다).
+  웹UI 는 자기가 열린 주소로 코어에 붙으므로, OBS 브라우저 소스에는
+  `http://127.0.0.1:<port>/` 만 넣으면 된다(다른 PC 의 OBS 면 그 PC 에서
+  보이는 코어 PC 주소).
+- `system_config.enable_proxy: true` — **필수**. 이게 꺼져 있으면 `/proxy-ws`
+  자체가 안 열린다. 우리가 넣은 채팅의 결과(목소리·자막)가 웹UI 로 안 가서
+  시청자는 멈춘 아바타와 무음만 본다. (`conf.korean.yaml` 에는 켜져 있다)
 
 코어를 단독 실행해 "AI 가 말하고 아바타가 움직이는지" 먼저 확인(1단계).
 
 ### 브릿지가 코어로 보내는 것
 
-`aist/vtuber_bridge.py` 는 코어의 WebSocket(`/client-ws`)에 JSON 을 보냅니다:
+`aist/vtuber_bridge.py` 는 코어의 WebSocket(`/proxy-ws`)에 JSON 을 보냅니다:
+
+> **왜 `/client-ws` 가 아니라 `/proxy-ws` 인가**
+> `/client-ws` 는 1:1 경로다. 채팅을 넣은 클라이언트에게만 오디오·자막을
+> 돌려주므로, 우리가 채팅을 넣으면 그 결과가 **이 프로그램으로만** 오고
+> OBS 가 잡는 웹UI 에는 아무것도 안 간다. 게다가 코어는 "재생이 끝났다"
+> (`frontend-playback-complete`)는 응답을 그 클라이언트에게서 **타임아웃
+> 없이** 기다리기 때문에 `conversation-chain-end` 가 영영 안 온다 — 우리
+> '입 하나' 모델이 폴백 타이머로만 돌게 된다.
+> `/proxy-ws` 는 웹UI 와 우리를 같은 대화에 물리고 코어의 모든 출력을
+> 양쪽에 뿌린다. 재생 완료 응답은 웹UI 가 보낸다.
+> 웹UI 도 `/proxy-ws` 로 붙어야 한다 — `프론트엔드받기.bat` 이 받아온
+> `index.html` 에 그 설정을 넣어준다(`aist/frontend_patch.py`).
 
 | 보내는 메시지 | 효과 |
 |----------------|------|
@@ -71,6 +90,13 @@ LLM+페르소나가 대답을 만들고 TTS+Live2D 로 출력합니다. **여기
    # {in} 이 TTS 오디오 파일 경로로 치환됨. 명령은 제자리(in-place) 변환.
    export AIST_TTS_POST_CMD="bash /path/to/rvc_convert.sh {in}"
    ```
+   윈도우는 코어를 켜기 전에(같은 창에서, 또는 시스템 환경 변수로):
+   ```bat
+   set AIST_TTS_POST_CMD=C:\rvc\rvc_convert.bat {in}
+   ```
+   (경로에 빈칸이 있으면 `"C:\my tools\rvc_convert.bat" {in}` 처럼 따옴표.
+    `.bat` 은 알아서 `cmd /c` 로 돌린다.) 명령이 실패로 끝나면 코어 창에
+   `TTS 후처리 명령이 실패로 끝났습니다` 가 뜬다 — 그때는 원본 목소리로 나간다.
    RVC 프로젝트의 추론 CLI 를 감싼 스크립트를 지정하면 모든 TTS 출력이
    송출 전에 변조된다. 실패하면 원본 오디오로 방송은 계속(best-effort).
    개조 위치: `Open-LLM-VTuber/src/.../tts_manager.py` (`NOTICE-vendored.md` 참고)
@@ -83,6 +109,9 @@ LLM+페르소나가 대답을 만들고 TTS+Live2D 로 출력합니다. **여기
 - OBS 에서 **obs-websocket** 활성화(도구 → WebSocket 서버 설정). 포트·비밀번호를
   `config.yaml` 의 `obs.*` 와 `.env` 의 `OBS_PASSWORD` 에 맞춘다.
 - 코어의 아바타 창을 OBS 소스로 캡처(윈도우 캡처/브라우저 소스).
+  브라우저 소스라면 주소는 코어 창에 찍히는 `http://localhost:12393`
+  그대로 넣으면 된다(`127.0.0.1` 로 넣어도 같다). 방송 자동화가 방송을 켤
+  때와 웹UI 가 끊겼을 때 이 소스를 알아서 새로고침한다.
   **중요: 웹UI 전체가 아니라 아바타 영역만 캡처(크롭)할 것.** 자막·입력
   텍스트(귓속말/채팅 원문)가 방송 화면에 노출되면 안 된다.
 - TTS 음성을 OBS 로 보내려면 가상 오디오 케이블(Windows: VB-CABLE, mac:

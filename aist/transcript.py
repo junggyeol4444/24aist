@@ -16,6 +16,8 @@ from pathlib import Path
 from typing import Optional
 
 from .chat.base import ChatMessage
+from .safety import strip_expressions
+from .paths import unique_path
 
 log = logging.getLogger("aist.transcript")
 
@@ -29,11 +31,24 @@ class Transcript:
         self.dir = Path(dir_path)
         self._fh = None
         self.path: Optional[Path] = None
+        self._write_failed = False
 
-    def open_session(self, start_dt: datetime) -> Path:
+    def open_session(self, start_dt: datetime,
+                     continue_path: Optional[Path] = None) -> Path:
+        """continue_path 를 주면 그 파일에 이어 쓴다(끊겼다 다시 켠 같은 방송).
+
+        예전에는 다시 켤 때마다 새 파일을 만들었고, 리포트는 마지막 파일만
+        읽었다. 끊기기 전에 AI 가 한 말은 '사고 발언 점검' 에서 통째로 빠졌다.
+        """
         self.dir.mkdir(parents=True, exist_ok=True)
+        if continue_path is not None and Path(continue_path).is_file():
+            self.path = Path(continue_path)
+            self._fh = self.path.open("a", encoding="utf-8")
+            self.log_event("broadcast_resume")
+            return self.path
         name = start_dt.strftime("%Y-%m-%d_%H%M") + ".jsonl"
-        self.path = self.dir / name
+        # 같은 분에 방송이 두 번 시작하면 한 파일에 섞인다(append 모드).
+        self.path = unique_path(self.dir / name)
         self._fh = self.path.open("a", encoding="utf-8")
         self.log_event("broadcast_start")
         return self.path
@@ -45,8 +60,19 @@ class Transcript:
         try:
             self._fh.write(json.dumps(record, ensure_ascii=False) + "\n")
             self._fh.flush()
-        except OSError as e:
-            log.warning("트랜스크립트 기록 실패: %s", e)
+        except (OSError, ValueError) as e:
+            # OSError: 디스크 참 / 권한. ValueError: 핸들이 이미 닫힘.
+            # 채팅마다 경고를 찍으면 로그가 폭발하므로 한 번만 알리고
+            # 이후로는 기록을 포기한다(방송은 계속 돌아야 한다).
+            if not self._write_failed:
+                self._write_failed = True
+                log.error("트랜스크립트 기록 실패 — 이번 방송은 기록 없이 진행합니다: %s", e)
+            self._fh = None
+
+    @property
+    def write_failed(self) -> bool:
+        """이번 방송 기록이 중간에 끊겼는지(디스크 참·권한 등)."""
+        return self._write_failed
 
     def log_chat(self, msg: ChatMessage) -> None:
         self._write({
@@ -59,8 +85,8 @@ class Transcript:
         if text:
             self._write({"who": "ai", "text": text})
 
-    def log_event(self, kind: str, **data) -> None:
-        self._write({"who": "system", "event": kind, **data})
+    def log_event(self, kind: str, /, **data) -> None:
+        self._write({**data, "who": "system", "event": kind})
 
     def on_core_message(self, data: dict) -> None:
         """코어 drain 훅 — AI 실제 발화(audio payload 의 display_text)를 기록."""
@@ -68,6 +94,9 @@ class Transcript:
             if data.get("type") == "audio":
                 dt = data.get("display_text") or {}
                 text = dt.get("text") if isinstance(dt, dict) else ""
+                # 표정 키워드([joy] 등)는 시청자에게 안 나가는 연출 지시다.
+                # 기록에 남기면 '발화 전문' 이 그걸로 뒤덮인다.
+                text = strip_expressions(text or "")
                 if text:
                     self.log_ai(text)
         except Exception:  # 기록 실패가 방송을 멈추면 안 됨

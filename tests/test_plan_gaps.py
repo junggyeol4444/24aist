@@ -125,3 +125,95 @@ def test_pre_announce_default_on():
     """사람도 방송 전에 미리 알린다 — 사전 공지는 기본값(30분 전)."""
     from aist.config import AnnounceConfig
     assert AnnounceConfig().pre_announce_minutes == 30
+
+
+def test_plan_preview_pre_notice_matches_real_broadcast():
+    """`aist plan` 이 보여주는 '마무리 예고' 시각은 실제로 쓰는 값이어야 한다.
+
+    단순히 "종료 N분 전" 으로 계산하면 방송이 짧을 때 시작보다 이른 시각이
+    나왔다(min 0/max 2분 → 19:00 시작인데 예고 18:42).
+    """
+    from datetime import datetime, timedelta, timezone
+
+    from aist.config import EndJudgeConfig
+    from aist.end_judge import EndJudge, Phase
+
+    cfg = EndJudgeConfig(min_minutes=0, max_minutes=2, end_jitter_min=0)
+    start = datetime(2026, 9, 15, 19, 0, tzinfo=timezone.utc)
+    ej = EndJudge(cfg, start)
+
+    pre = ej.pre_notice_at()
+    assert pre >= start, f"예고 시각이 방송 시작보다 이릅니다: {pre} < {start}"
+    assert pre < ej.planned_end
+    # 미리보기 값과 실제 판단이 같은 시점을 가리킨다
+    assert ej.evaluate(pre).phase is Phase.PRE_NOTICE
+    assert ej.evaluate(pre - timedelta(seconds=1)).phase in (Phase.LIVE, Phase.PRE_NOTICE)
+
+
+def test_plan_preview_pre_notice_normal_config():
+    from datetime import datetime, timezone
+
+    from aist.config import EndJudgeConfig
+    from aist.end_judge import EndJudge
+
+    cfg = EndJudgeConfig(min_minutes=60, max_minutes=180, end_jitter_min=0)
+    start = datetime(2026, 9, 15, 19, 0, tzinfo=timezone.utc)
+    ej = EndJudge(cfg, start)
+    pre = ej.pre_notice_at()
+    # 보통 설정에서는 그대로 "종료 N분 전"
+    assert (ej.planned_end - pre).total_seconds() / 60 == cfg.wind_down.pre_notice_minutes_before_end
+
+
+def test_short_broadcast_does_not_start_in_wind_down():
+    """10분 방송인데 시작하자마자 '슬슬 마무리하자' 가 나가면 안 된다.
+
+    기본 예고 시각은 '종료 20분 전' 이라, 20분보다 짧은 방송에서는 그 시각이
+    시작보다 앞선다. 그대로 두면 방송 내내 마무리 분위기로 돈다.
+    """
+    from datetime import datetime, timezone
+
+    from aist.config import EndJudgeConfig
+    from aist.end_judge import EndJudge, Phase
+
+    start = datetime(2026, 9, 16, 19, 0, tzinfo=timezone.utc)
+    ej = EndJudge(EndJudgeConfig(min_minutes=0, max_minutes=10, end_jitter_min=0), start)
+
+    assert ej.evaluate(start).phase is Phase.LIVE, "시작하자마자 마무리 예고였다"
+    pre = ej.pre_notice_at()
+    half = start + (ej.planned_end - start) / 2
+    assert pre >= half, f"예고가 방송 절반보다 이릅니다: {pre}"
+    assert ej.evaluate(pre).phase is Phase.PRE_NOTICE
+
+
+def test_normal_broadcast_keeps_the_configured_notice():
+    """보통 설정(60/180분)에서는 예고 시각이 그대로 '종료 20분 전' 이어야 한다."""
+    from datetime import datetime, timezone
+
+    from aist.config import EndJudgeConfig
+    from aist.end_judge import EndJudge
+
+    start = datetime(2026, 9, 16, 19, 0, tzinfo=timezone.utc)
+    cfg = EndJudgeConfig(min_minutes=60, max_minutes=180, end_jitter_min=0)
+    ej = EndJudge(cfg, start)
+    gap = (ej.planned_end - ej.pre_notice_at()).total_seconds() / 60
+    assert gap == cfg.wind_down.pre_notice_minutes_before_end
+
+
+def test_obs_is_launched_from_its_own_folder(monkeypatch, tmp_path):
+    """시작 메뉴 바로가기처럼 실행 파일 폴더에서 켠다(윈도우 파이썬으로 확인:
+    자식 프로세스의 현재 폴더 = 실행 파일 폴더)."""
+    from aist.obs_control import ObsController
+    import subprocess
+    seen = {}
+
+    def fake_popen(args, **kw):
+        seen.update(kw)
+        return object()
+
+    monkeypatch.setattr(subprocess, "Popen", fake_popen)
+    exe = tmp_path / "obs64"
+    exe.write_text("")
+    c = ObsController(ObsConfig(launch_if_not_running=True,
+                                launch_command=f"{exe} --disable-shutdown-check"))
+    assert c._launch_obs() is True
+    assert seen["cwd"] == str(tmp_path)
